@@ -308,20 +308,20 @@ final class FileManagerService: ObservableObject {
         recent = recent.map { file in
             guard file.path == oldPath || file.path.hasPrefix(oldPath + "/") else { return file }
             var updated = file
-            updated.path = newPath + file.path.dropFirst(oldPath.count)
+            updated.path = newPath + String(file.path.dropFirst(oldPath.count))
             if file.path == oldPath { updated.name = URL(fileURLWithPath: newPath).lastPathComponent }
             return updated
         }
 
         favoritePaths = Set(favoritePaths.map { path in
             guard path == oldPath || path.hasPrefix(oldPath + "/") else { return path }
-            return newPath + path.dropFirst(oldPath.count)
+            return newPath + String(path.dropFirst(oldPath.count))
         })
         persistFavorites()
 
         if let current = selected, current.path == oldPath || current.path.hasPrefix(oldPath + "/") {
             var updated = current
-            updated.path = newPath + current.path.dropFirst(oldPath.count)
+            updated.path = newPath + String(current.path.dropFirst(oldPath.count))
             if current.path == oldPath { updated.name = URL(fileURLWithPath: newPath).lastPathComponent }
             selected = updated
         }
