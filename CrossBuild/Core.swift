@@ -372,7 +372,7 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func openSelectedFile() {
-        guard let file = files.selected, let text = files.contents(of: file) else { return }
+        guard let file = files.selected, let text = files.contents(of: file, encoding: editorEncoding) else { return }
         editor.open(file: file, text: text)
         editorText = editor.selected?.text ?? text
         persistOpenDocuments()
@@ -418,13 +418,17 @@ final class WorkspaceModel: ObservableObject {
         let file = WorkspaceFile(name: doc.name, path: doc.path)
 
         do {
-            try files.save(textToSave, to: file)
+            try files.save(textToSave, to: file, encoding: editorEncoding)
             editor.markSaved(id, text: textToSave)
             if editor.selectedID == id { editorText = textToSave }
             if report { console += "Saved \(doc.name)\n" }
         } catch {
             console += "Save failed: \(error.localizedDescription)\n"
         }
+    }
+
+    private var editorEncoding: String.Encoding {
+        configuration.defaultEncoding == "UTF-16" ? .utf16 : .utf8
     }
 
     private func normalizedEditorText(_ text: String) -> String {
