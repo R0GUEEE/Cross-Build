@@ -278,6 +278,21 @@ final class WorkspaceModel: ObservableObject {
                 command = "RUSTFLAGS=\"-D warnings\" " + command
             }
         }
+
+        if configuration.buildTarget == "Release" {
+            if command.hasPrefix("swift build") && !command.contains(" -c release") {
+                command += " -c release"
+            } else if command.hasPrefix("cargo build") && !command.contains("--release") {
+                command += " --release"
+            } else if command.hasPrefix("zig build") && !command.contains("-Doptimize=") {
+                command += " -Doptimize=ReleaseSafe"
+            } else if command.hasPrefix("make") && !command.contains("DEBUG=") {
+                command += " DEBUG=0"
+            }
+        }
+
+        let extra = configuration.buildArguments.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !extra.isEmpty { command += " " + extra }
         return command
     }
 
@@ -362,13 +377,29 @@ final class WorkspaceModel: ObservableObject {
         console += "$ \(command)\nBackend: \(backend.name)\n"
         isExecuting = true
         executionStatus = "Running"
-        let result = await backend.execute(.init(command: command, workingDirectory: workingDirectory))
+        let result = await backend.execute(.init(command: command, workingDirectory: workingDirectory, environment: commandEnvironment()))
         if !result.stdout.isEmpty { console += result.stdout + "\n" }
         if !result.stderr.isEmpty { console += "error: " + result.stderr + "\n" }
         lastExitCode = result.exitCode
         executionStatus = result.succeeded ? "Succeeded" : "Failed (\(result.exitCode))"
         isExecuting = false
         return result
+    }
+
+    private func commandEnvironment() -> [String: String] {
+        var environment: [String: String] = [:]
+        for source in [configuration.environmentVariables, compilerConfiguration.environment] {
+            for line in source.components(separatedBy: .newlines) {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, let separator = trimmed.firstIndex(of: "=") else { continue }
+                let key = String(trimmed[..<separator]).trimmingCharacters(in: .whitespaces)
+                let value = String(trimmed[trimmed.index(after: separator)...]).trimmingCharacters(in: .whitespaces)
+                if !key.isEmpty { environment[key] = value }
+            }
+        }
+        let sdkPath = configuration.sdkPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !sdkPath.isEmpty { environment["SDKROOT"] = sdkPath }
+        return environment
     }
 
     func runCommand(_ command: String, settings: AppSettings? = nil) {
