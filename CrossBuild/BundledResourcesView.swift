@@ -10,6 +10,8 @@ struct BundledResourcesView: View {
     @State private var items: [BundledResource] = []
     @State private var pythonSelfTestOutput: String?
     @State private var isRunningSelfTest = false
+    @State private var guestTestOutput: String?
+    @State private var isRunningGuestTest = false
 
     var body: some View {
         Form {
@@ -111,6 +113,36 @@ struct BundledResourcesView: View {
                 Text("Runs a real probe inside the embedded interpreter and reports which modules import. Compiled extensions (math, ssl, sqlite3, …) load with dlopen, so this is the quickest way to confirm they are working on your install rather than assuming.")
                     .font(.caption)
             }
+
+            Section {
+                Button {
+                    runGuestTest()
+                } label: {
+                    if isRunningGuestTest {
+                        ProgressView()
+                    } else {
+                        Label("Boot the Linux guest", systemImage: "play.circle")
+                    }
+                }
+                .disabled(isRunningGuestTest || LinuxGuestEngine.hasBooted)
+                if LinuxGuestEngine.hasBooted {
+                    Text("Already booted this launch. The interpreter cannot be restarted, so relaunch the app to test again.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let guestTestOutput {
+                    Text(guestTestOutput)
+                        .font(.system(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+            } header: {
+                Text("Verify the Linux guest")
+            } footer: {
+                Text(LinuxGuestEngine.isRootBundled
+                     ? "Boots the emulated Linux userland and runs a real command inside it, capturing stdout. This is the one step that cannot be verified without a device: if it prints output, the guest booted."
+                     : "The rootfs image is missing from this build, so the guest has nothing to boot from.")
+                    .font(.caption)
+            }
         }
         .navigationTitle("Bundled with the app")
         .onAppear { items = BundledResources.inventory() }
@@ -130,6 +162,30 @@ struct BundledResourcesView: View {
             }
             pythonSelfTestOutput = text
             isRunningSelfTest = false
+        }
+    }
+
+    /// Boots the guest and runs one real command inside it. Deliberately routed
+    /// through the same backend the app would use, so a pass here means the
+    /// execution path works end to end, not just that the library is present.
+    private func runGuestTest() {
+        isRunningGuestTest = true
+        guestTestOutput = "Booting the guest — this runs an emulated Linux kernel, so expect it to take a moment…"
+        Task {
+            let backend = LinuxGuestExecutionBackend()
+            let request = CommandRequest(command: LinuxGuestSmokeTest.command)
+            let result = await backend.execute(request)
+            var text = result.stdout
+            if !result.stderr.isEmpty {
+                text += (text.isEmpty ? "" : "\n") + "--- stderr ---\n" + result.stderr
+            }
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                text = "The guest produced no output (exit \(result.exitCode)). If it also did not crash, the boot path may need the exit_hook fix checked."
+            } else {
+                text = "exit \(result.exitCode) in \(String(format: "%.1f", result.duration))s\n\n" + text
+            }
+            guestTestOutput = text
+            isRunningGuestTest = false
         }
     }
 

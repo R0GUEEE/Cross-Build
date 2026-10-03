@@ -36,6 +36,7 @@ struct AppConfigurationView: View {
                     Text("Automatic").tag("Automatic")
                     Text("Sideload / Embedded").tag("Sideload / Embedded")
                     Text("Jailbreak Local").tag("Jailbreak Local")
+                        Text("Linux Guest").tag("Linux Guest")
                     Text("Remote / Helper").tag("Remote / Helper")
                 }
                 Toggle("Forward configured environment", isOn: $settings.forwardEnvironment)

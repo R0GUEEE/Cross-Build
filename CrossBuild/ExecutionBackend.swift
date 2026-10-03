@@ -85,6 +85,8 @@ enum ExecutionBackendFactory {
                 timeout:settings?.connectionTimeout ?? 15
             )
             return HelperExecutionBackend(name:"Remote / Helper", client:client, localWorkspace:false, packageAccess:true)
+        case "Linux Guest":
+            return LinuxGuestExecutionBackend()
         default:
             return SideloadExecutionBackend()
         }

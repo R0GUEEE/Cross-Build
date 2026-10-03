@@ -104,6 +104,7 @@ struct SettingsView: View {
                         Text("Automatic").tag("Automatic")
                         Text("Sideload / Embedded").tag("Sideload / Embedded")
                         Text("Jailbreak Local").tag("Jailbreak Local")
+                        Text("Linux Guest").tag("Linux Guest")
                         Text("Remote / Helper").tag("Remote / Helper")
                     }
                     Stepper(settings.commandTimeout == 0 ? "Command timeout: Unlimited" : "Command timeout: \(settings.commandTimeout)s",
