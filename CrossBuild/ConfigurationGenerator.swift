@@ -12,10 +12,10 @@ struct GeneratedProjectConfiguration {
 
 enum ConfigurationGenerator {
     static func generate(from analysis:ProjectAnalysis, files:[WorkspaceFile])->GeneratedProjectConfiguration {
-        var deployment="16.0"
-        var arch="arm64"
+        let deployment="16.0"
+        let arch="arm64"
         var format="binary"
-        var scheme=analysis.isRootlessHinted ? "rootless" : "rootless"
+        let scheme="rootless"
         var notes=["Detected \(analysis.primaryToolchain.rawValue)"]
         if analysis.buildSystems.contains(.theos) {
             format="deb"
