@@ -59,7 +59,11 @@ struct AgentDashboardView: View {
 
                     ForgeCard("Activity",subtitle:"Actions performed in this session") {
                         if workspace.agentActivity.isEmpty {
-                            ContentUnavailableView("No Activity",systemImage:"sparkles",description:Text("Run a task to see the agent plan and actions."))
+                            VStack(spacing:8) {
+                                Image(systemName:"sparkles").font(.largeTitle).foregroundStyle(.secondary)
+                                Text("No Activity").font(.headline)
+                                Text("Run a task to see the agent plan and actions.").font(.caption).foregroundStyle(.secondary)
+                            }.frame(maxWidth:.infinity).padding(.vertical,24)
                         } else {
                             ForEach(Array(workspace.agentActivity.enumerated()),id:\.offset) { index,item in
                                 HStack(alignment:.top) {
