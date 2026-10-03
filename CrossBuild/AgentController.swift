@@ -19,6 +19,7 @@ struct AgentExecution {
     let summary: String
 }
 
+@MainActor
 enum AgentController {
     static func plan(_ instruction: String, workspace: WorkspaceModel) -> [AgentExecution] {
         let q = instruction.lowercased()
