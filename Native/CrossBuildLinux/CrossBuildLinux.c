@@ -306,6 +306,26 @@ struct session_boot_args {
 static void *session_thread_main(void *opaque) {
     struct session_boot_args *args = (struct session_boot_args *)opaque;
 
+    // Fault recovery is thread-local. The one-shot path installed an alternate
+    // signal stack on its calling thread, but the persistent session runs the
+    // emulator on this pthread. Without a stack here, guest faults/signals can
+    // terminate the host iOS process (commonly exposed by long-lived servers).
+    size_t altstack_size = (size_t)SIGSTKSZ * 4;
+    void *altstack_mem = malloc(altstack_size);
+    if (altstack_mem == NULL) {
+        g_session_running = 0;
+        return NULL;
+    }
+    stack_t ss;
+    memset(&ss, 0, sizeof(ss));
+    ss.ss_sp = altstack_mem;
+    ss.ss_size = altstack_size;
+    if (sigaltstack(&ss, NULL) != 0) {
+        free(altstack_mem);
+        g_session_running = 0;
+        return NULL;
+    }
+
     int err = xX_main_Xx(args->argc, args->argv, args->envp);
     if (err < 0) {
         fprintf(stderr, "xX_main_Xx: %s\n", strerror(-err));
@@ -322,6 +342,12 @@ static void *session_thread_main(void *opaque) {
 
     task_run_current();
     g_session_running = 0;
+
+    stack_t disabled;
+    memset(&disabled, 0, sizeof(disabled));
+    disabled.ss_flags = SS_DISABLE;
+    sigaltstack(&disabled, NULL);
+    free(altstack_mem);
     return NULL;
 }
 
@@ -336,7 +362,12 @@ int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory)
 
     int toGuest[2] = { -1, -1 };
     int fromGuest[2] = { -1, -1 };
-    if (pipe(toGuest) != 0 || pipe(fromGuest) != 0) { return -2; }
+    if (pipe(toGuest) != 0) { return -2; }
+    if (pipe(fromGuest) != 0) {
+        close(toGuest[0]);
+        close(toGuest[1]);
+        return -2;
+    }
 
     // The guest reads commands from fd 0 and writes output to fd 1/2, so the
     // host holds the opposite ends.
@@ -381,10 +412,18 @@ int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory)
 
     if (pthread_create(&g_session_thread, NULL, session_thread_main, &args) != 0) {
         g_session_running = 0;
+        if (g_session_in >= 0) { close(g_session_in); g_session_in = -1; }
+        if (g_session_out >= 0) { close(g_session_out); g_session_out = -1; }
         restore_stdio();
         if (saved_stdin >= 0) { dup2(saved_stdin, STDIN_FILENO); close(saved_stdin); }
         return -2;
     }
+
+    // The guest inherited the redirected descriptors. Restore the app process's
+    // standard descriptors immediately; leaving stdin/stdout/stderr redirected
+    // for the lifetime of the session destabilizes host logging and frameworks.
+    restore_stdio();
+    if (saved_stdin >= 0) { dup2(saved_stdin, STDIN_FILENO); close(saved_stdin); }
 
     // Wait for the shell to come up by round-tripping a marker.
     char *ready = NULL;
