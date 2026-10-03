@@ -20,10 +20,21 @@ final class JavaScriptCoreEngine: EmbeddedToolchainEngine {
     let version="System JavaScriptCore"
     func run(source:String, options:[String:String]) async -> EmbeddedToolchainResult {
         guard let context=JSContext() else { return .init(output:"",diagnostics:["Could not create JavaScriptCore context."],succeeded:false) }
-        var messages:[String]=[]
-        context.exceptionHandler={ _, exception in if let value=exception?.toString(){ messages.append(value) } }
+        var diagnostics:[String]=[]
+        var output:[String]=[]
+        context.exceptionHandler={ _, exception in if let value=exception?.toString(){ diagnostics.append(value) } }
+        let console = JSValue(newObjectIn: context)
+        let logger: @convention(block) (JSValue) -> Void = { value in output.append(value.toString() ?? "undefined") }
+        console?.setObject(logger, forKeyedSubscript: "log" as NSString)
+        console?.setObject(logger, forKeyedSubscript: "info" as NSString)
+        console?.setObject(logger, forKeyedSubscript: "warn" as NSString)
+        context.setObject(console, forKeyedSubscript: "console" as NSString)
         let value=context.evaluateScript(source)
-        return .init(output:value?.toString() ?? "",diagnostics:messages,succeeded:messages.isEmpty)
+        if let result=value, !result.isUndefined, !result.isNull {
+            let rendered=result.toString() ?? ""
+            if !rendered.isEmpty { output.append(rendered) }
+        }
+        return .init(output:output.joined(separator:"\n"),diagnostics:diagnostics,succeeded:diagnostics.isEmpty)
     }
 }
 
