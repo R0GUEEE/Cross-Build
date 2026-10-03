@@ -80,6 +80,26 @@ struct CompilerDashboardView: View {
                         }
                     }
 
+                    GroupBox("App Toolchain Libraries") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            LabeledContent("Integrated", value: "\(AppToolchainLibraries.all.count)")
+                            ForEach(AppToolchainLibraries.all.prefix(6)) { lib in
+                                HStack {
+                                    Image(systemName: lib.requiresProcessBackend ? "link" : "checkmark.seal.fill")
+                                    VStack(alignment: .leading) {
+                                        Text(lib.name).font(.subheadline.weight(.medium))
+                                        Text("\(lib.module) • \(lib.availability.rawValue)").font(.caption2).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Text(lib.version).font(.caption2).monospaced()
+                                }
+                            }
+                            if AppToolchainLibraries.all.count > 6 {
+                                Button("View all \(AppToolchainLibraries.all.count) toolchains") { showCatalog = true }
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
                     GroupBox("Execution Backend") {
                         let backend = ExecutionBackendFactory.make(mode: settings.executionBackend, host: settings.remoteHost, port: settings.remotePort)
                         VStack(alignment: .leading, spacing: 8) {
