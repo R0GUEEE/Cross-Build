@@ -9,6 +9,7 @@ struct CrossBuildApp: App {
         WindowGroup {
             RootView(settings: settings)
                 .environmentObject(workspace)
+                .onAppear { workspace.appSettings = settings }
         }
     }
 }
