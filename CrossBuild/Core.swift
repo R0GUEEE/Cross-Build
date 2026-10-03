@@ -372,6 +372,15 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
+    private func embeddedID(for toolchain: ToolchainKind) -> String {
+        switch toolchain {
+        case .javascript: return "javascriptcore"
+        case .theos: return "logos-preprocessor"
+        case .clang: return "clang"
+        default: return toolchain.rawValue.lowercased()
+        }
+    }
+
     @discardableResult
     func executeCommand(_ command: String, settings: AppSettings? = nil) async -> CommandResult {
         guard !isExecuting else {
@@ -380,7 +389,16 @@ final class WorkspaceModel: ObservableObject {
             return result
         }
         let resolvedSettings = settings ?? appSettings
-        let mode = resolvedSettings?.executionBackend ?? "Sideload / Embedded"
+        var mode = resolvedSettings?.executionBackend ?? "Sideload / Embedded"
+        if mode == "Automatic" {
+            if embeddedToolchains.isAvailable(embeddedID(for: selectedToolchain)) {
+                mode = "Sideload / Embedded"
+            } else if !(resolvedSettings?.remoteHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
+                mode = "Remote / SSH"
+            } else {
+                mode = "Sideload / Embedded"
+            }
+        }
         let host = resolvedSettings?.remoteHost ?? ""
         let port = resolvedSettings?.remotePort ?? 22
         let backend = ExecutionBackendFactory.make(mode: mode, host: host, port: port)
