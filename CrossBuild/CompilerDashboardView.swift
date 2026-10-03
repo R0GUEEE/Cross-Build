@@ -81,10 +81,10 @@ struct CompilerDashboardView: View {
 
                     GroupBox("Build Actions") {
                         HStack {
-                            action("Clean", "trash") { workspace.console += "$ clean\n" }
+                            action("Clean", "trash") { workspace.console += "$ \(workspace.activeCompiler?.cleanCommand.isEmpty == false ? workspace.activeCompiler!.cleanCommand : "clean")\n" }
                             action("Build", "hammer.fill", workspace.runBuild)
-                            action("Test", "checkmark.seal") { workspace.console += "$ test\n" }
-                            action("Package", "shippingbox.fill") { workspace.console += "$ package\n" }
+                            action("Test", "checkmark.seal") { workspace.console += "$ \(workspace.activeCompiler?.testCommand.isEmpty == false ? workspace.activeCompiler!.testCommand : "test")\n" }
+                            action("Package", "shippingbox.fill") { workspace.console += "$ \(workspace.activeCompiler?.packageCommand.isEmpty == false ? workspace.activeCompiler!.packageCommand : "package")\n" }
                         }
                     }
                 }.padding()
