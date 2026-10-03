@@ -69,6 +69,8 @@ final class WorkspaceModel: ObservableObject {
     @Published var generatedConfigurationSummary: [String] = []
     @Published var activeProjectRoot: String?
     @Published var recommendedBuildCommand: String?
+    @Published var pendingAgentConfirmation: String?
+    private var pendingAgentPlan: [AgentExecution] = []
     weak var appSettings: AppSettings?
     private var autosaveTask: Task<Void, Never>?
     let files = FileManagerService()
@@ -411,13 +413,48 @@ final class WorkspaceModel: ObservableObject {
             console += "Agent is waiting for the active command to finish.\n"
             return
         }
+
         console += "Agent task: \(request)\n"
         let plan = AgentController.plan(request, workspace: self)
         agentPrompt = ""
+
+        if appSettings?.confirmAgentCommands == true && plan.contains(where: agentActionRunsCommand) {
+            pendingAgentPlan = plan
+            pendingAgentConfirmation = plan.map(\.summary).joined(separator: "\n")
+            return
+        }
+
+        executeAgentPlan(plan)
+    }
+
+    func confirmPendingAgentPlan() {
+        let plan = pendingAgentPlan
+        pendingAgentPlan = []
+        pendingAgentConfirmation = nil
+        executeAgentPlan(plan)
+    }
+
+    func cancelPendingAgentPlan() {
+        pendingAgentPlan = []
+        pendingAgentConfirmation = nil
+        console += "Agent command plan cancelled.\n"
+    }
+
+    private func executeAgentPlan(_ plan: [AgentExecution]) {
+        guard !plan.isEmpty else { return }
         Task {
             for execution in plan {
                 await executeAgentAction(execution)
             }
+        }
+    }
+
+    private func agentActionRunsCommand(_ execution: AgentExecution) -> Bool {
+        switch execution.action {
+        case .runCompiler, .clean, .test, .package:
+            return true
+        default:
+            return false
         }
     }
 }
