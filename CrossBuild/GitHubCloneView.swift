@@ -39,11 +39,25 @@ struct GitHubCloneView: View {
                     Text("Provides the sideload-compatible path: download a GitHub source archive and extract it into app storage.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if !github.status.isEmpty { Section("Status") { Text(github.status) } }
+                Section("Progress") {
+                    ProgressView(value: github.progress) {
+                        HStack { Text(github.progressStage); Spacer(); Text("\(Int(github.progress * 100))%").monospacedDigit() }
+                    }
+                    if !github.status.isEmpty { Text(github.status).font(.caption) }
+                    if !github.verboseLog.isEmpty {
+                        ScrollView {
+                            Text(github.verboseLog.joined(separator: "\n"))
+                                .font(.system(.caption2, design: .monospaced))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }.frame(maxHeight: 160)
+                    }
+                }
                 if let error = github.errorMessage { Section { Text(error).foregroundStyle(.red) } }
                 Section {
-                    Button("Clone Repository", systemImage: "arrow.down.to.line") { clone() }
-                        .buttonStyle(.borderedProminent).disabled(repositoryURL.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Button(github.isImporting ? "Cloning…" : "Clone Repository", systemImage: "arrow.down.to.line") { clone() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(repositoryURL.trimmingCharacters(in: .whitespaces).isEmpty || github.isImporting)
                 }
                 if !github.repositories.isEmpty {
                     Section("Recent Repositories") {
@@ -61,21 +75,18 @@ struct GitHubCloneView: View {
     }
 
     private func clone() {
-        github.errorMessage = nil
-        do {
-            let repo = try github.registerImportedRepository(url: repositoryURL, branch: branch)
-            let branchArg = branch.isEmpty ? "" : " --branch \(branch)"
-            let depthArg = shallow ? " --depth 1" : ""
+        Task {
             switch mode {
+            case .archive, .automatic:
+                await github.cloneArchive(url: repositoryURL, branch: branch)
             case .git:
-                github.status = "Ready: git clone\(depthArg)\(branchArg) \(repo.url) \(repo.localPath)"
-            case .archive:
-                github.status = "Ready to import GitHub archive into \(repo.localPath)"
-            case .automatic:
-                github.status = "Ready to select local Git or archive import for \(repo.owner)/\(repo.name)"
+                do {
+                    let repo = try github.registerImportedRepository(url: repositoryURL, branch: branch)
+                    github.errorMessage = "Local git execution is not available through the sideload backend yet. Use Archive Import; destination: \(repo.localPath)"
+                } catch {
+                    github.errorMessage = error.localizedDescription
+                }
             }
-        } catch {
-            github.errorMessage = error.localizedDescription
         }
     }
 }
