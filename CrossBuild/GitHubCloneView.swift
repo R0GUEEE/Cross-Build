@@ -5,66 +5,93 @@ struct GitHubCloneView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var repositoryURL = ""
     @State private var branch = ""
-    @State private var shallow = true
-    @State private var mode: GitCloneMode = .automatic
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    Label("Clone from GitHub", systemImage: "arrow.down.circle.fill").font(.title2.bold())
-                    Text("Import a repository into Cross Build's private Projects directory and open it as a workspace.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Label("Import from GitHub", systemImage: "arrow.down.circle.fill")
+                        .font(.title2.bold())
+                    Text("Import a GitHub repository safely into Documents/Workspace.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+
                 Section("Repository") {
                     TextField("https://github.com/owner/repository", text: $repositoryURL)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
                     TextField("Branch (optional)", text: $branch)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Picker("Method", selection: $mode) {
-                        ForEach(GitCloneMode.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    Toggle("Shallow clone", isOn: $shallow)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
                 }
+
                 Section("Storage") {
                     LabeledContent("Location", value: "Documents/Workspace")
-                    Text(github.projectsDirectory.path).font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.secondary).textSelection(.enabled)
+                    Text(github.projectsDirectory.path)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 }
-                Section("Clone Strategy") {
-                    Label("Git Clone", systemImage: "terminal")
-                    Text("Uses a local Git executable when the active runtime supports process execution.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Label("Archive Import", systemImage: "archivebox")
-                    Text("Provides the sideload-compatible path: download a GitHub source archive and extract it into app storage.")
-                        .font(.caption).foregroundStyle(.secondary)
+
+                Section("Import Method") {
+                    Label("Transactional Archive Import", systemImage: "archivebox")
+                    Text("Downloads GitHub's source archive, validates it, and only replaces an existing tracked copy after extraction succeeds.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+
                 Section("Progress") {
                     ProgressView(value: github.progress) {
-                        HStack { Text(github.progressStage); Spacer(); Text("\(Int(github.progress * 100))%").monospacedDigit() }
+                        HStack {
+                            Text(github.progressStage)
+                            Spacer()
+                            Text("\(Int(github.progress * 100))%").monospacedDigit()
+                        }
                     }
-                    if !github.status.isEmpty { Text(github.status).font(.caption) }
+                    if !github.status.isEmpty {
+                        Text(github.status).font(.caption)
+                    }
                     if !github.verboseLog.isEmpty {
                         ScrollView {
                             Text(github.verboseLog.joined(separator: "\n"))
                                 .font(.system(.caption2, design: .monospaced))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .textSelection(.enabled)
-                        }.frame(maxHeight: 160)
+                        }
+                        .frame(maxHeight: 160)
                     }
                 }
-                if let error = github.errorMessage { Section { Text(error).foregroundStyle(.red) } }
-                Section {
-                    Button(github.isImporting ? "Cloning…" : "Clone Repository", systemImage: "arrow.down.to.line") { clone() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(repositoryURL.trimmingCharacters(in: .whitespaces).isEmpty || github.isImporting)
+
+                if let error = github.errorMessage {
+                    Section {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                    }
                 }
+
+                Section {
+                    Button(github.isImporting ? "Importing…" : "Import Repository",
+                           systemImage: "arrow.down.to.line") {
+                        clone()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(repositoryURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || github.isImporting)
+
+                    if github.progressStage == "Complete" {
+                        Button("Done") { dismiss() }
+                    }
+                }
+
                 if !github.repositories.isEmpty {
                     Section("Recent Repositories") {
                         ForEach(github.repositories) { repo in
-                            VStack(alignment: .leading) {
+                            VStack(alignment: .leading, spacing: 2) {
                                 Text("\(repo.owner)/\(repo.name)").font(.headline)
-                                Text(repo.localPath).font(.caption2).foregroundStyle(.secondary)
+                                Text(repo.localPath)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
                             }
                         }
                     }
@@ -76,13 +103,7 @@ struct GitHubCloneView: View {
 
     private func clone() {
         Task {
-            switch mode {
-            case .archive, .automatic:
-                await github.cloneArchive(url: repositoryURL, branch: branch)
-            case .git:
-                github.status = "Local Git is unavailable in the sideload backend; falling back to Archive Import."
-                await github.cloneArchive(url: repositoryURL, branch: branch)
-            }
+            await github.cloneArchive(url: repositoryURL, branch: branch)
         }
     }
 }
