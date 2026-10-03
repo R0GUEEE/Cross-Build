@@ -32,36 +32,63 @@ struct SideloadExecutionBackend: ExecutionBackend {
     let name = "Sideload / Embedded"
     let capabilities = ExecutionCapabilities(canSpawnProcesses:false, canUseNetwork:true, canAccessWorkspace:true, canInstallPackages:false)
     func execute(_ request: CommandRequest) async -> CommandResult {
-        CommandResult(exitCode:126, stdout:"", stderr:"Cross Build cannot spawn arbitrary compiler executables in the stock sideload sandbox. Select an embedded toolchain or a supported remote/local backend.", duration:0)
+        CommandResult(exitCode:126, stdout:"", stderr:"Cross Build cannot spawn arbitrary executables in the stock sideload sandbox. Use an embedded engine or CrossBuild Helper backend.", duration:0)
     }
 }
 
-struct JailbreakExecutionBackend: ExecutionBackend {
-    let name = "Jailbreak Local"
-    let capabilities = ExecutionCapabilities(canSpawnProcesses:false, canUseNetwork:true, canAccessWorkspace:true, canInstallPackages:false)
-    func execute(_ request: CommandRequest) async -> CommandResult {
-        // The interface is live; privileged process spawning is intentionally isolated here
-        // so a jailbreak helper/daemon can be attached without leaking platform assumptions.
-        CommandResult(exitCode:125, stdout:"", stderr:"Jailbreak local backend selected, but no privileged execution helper is connected.", duration:0)
-    }
-}
+struct HelperExecutionBackend: ExecutionBackend {
+    let name: String
+    let client: CrossBuildHelperClient
+    let localWorkspace: Bool
+    let packageAccess: Bool
 
-struct RemoteExecutionBackend: ExecutionBackend {
-    let host: String
-    let port: Int
-    var name: String { "Remote / SSH" }
-    let capabilities = ExecutionCapabilities(canSpawnProcesses:false, canUseNetwork:true, canAccessWorkspace:false, canInstallPackages:false)
+    var capabilities: ExecutionCapabilities {
+        .init(canSpawnProcesses:true, canUseNetwork:true, canAccessWorkspace:localWorkspace, canInstallPackages:packageAccess)
+    }
+
     func execute(_ request: CommandRequest) async -> CommandResult {
-        CommandResult(exitCode:125, stdout:"", stderr: host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Remote / SSH requires a configured host." : "Remote backend configured for \(host):\(port), but the SSH transport has not been connected yet.", duration:0)
+        let health = await client.health()
+        guard health.0 else {
+            return .init(exitCode:125, stdout:"", stderr:"\(name) unavailable: \(health.1)", duration:0)
+        }
+        return await client.execute(request)
     }
 }
 
 enum ExecutionBackendFactory {
-    static func make(mode:String, host:String, port:Int) -> any ExecutionBackend {
+    static func make(mode:String, settings:AppSettings?) -> any ExecutionBackend {
         switch mode {
-        case "Jailbreak Local": return JailbreakExecutionBackend()
-        case "Remote / SSH": return RemoteExecutionBackend(host:host,port:port)
-        default: return SideloadExecutionBackend()
+        case "Jailbreak Local":
+            let client = CrossBuildHelperClient(
+                host: settings?.jailbreakHelperHost ?? "127.0.0.1",
+                port: settings?.jailbreakHelperPort ?? 8765,
+                scheme: settings?.helperScheme ?? "http",
+                token: settings?.jailbreakAPIToken ?? "",
+                timeout: settings?.connectionTimeout ?? 15
+            )
+            return HelperExecutionBackend(name:"Jailbreak Local", client:client, localWorkspace:true, packageAccess:true)
+        case "Remote / SSH":
+            let host = settings?.remoteHost.trimmingCharacters(in:.whitespacesAndNewlines) ?? ""
+            guard !host.isEmpty else { return UnavailableExecutionBackend(name:"Remote / SSH", reason:"Configure a remote host.") }
+            let client = CrossBuildHelperClient(
+                host:host,
+                port:settings?.helperPort ?? 8765,
+                scheme:settings?.helperScheme ?? "http",
+                token:settings?.remoteAPIToken ?? "",
+                timeout:settings?.connectionTimeout ?? 15
+            )
+            return HelperExecutionBackend(name:"Remote / Helper", client:client, localWorkspace:false, packageAccess:true)
+        default:
+            return SideloadExecutionBackend()
         }
+    }
+}
+
+struct UnavailableExecutionBackend: ExecutionBackend {
+    let name:String
+    let reason:String
+    let capabilities = ExecutionCapabilities(canSpawnProcesses:false,canUseNetwork:true,canAccessWorkspace:false,canInstallPackages:false)
+    func execute(_ request:CommandRequest) async -> CommandResult {
+        .init(exitCode:125,stdout:"",stderr:reason,duration:0)
     }
 }
