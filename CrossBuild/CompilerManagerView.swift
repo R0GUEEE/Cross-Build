@@ -15,6 +15,13 @@ struct CompilerManagerView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Toolchain Manager", systemImage: "cpu.fill").font(.headline)
+                        Text("Add compiler executables and teach Cross Build how to detect and invoke them.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }.padding(.vertical, 4)
+                }
                 Section("Installed / Added Compilers") {
                     ForEach(workspace.customCompilers) { compiler in
                         Button {
@@ -43,7 +50,7 @@ struct CompilerManagerView: View {
                     TextField("Detection markers (comma separated)", text: $markers)
                 }
             }
-            .navigationTitle("Compilers")
+            .navigationTitle("Compiler Studio")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
