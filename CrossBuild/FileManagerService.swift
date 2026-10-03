@@ -55,6 +55,7 @@ final class FileManagerService: ObservableObject {
     private var showHidden = false
     private var followSymlinks = false
     private var searchCaseSensitive = false
+    private var maxRecentFiles = 20
     private var excludedNames: Set<String> = [".git", "DerivedData", ".build", "node_modules", "Caches"]
 
     init() {
@@ -89,7 +90,7 @@ final class FileManagerService: ObservableObject {
 
     func configure(showAppDirectories: Bool, showBundle: Bool, showLibrary: Bool,
                    showTemporary: Bool, showHidden: Bool, followSymlinks: Bool,
-                   searchCaseSensitive: Bool, excludePatterns: String) {
+                   searchCaseSensitive: Bool, maxRecentFiles: Int = 20, excludePatterns: String) {
         includeAppDirectories = showAppDirectories
         self.showBundle = showBundle
         self.showLibrary = showLibrary
@@ -97,6 +98,7 @@ final class FileManagerService: ObservableObject {
         self.showHidden = showHidden
         self.followSymlinks = followSymlinks
         self.searchCaseSensitive = searchCaseSensitive
+        self.maxRecentFiles = max(5, maxRecentFiles)
         let configured = excludePatterns
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -145,7 +147,7 @@ final class FileManagerService: ObservableObject {
         guard !file.isDirectory else { return }
         recent.removeAll { $0.path == file.path }
         recent.insert(file, at: 0)
-        if recent.count > 20 { recent = Array(recent.prefix(20)) }
+        if recent.count > maxRecentFiles { recent = Array(recent.prefix(maxRecentFiles)) }
     }
 
     func contents(of file: WorkspaceFile, encoding: String.Encoding = .utf8) -> String? {
