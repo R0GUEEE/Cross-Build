@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, json, os, subprocess, threading, time
+import argparse, json, os, re, subprocess, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def resolve_shell(requested=""):
@@ -29,11 +29,18 @@ class SessionStore:
             state = self._sessions.get(session_id, {})
             return state.get("cwd"), dict(state.get("env", {}))
 
-    def update(self, session_id, cwd, env):
+    def update(self, session_id, cwd, env=None):
+        """env=None keeps whatever environment was already recorded; that is the
+        signal used when the latest snapshot could not be parsed reliably (see
+        _extract_state), so a bad reading cannot wipe previously-good state."""
         if not session_id:
             return
         with self._lock:
-            self._sessions[session_id] = {"cwd": cwd, "env": env}
+            current = self._sessions.get(session_id, {})
+            self._sessions[session_id] = {
+                "cwd": cwd if cwd else current.get("cwd"),
+                "env": current.get("env", {}) if env is None else env,
+            }
 
     def clear(self, session_id):
         with self._lock:
@@ -43,6 +50,11 @@ class SessionStore:
 # cwd and a snapshot of its exported environment, letting the next request in
 # the same session resume from where this one left off.
 _STATE_MARKER = "__CROSSBUILD_STATE__"
+
+# Environment variable names are [A-Za-z_][A-Za-z0-9_]* by POSIX. Used to sanity
+# check a captured env line: anything else means the `env` output was not
+# line-separable and must not be trusted (see _extract_state).
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 def _wrap_with_state_capture(command):
     return "%s\nprintf '\\n%s\\n%%s\\n' \"$PWD\"\nenv\n" % (command, _STATE_MARKER)
@@ -55,12 +67,21 @@ def _extract_state(stdout):
     rest = stdout[marker_idx + len(_STATE_MARKER) + 2:]
     lines = rest.split("\n")
     cwd = lines[0] if lines else None
+
+    # `env` prints KEY=value one per line, which cannot represent a value that
+    # itself contains a newline -- such a value spills onto extra lines and would
+    # otherwise be reassembled as bogus variables (or silently overwrite real
+    # ones). Detect that case and drop the environment snapshot entirely rather
+    # than persisting corrupted state into later commands in the session. The
+    # working directory is always single-line, so it stays reliable.
     env = {}
     for line in lines[1:]:
-        if "=" in line:
-            k, _, v = line.partition("=")
-            if k:
-                env[k] = v
+        if not line:
+            continue
+        key, sep, value = line.partition("=")
+        if not sep or not _ENV_NAME_RE.match(key):
+            return visible, cwd, None  # unparseable env: keep cwd, drop env
+        env[key] = value
     return visible, cwd, env
 
 class Handler(BaseHTTPRequestHandler):
@@ -142,7 +163,7 @@ class Handler(BaseHTTPRequestHandler):
                 visible, new_cwd, new_env = _extract_state(stdout)
                 stdout = visible
                 if new_cwd:
-                    self.server.sessions.update(session_id, new_cwd, new_env or {})
+                    self.server.sessions.update(session_id, new_cwd, new_env)
 
             self._json(200, {"exitCode":result.returncode,"stdout":stdout,"stderr":result.stderr,
                              "duration":time.monotonic()-started,"shell":shell,

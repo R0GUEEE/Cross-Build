@@ -42,3 +42,11 @@ but it does **not** preserve shell functions/aliases, job control, or any state 
 by a long-running foreground process (e.g. a REPL or `tail -f`) — those only live for
 the single command that started them. Use `/v1/session/reset` to clear a session's
 remembered state (e.g. when the app's terminal panel is cleared).
+
+**Known limitation — workflow with a newline in it.** The environment snapshot is read
+back from `env` output, which is `KEY=value` one-per-line and therefore cannot represent
+a value that itself contains a newline (e.g. `export KEY=$(printf 'a\nb')`). When that
+happens the helper detects it, **keeps the working directory and the previously recorded
+environment, and discards only the environment snapshot from that command** — so the
+next command in the session never inherits silently corrupted variables. Newline-free
+exports continue to persist normally.

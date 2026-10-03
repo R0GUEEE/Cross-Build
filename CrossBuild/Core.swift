@@ -49,7 +49,33 @@ final class WorkspaceModel: ObservableObject {
     private let selectedDocumentKey = "crossbuild.selectedDocument"
     @Published var selectedToolchain: ToolchainKind = .theos
     @Published var editorText = "// Cross Build\n// Open or create a project to begin.\n"
-    @Published var console = "Ready. Toolchain auto-detection enabled.\n"
+    @Published var console = "Ready. Toolchain auto-detection enabled.\n" {
+        didSet {
+            // The console is appended to throughout the app and rendered whole by
+            // a Text view, so without a bound it grows for the lifetime of the
+            // session. Trim to the most recent output (that is what the user
+            // wants to see) from a line boundary, guarded so the assignment here
+            // does not recurse through didSet.
+            guard !isTrimmingConsole, console.count > Self.consoleCharacterLimit else { return }
+            isTrimmingConsole = true
+            console = Self.trimConsole(console)
+            isTrimmingConsole = false
+        }
+    }
+    private var isTrimmingConsole = false
+    private static let consoleCharacterLimit = 400_000
+    private static let consoleRetainedCharacters = 300_000
+
+    /// Keeps the tail of the console and drops the rest at a line boundary,
+    /// leaving a marker so it is obvious output was dropped rather than silently
+    /// missing.
+    private static func trimConsole(_ text: String) -> String {
+        let dropped = text.count - consoleRetainedCharacters
+        let tail = String(text.suffix(consoleRetainedCharacters))
+        let trimmedTail = tail.firstIndex(of: "\n").map { String(tail[tail.index(after: $0)...]) } ?? tail
+        return "… earlier output trimmed (\(dropped) characters). Settings → Diagnostics → clear to reset.\n" + trimmedTail
+    }
+
     @Published var agentPrompt = ""
     @Published var analysis: ProjectAnalysis?
     @Published var customCompilers: [CustomCompiler] = []
@@ -662,6 +688,10 @@ final class WorkspaceModel: ObservableObject {
     /// produces, so this works by diffing the project root's file list before
     /// and after the command runs -- simple, but accurate for the common case of
     /// a build dropping a .deb/.ipa/.zip/binary next to the sources.
+    ///
+    /// Both the diff and the copy run off the main actor: each walks the entire
+    /// project tree, which is far too much synchronous file I/O to do while the
+    /// UI is otherwise blocked.
     @discardableResult
     func runPackage(settings: AppSettings? = nil) async -> CommandResult {
         let resolved = settings ?? appSettings
@@ -672,58 +702,88 @@ final class WorkspaceModel: ObservableObject {
         }
         let artifactDir = configuration.artifactDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
         let root = activeProjectRoot ?? files.workspaceRoot.path
-        let beforePaths: Set<String> = artifactDir.isEmpty ? [] : Set(snapshotFiles(under: root))
+
+        let beforePaths: Set<String> = artifactDir.isEmpty
+            ? []
+            : await Self.snapshotFilesOffMain(under: root)
 
         let result = await executeCommand(command, settings: resolved)
 
         guard result.succeeded, !artifactDir.isEmpty else { return result }
-        let destination = URL(fileURLWithPath: artifactDir, isDirectory: true)
-        let fm = FileManager.default
-        do {
-            if configuration.cleanArtifactDirectory, fm.fileExists(atPath: destination.path) {
-                try fm.removeItem(at: destination)
-            }
-            try fm.createDirectory(at: destination, withIntermediateDirectories: true)
-        } catch {
-            console += "error: Could not prepare artifact directory: \(error.localizedDescription)\n"
-            return result
-        }
 
-        let afterPaths = Set(snapshotFiles(under: root))
-        let newPaths = afterPaths.subtracting(beforePaths).sorted()
-        guard !newPaths.isEmpty else {
-            console += "Package succeeded but no new files were found under the project root to copy to the artifact directory.\n"
-            return result
-        }
-        var copied = 0
-        for path in newPaths {
-            let source = URL(fileURLWithPath: path)
-            let dest = destination.appendingPathComponent(source.lastPathComponent)
-            do {
-                if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
-                try fm.copyItem(at: source, to: dest)
-                copied += 1
-            } catch {
-                console += "error: Could not copy \(source.lastPathComponent) to artifact directory: \(error.localizedDescription)\n"
-            }
-        }
-        if copied > 0 {
-            console += "Copied \(copied) artifact\(copied == 1 ? "" : "s") to \(destination.path)\n"
-        }
-        if !configuration.keepBuildArtifacts {
-            for path in newPaths {
-                try? fm.removeItem(atPath: path)
-            }
-            console += "Removed build artifacts from the project root (Settings → Artifacts → Keep build artifacts is off).\n"
-        }
+        let outcome = await Self.collectArtifacts(
+            under: root,
+            destination: artifactDir,
+            before: beforePaths,
+            cleanDestination: configuration.cleanArtifactDirectory,
+            keepArtifacts: configuration.keepBuildArtifacts
+        )
+        if !outcome.message.isEmpty { console += outcome.message }
         return result
+    }
+
+    private nonisolated static func snapshotFilesOffMain(under root: String) async -> Set<String> {
+        await Task.detached(priority: .utility) {
+            Set(snapshotFiles(under: root))
+        }.value
+    }
+
+    /// Diffs the project tree against `before`, copies new files into
+    /// `destination`, and optionally clears them from the project root. Pure
+    /// file I/O, so it is `nonisolated` and driven from a detached task.
+    private nonisolated static func collectArtifacts(under root: String,
+                                                     destination artifactDir: String,
+                                                     before: Set<String>,
+                                                     cleanDestination: Bool,
+                                                     keepArtifacts: Bool) async -> (message: String, copied: Int) {
+        await Task.detached(priority: .utility) { () -> (message: String, copied: Int) in
+            let fm = FileManager.default
+            let destination = URL(fileURLWithPath: artifactDir, isDirectory: true)
+            var log: [String] = []
+
+            do {
+                if cleanDestination, fm.fileExists(atPath: destination.path) {
+                    try fm.removeItem(at: destination)
+                }
+                try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+            } catch {
+                return ("error: Could not prepare artifact directory: \(error.localizedDescription)\n", 0)
+            }
+
+            let afterPaths = Set(snapshotFiles(under: root))
+            let newPaths = afterPaths.subtracting(before).sorted()
+            guard !newPaths.isEmpty else {
+                return ("Package succeeded but no new files were found under the project root to copy to the artifact directory.\n", 0)
+            }
+
+            var copied = 0
+            for path in newPaths {
+                let source = URL(fileURLWithPath: path)
+                let dest = destination.appendingPathComponent(source.lastPathComponent)
+                do {
+                    if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+                    try fm.copyItem(at: source, to: dest)
+                    copied += 1
+                } catch {
+                    log.append("error: Could not copy \(source.lastPathComponent) to artifact directory: \(error.localizedDescription)\n")
+                }
+            }
+            if copied > 0 {
+                log.append("Copied \(copied) artifact\(copied == 1 ? "" : "s") to \(destination.path)\n")
+            }
+            if !keepArtifacts {
+                for path in newPaths { try? fm.removeItem(atPath: path) }
+                log.append("Removed build artifacts from the project root (Settings → Artifacts → Keep build artifacts is off).\n")
+            }
+            return (log.joined(), copied)
+        }.value
     }
 
     /// A flat list of regular-file paths under `root`, skipping the same
     /// directory names FileManagerService already excludes from the browser
     /// (.git, DerivedData, .build, node_modules) so a diff doesn't pick up
     /// unrelated VCS/dependency churn as "new artifacts".
-    private func snapshotFiles(under root: String) -> [String] {
+    private nonisolated static func snapshotFiles(under root: String) -> [String] {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(at: URL(fileURLWithPath: root, isDirectory: true),
                                               includingPropertiesForKeys: [.isDirectoryKey],
@@ -844,7 +904,18 @@ final class WorkspaceModel: ObservableObject {
         return true
     }
 
-    func executeAgentAction(_ execution: AgentExecution) async {
+    /// Outcome of one agent action. The distinction matters: an action that ran
+    /// no command at all (an edit, a toolchain switch, or one blocked by
+    /// permissions) must not be judged by a stale exit code left over from an
+    /// earlier command -- which is what the planner used to do by reading the
+    /// shared `lastExitCode`.
+    private enum AgentActionOutcome {
+        case noCommand
+        case command(succeeded: Bool)
+    }
+
+    @discardableResult
+    func executeAgentAction(_ execution: AgentExecution) async -> AgentActionOutcome {
         let settings = appSettings
         agentActivity.append(execution.summary)
         console += "Agent → \(execution.summary)\n"
@@ -853,48 +924,56 @@ final class WorkspaceModel: ObservableObject {
         case .replaceEditor(let text):
             guard settings?.allowAgentEdits != false else {
                 console += "Agent edit blocked by permissions.\n"
-                return
+                return .noCommand
             }
             updateEditorText(text)
+            return .noCommand
         case .appendEditor(let text):
             guard settings?.allowAgentEdits != false else {
                 console += "Agent edit blocked by permissions.\n"
-                return
+                return .noCommand
             }
             updateEditorText(editorText + text)
+            return .noCommand
         case .selectToolchain(let kind):
             selectedToolchain = kind
             selectedCustomCompilerID = nil
+            return .noCommand
         case .runCompiler(let command):
             guard settings?.allowAgentBuilds != false else {
                 console += "Agent build blocked by permissions.\n"
-                return
+                return .noCommand
             }
-            _ = await executeCommand(command, settings: settings)
+            let result = await executeCommand(command, settings: settings)
+            return .command(succeeded: result.succeeded)
         case .clean:
             guard settings?.allowAgentBuilds != false else {
                 console += "Agent clean blocked by permissions.\n"
-                return
+                return .noCommand
             }
-            _ = await executeCommand(cleanCommand(), settings: settings)
+            let result = await executeCommand(cleanCommand(), settings: settings)
+            return .command(succeeded: result.succeeded)
         case .test:
             guard settings?.allowAgentBuilds != false else {
                 console += "Agent test blocked by permissions.\n"
-                return
+                return .noCommand
             }
-            _ = await executeCommand(testCommand(), settings: settings)
+            let result = await executeCommand(testCommand(), settings: settings)
+            return .command(succeeded: result.succeeded)
         case .package:
             guard settings?.allowAgentBuilds != false else {
                 console += "Agent package blocked by permissions.\n"
-                return
+                return .noCommand
             }
-            _ = await runPackage(settings: settings)
+            let result = await runPackage(settings: settings)
+            return .command(succeeded: result.succeeded)
         case .inspectDiagnostics:
             let lines = console.split(separator: "\n")
                 .filter { $0.localizedCaseInsensitiveContains("error") || $0.localizedCaseInsensitiveContains("warning") }
                 .suffix(max(10, settings?.agentDiagnosticsLimit ?? 40))
             if lines.isEmpty { console += "Diagnostics: no errors or warnings captured.\n" }
             else { console += "Diagnostics snapshot:\n" + lines.joined(separator: "\n") + "\n" }
+            return .noCommand
         }
     }
 
@@ -950,9 +1029,15 @@ final class WorkspaceModel: ObservableObject {
             for execution in plan {
                 var attempt = 0
                 let maxRetries = appSettings?.agentAutoRetry == true ? max(0, appSettings?.agentMaxRetries ?? 0) : 0
+                var outcome: AgentActionOutcome = .noCommand
                 repeat {
-                    await executeAgentAction(execution)
-                    if lastExitCode == 0 || !agentActionRunsCommand(execution) { break }
+                    outcome = await executeAgentAction(execution)
+                    // Only a command can "fail". Anything else (an edit, a
+                    // toolchain switch, or a permission block) ends the retry
+                    // loop for this step rather than being retried against a
+                    // stale exit code.
+                    guard case .command(let succeeded) = outcome else { break }
+                    if succeeded { break }
                     attempt += 1
                     if attempt <= maxRetries {
                         agentActivity.append("Retry \(attempt): \(execution.summary)")
@@ -960,8 +1045,7 @@ final class WorkspaceModel: ObservableObject {
                     }
                 } while attempt <= maxRetries
 
-                if agentActionRunsCommand(execution),
-                   lastExitCode != nil, lastExitCode != 0,
+                if case .command(let succeeded) = outcome, !succeeded,
                    appSettings?.agentStopOnBuildFailure == true {
                     agentActivity.append("Stopped after failure: \(execution.summary)")
                     console += "Agent stopped because the command failed.\n"

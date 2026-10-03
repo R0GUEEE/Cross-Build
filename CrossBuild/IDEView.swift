@@ -70,7 +70,7 @@ struct IDEView: View {
                         Button("Clone from GitHub", systemImage: "arrow.down.circle") { openGitHubImporter() }
                     }
                     Section("File Operations") {
-                        Button("New File", systemImage: "doc.badge.plus") { if let file = workspace.files.createFile(named: workspace.newFileName()) { workspace.files.open(file); workspace.openSelectedFile() } }
+                        Button("New File", systemImage: "doc.badge.plus") { createAndOpenNewFile() }
                         Button("New Folder", systemImage: "folder.badge.plus") { workspace.files.createFolder(named: "New Folder") }
                         if let selected = workspace.files.selected {
                             Button("Duplicate Selected", systemImage: "plus.square.on.square") { workspace.files.duplicate(selected) }
@@ -112,7 +112,7 @@ struct IDEView: View {
                 VStack(spacing: 8) {
                     Image(systemName: "doc.text").font(.largeTitle).foregroundStyle(.secondary)
                     Text("No File Open").font(.headline)
-                    Button("New File", systemImage: "doc.badge.plus") { workspace.files.createFile(named: workspace.newFileName()) }
+                    Button("New File", systemImage: "doc.badge.plus") { createAndOpenNewFile() }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 editor
@@ -197,12 +197,7 @@ struct IDEView: View {
                             .fill(workspace.editor.selectedID == doc.id ? Color.secondary.opacity(0.12) : Color.clear)
                     )
                 }
-                Button {
-                    if let file = workspace.files.createFile(named: workspace.newFileName()) {
-                        workspace.files.open(file)
-                        workspace.openSelectedFile()
-                    }
-                } label: {
+                Button(action: createAndOpenNewFile) {
                     Image(systemName: "plus").padding(8)
                 }
                 .buttonStyle(.plain)
@@ -218,6 +213,16 @@ struct IDEView: View {
         } else {
             workspace.closeDocument(doc.id)
         }
+    }
+
+    /// Single place for "create a new file and actually show it". Creating without
+    /// opening leaves an invisible untitled file on disk, which is what the empty
+    /// state's New File button used to do -- every call site now goes through here
+    /// so the two steps cannot drift apart again.
+    private func createAndOpenNewFile() {
+        guard let file = workspace.files.createFile(named: workspace.newFileName()) else { return }
+        workspace.files.open(file)
+        workspace.openSelectedFile()
     }
 
     private func editorTab(_ title: String, icon: String, selected: Bool) -> some View {

@@ -15,6 +15,9 @@ struct WorkspaceBrowserView: View {
         List {
             Section {
                 TextField("Search files", text: $files.query)
+                    // Content search runs off the main actor and is debounced;
+                    // without this the field would only ever match file names.
+                    .onChange(of: files.query) { _ in files.scheduleContentSearch() }
                 if !files.query.isEmpty {
                     ForEach(files.searchResults) { row($0) }
                 }

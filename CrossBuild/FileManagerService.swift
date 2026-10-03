@@ -83,26 +83,63 @@ final class FileManagerService: ObservableObject {
         guard !needle.isEmpty else { return [] }
         return flattened.filter { file in
             if matchesName(file, needle: needle) { return true }
-            return searchFileContents && matchesContents(file, needle: needle)
+            return searchFileContents && contentMatches.contains(file.path)
         }
     }
 
-    /// Content search is opt-in and capped at 512 KB per file so a large binary
-    /// or generated artifact accidentally included in the workspace can't make
-    /// every keystroke in the search field scan megabytes of data.
+    /// Paths whose *contents* matched the current query. Filled in
+    /// asynchronously by `scheduleContentSearch()`; `searchResults` only reads
+    /// this set, so rendering stays cheap.
+    @Published private(set) var contentMatches: Set<String> = []
+    private var contentSearchTask: Task<Void, Never>?
+
+    /// Content search is opt-in, capped at 512 KB per file, and never runs on
+    /// the main actor or once per keystroke. This has to be explicit: the search
+    /// field binds `query` directly, so a synchronous content scan inside
+    /// `searchResults` would re-read every file in the workspace on every
+    /// render pass while the user types.
     private static let contentSearchSizeLimit: Int64 = 512 * 1024
+    private static let contentSearchDebounceNanoseconds: UInt64 = 300_000_000
+
+    /// Debounced, cancellable content search. Call whenever the query, the
+    /// setting, or the workspace contents change.
+    func scheduleContentSearch() {
+        contentSearchTask?.cancel()
+        contentSearchTask = nil
+
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard searchFileContents, !needle.isEmpty else {
+            if !contentMatches.isEmpty { contentMatches = [] }
+            return
+        }
+
+        let candidates: [String] = flattened
+            .filter { !$0.isDirectory && $0.size > 0 && $0.size <= Self.contentSearchSizeLimit }
+            .map(\.path)
+        let caseSensitive = searchCaseSensitive
+
+        contentSearchTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.contentSearchDebounceNanoseconds)
+            guard !Task.isCancelled else { return }
+            let matches = await Task.detached(priority: .userInitiated) { () -> Set<String> in
+                var found: Set<String> = []
+                for path in candidates {
+                    guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+                    let hit = caseSensitive ? text.contains(needle) : text.localizedCaseInsensitiveContains(needle)
+                    if hit { found.insert(path) }
+                }
+                return found
+            }.value
+            guard !Task.isCancelled, let self else { return }
+            self.contentMatches = matches
+        }
+    }
 
     private func matchesName(_ file: WorkspaceFile, needle: String) -> Bool {
         if searchCaseSensitive {
             return file.name.contains(needle) || file.path.contains(needle)
         }
         return file.name.localizedCaseInsensitiveContains(needle) || file.path.localizedCaseInsensitiveContains(needle)
-    }
-
-    private func matchesContents(_ file: WorkspaceFile, needle: String) -> Bool {
-        guard !file.isDirectory, file.size > 0, file.size <= Self.contentSearchSizeLimit else { return false }
-        guard let text = try? String(contentsOfFile: file.path, encoding: .utf8) else { return false }
-        return searchCaseSensitive ? text.contains(needle) : text.localizedCaseInsensitiveContains(needle)
     }
 
     func configure(showAppDirectories: Bool, showBundle: Bool, showLibrary: Bool,
@@ -122,11 +159,15 @@ final class FileManagerService: ObservableObject {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         excludedNames = Set(configured).union([".git", "DerivedData", ".build", "node_modules"])
+        // reload() re-schedules content search itself.
         reload()
     }
 
     func reload(from root: URL? = nil) {
         errorMessage = nil
+        // The visible tree changed, so previously computed content matches may
+        // point at files that moved or disappeared.
+        defer { scheduleContentSearch() }
         if let root {
             roots = [makeRoot(root, displayName: root.lastPathComponent)]
             return
