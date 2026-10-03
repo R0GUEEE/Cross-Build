@@ -22,10 +22,18 @@ cpu = 'aarch64'
 endian = 'little'
 
 [built-in options]
-# _XOPEN_SOURCE is required by the iOS SDK's ucontext.h, which
-# platform/native_fault.c pulls in; without it that file fails with
-# "The deprecated ucontext routines require _XOPEN_SOURCE to be defined".
-c_args = ['-arch', 'arm64', '-isysroot', '@IOS_SDK@', '-miphoneos-version-min=16.0', '-D_XOPEN_SOURCE=600']
+# Two defines that must be set together on Darwin:
+#
+#   _XOPEN_SOURCE      the iPhoneOS SDK's ucontext.h refuses to declare the
+#                      deprecated ucontext routines without it, and
+#                      platform/native_fault.c pulls ucontext in. Without it that
+#                      file fails to compile.
+#   _DARWIN_C_SOURCE   defining _XOPEN_SOURCE alone stops Darwin's cdefs.h from
+#                      auto-enabling the full C level, which hides DT_REG/DT_DIR,
+#                      fstatat/unlinkat/linkat and makedev/major/minor. Passing
+#                      both keeps those visible while satisfying ucontext.h.
+c_args = ['-arch', 'arm64', '-isysroot', '@IOS_SDK@', '-miphoneos-version-min=16.0',
+          '-D_XOPEN_SOURCE=600', '-D_DARWIN_C_SOURCE']
 
 [properties]
 needs_exe_wrapper = true
