@@ -35,8 +35,13 @@ struct IDEView: View {
     private var navigator: some View {
         VStack(spacing: 0) {
             HStack {
-                IDEStatusPill(icon: "folder.fill", text: "Workspace")
+                VStack(alignment:.leading,spacing:2) {
+                    Text("Project").font(.headline)
+                    Text("\(workspace.projectFiles.count) files").font(.caption2).foregroundStyle(.secondary)
+                }
                 Spacer()
+                Button { showGitHub=true } label: { Image(systemName:"arrow.down.circle") }.buttonStyle(.plain)
+                Button { workspace.files.reload() } label: { Image(systemName:"arrow.clockwise") }.buttonStyle(.plain)
                 Menu {
                     Section("Project") {
                         Button("Refresh All Directories", systemImage: "arrow.clockwise") { workspace.files.reload() }
@@ -106,8 +111,8 @@ struct IDEView: View {
     private var topBar: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
-                Text("Cross Build").font(.headline)
-                Text("Portable Compiler Workbench").font(.caption2).foregroundStyle(.secondary)
+                Text(workspace.editor.selected?.name ?? "Workspace").font(.headline)
+                Text(workspace.editor.selected == nil ? "Cross Build" : workspace.selectedToolchain.rawValue).font(.caption2).foregroundStyle(.secondary)
             }
             Spacer()
             Menu {
