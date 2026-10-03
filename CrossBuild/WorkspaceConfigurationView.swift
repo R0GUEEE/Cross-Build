@@ -69,6 +69,7 @@ struct WorkspaceConfigurationView: View {
             .onChange(of: config.showContainerLibrary) { _ in workspace.syncFileConfiguration() }
             .onChange(of: config.showTemporaryFiles) { _ in workspace.syncFileConfiguration() }
             .onChange(of: config.searchHiddenFiles) { _ in workspace.syncFileConfiguration() }
+            .onChange(of: config.searchCaseSensitive) { _ in workspace.syncFileConfiguration() }
             .onChange(of: config.followSymlinks) { _ in workspace.syncFileConfiguration() }
             .onChange(of: config.excludePatterns) { _ in workspace.syncFileConfiguration() }
         }
