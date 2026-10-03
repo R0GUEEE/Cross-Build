@@ -179,6 +179,7 @@ struct BundledResourcesView: View {
             if !result.stderr.isEmpty {
                 text += (text.isEmpty ? "" : "\n") + "--- stderr ---\n" + result.stderr
             }
+            text += "\n(raw exit \(result.exitCode), \(String(format: "%.1f", result.duration))s)"
             if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 text = "The guest produced no output (exit \(result.exitCode)). If it also did not crash, the boot path may need the exit_hook fix checked."
             } else {

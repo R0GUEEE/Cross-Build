@@ -26,33 +26,18 @@ struct LinuxGuestExecutionBackend: ExecutionBackend {
         guard LinuxGuestEngine.isLinked else {
             return .init(exitCode: 125, stdout: "", stderr: "The Linux engine is not linked into this build.", duration: 0)
         }
-        guard let root = try? LinuxGuestEngine.prepareWritableRoot() else {
-            return .init(exitCode: 125, stdout: "",
-                         stderr: "No Linux rootfs image is bundled, or it could not be copied to a writable location.",
-                         duration: 0)
-        }
-        guard !LinuxGuestEngine.hasBooted else {
-            return .init(exitCode: 125, stdout: "",
-                         stderr: "The Linux guest is already booted in this process. The interpreter cannot be restarted, so relaunch the app to run another command.",
-                         duration: Date().timeIntervalSince(started))
-        }
 
-        // Booting blocks for as long as the command takes, and the guest does its
-        // work on its own thread, so keep it off the main actor.
-        let command = request.command
-        let workingDirectory = request.workingDirectory
-        let result = await Task.detached(priority: .userInitiated) {
-            LinuxGuestEngine.run(command: command, fakefsRoot: root, workingDirectory: workingDirectory)
-        }.value
+        // Uses the shared session, so the root is booted once and stays up: every
+        // command afterwards runs in the same guest, which is what makes this a
+        // usable backend rather than a single command.
+        let result = await LinuxGuestSession.shared.run(request.command, timeout: TimeInterval(max(1, request.timeout)))
+        guard result.code >= 0 else {
+            return .init(exitCode: 125, stdout: "", stderr: result.output, duration: Date().timeIntervalSince(started))
+        }
 
         var stdout = result.output
-        var stderr = result.error
         if !stdout.isEmpty && !stdout.hasSuffix("\n") { stdout += "\n" }
-        if !stderr.isEmpty && !stderr.hasSuffix("\n") { stderr += "\n" }
-
-        return .init(exitCode: result.exitCode,
-                     stdout: stdout,
-                     stderr: stderr,
+        return .init(exitCode: result.code, stdout: stdout, stderr: "",
                      duration: Date().timeIntervalSince(started))
     }
 }
