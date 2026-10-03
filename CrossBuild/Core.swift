@@ -124,7 +124,7 @@ final class WorkspaceModel: ObservableObject {
             guard path == files.workspaceRoot.path || path.hasPrefix(files.workspaceRoot.path + "/") else { continue }
             let file = files.flattened.first(where: { $0.path == path }) ??
                 WorkspaceFile(name: URL(fileURLWithPath: path).lastPathComponent, path: path)
-            if let text = files.contents(of: file) {
+            if let text = files.contents(of: file, encoding: editorEncoding) {
                 editor.open(file: file, text: text)
             }
         }
