@@ -297,6 +297,11 @@ final class WorkspaceModel: ObservableObject {
         return command
     }
 
+    func newFileName() -> String {
+        let ext = configuration.defaultNewFileExtension.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ext.isEmpty ? "Untitled" : "Untitled." + ext
+    }
+
     func buildCommand() -> String {
         if let custom = activeCompiler, !custom.buildCommand.isEmpty { return custom.buildCommand }
         if let recommendedBuildCommand, !recommendedBuildCommand.isEmpty { return recommendedBuildCommand }
