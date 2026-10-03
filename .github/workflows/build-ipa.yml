@@ -86,8 +86,12 @@ jobs:
           # the iOS cross build does, so the same paired defines are needed. They
           # are passed here rather than in the cross-file because this setup does
           # not use one.
-          meson setup build-host --buildtype=release -Dguest_arch=arm64 \
-            -Dc_args='-D_XOPEN_SOURCE=600 -D_DARWIN_C_SOURCE'
+          # Only _XOPEN_SOURCE is passed, not the paired _DARWIN_C_SOURCE the
+          # cross build needs: this is a macOS host build, and turning the full
+          # Darwin C level off here hides posix_spawn_file_actions_addchdir and
+          # friends behind their availability guards. The guest arch is arm64
+          # regardless, so the host build only needs the ABI define.
+          meson setup build-host --buildtype=release -Dguest_arch=arm64 -Dc_args='-D_XOPEN_SOURCE=600'
           meson compile -C build-host fakefsify
           ./build-host/tools/fakefsify --help >/dev/null 2>&1 || true
           test -x ./build-host/tools/fakefsify || { echo "::error::fakefsify was not built"; exit 1; }
