@@ -414,6 +414,17 @@ final class WorkspaceModel: ObservableObject {
         persistOpenDocuments()
     }
 
+    func deleteFile(_ file: WorkspaceFile) {
+        autosaveTask?.cancel()
+        let affected = editor.documents
+            .filter { $0.path == file.path || $0.path.hasPrefix(file.path + "/") }
+            .map(\.id)
+        for id in affected { editor.close(id) }
+        files.delete(file)
+        editorText = editor.selected?.text ?? ""
+        persistOpenDocuments()
+    }
+
     func saveEditor() {
         autosaveTask?.cancel()
         guard let id = editor.selectedID else { return }
