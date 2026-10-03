@@ -10,6 +10,7 @@ struct CommandRequest: Identifiable, Sendable {
     var interactiveShell = false
     var initCommand: String? = nil
     var timeout: Int = 0
+    var sessionID: String? = nil
 }
 
 struct CommandResult: Sendable {
