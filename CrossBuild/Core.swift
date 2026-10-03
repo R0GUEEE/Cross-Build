@@ -105,6 +105,7 @@ final class WorkspaceModel: ObservableObject {
             showHidden: configuration.searchHiddenFiles || appSettings?.showHiddenFiles == true,
             followSymlinks: configuration.followSymlinks,
             searchCaseSensitive: configuration.searchCaseSensitive,
+            maxRecentFiles: configuration.maxRecentFiles,
             excludePatterns: configuration.excludePatterns
         )
     }
