@@ -100,8 +100,10 @@ struct IDEView: View {
         }
         .font(.caption)
         .padding(.horizontal, 10).padding(.vertical, 7)
-        .background(selected ? .secondary.opacity(0.12) : .clear,
-                    in: RoundedRectangle(cornerRadius: ForgeTheme.compactCorner))
+        .background(
+            RoundedRectangle(cornerRadius: ForgeTheme.compactCorner)
+                .fill(selected ? Color.secondary.opacity(0.12) : Color.clear)
+        )
     }
 
     @ViewBuilder private var detectionBar: some View {
