@@ -397,8 +397,59 @@ final class WorkspaceModel: ObservableObject {
                 if !key.isEmpty { environment[key] = value }
             }
         }
-        let sdkPath = configuration.sdkPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let workspaceSDK = configuration.sdkPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let compilerSDK = compilerConfiguration.sysroot.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sdkPath = workspaceSDK.isEmpty ? compilerSDK : workspaceSDK
         if !sdkPath.isEmpty { environment["SDKROOT"] = sdkPath }
+
+        environment["ARCHS"] = compilerConfiguration.architectures
+        environment["IPHONEOS_DEPLOYMENT_TARGET"] = compilerConfiguration.deploymentTarget
+        environment["CROSSBUILD_CONFIGURATION"] = configuration.buildTarget
+        environment["CROSSBUILD_PACKAGE_FORMAT"] = compilerConfiguration.packageFormat
+        environment["CROSSBUILD_SIGNING_MODE"] = compilerConfiguration.signingMode
+
+        if selectedToolchain == .theos && compilerConfiguration.theosScheme == "rootless" {
+            environment["THEOS_PACKAGE_SCHEME"] = "rootless"
+        }
+
+        var cFlags: [String] = []
+        let compilerFlags = compilerConfiguration.compilerFlags.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !compilerFlags.isEmpty { cFlags.append(compilerFlags) }
+        let defines = compilerConfiguration.defines
+            .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "," })
+            .map(String.init)
+        cFlags.append(contentsOf: defines.map { "-D\($0)" })
+        let includes = compilerConfiguration.includePaths
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        cFlags.append(contentsOf: includes.map { "-I\($0)" })
+        switch compilerConfiguration.optimization {
+        case "Release": cFlags.append("-O2")
+        case "Size": cFlags.append("-Oz")
+        default: cFlags.append("-O0")
+        }
+        if compilerConfiguration.debugSymbols { cFlags.append("-g") }
+        if !cFlags.isEmpty { environment["CFLAGS"] = cFlags.joined(separator: " ") }
+
+        var ldFlags: [String] = []
+        let explicitLinker = compilerConfiguration.linkerFlags.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !explicitLinker.isEmpty { ldFlags.append(explicitLinker) }
+        let libraryPaths = compilerConfiguration.libraryPaths
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        ldFlags.append(contentsOf: libraryPaths.map { "-L\($0)" })
+        let frameworks = compilerConfiguration.frameworks
+            .split(whereSeparator: { $0 == "," || $0 == "\n" })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        ldFlags.append(contentsOf: frameworks.map { "-framework \($0)" })
+        if compilerConfiguration.stripSymbols { ldFlags.append("-Wl,-S") }
+        if !ldFlags.isEmpty { environment["LDFLAGS"] = ldFlags.joined(separator: " ") }
+
+        let entitlements = compilerConfiguration.entitlementsPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !entitlements.isEmpty { environment["CROSSBUILD_ENTITLEMENTS"] = entitlements }
         return environment
     }
 
