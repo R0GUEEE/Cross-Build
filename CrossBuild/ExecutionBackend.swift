@@ -63,7 +63,7 @@ enum ExecutionBackendFactory {
                 host: settings?.jailbreakHelperHost ?? "127.0.0.1",
                 port: settings?.jailbreakHelperPort ?? 8765,
                 scheme: settings?.helperScheme ?? "http",
-                token: settings?.jailbreakAPIToken ?? "",
+                token: SecureExecutionSecrets.shared.jailbreakToken,
                 timeout: settings?.connectionTimeout ?? 15
             )
             return HelperExecutionBackend(name:"Jailbreak Local", client:client, localWorkspace:true, packageAccess:true)
@@ -74,7 +74,7 @@ enum ExecutionBackendFactory {
                 host:host,
                 port:settings?.helperPort ?? 8765,
                 scheme:settings?.helperScheme ?? "http",
-                token:settings?.remoteAPIToken ?? "",
+                token:SecureExecutionSecrets.shared.remoteToken,
                 timeout:settings?.connectionTimeout ?? 15
             )
             return HelperExecutionBackend(name:"Remote / Helper", client:client, localWorkspace:false, packageAccess:true)
