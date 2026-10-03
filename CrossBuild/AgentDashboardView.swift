@@ -1,88 +1,135 @@
 import SwiftUI
 
 struct AgentDashboardView: View {
-    @EnvironmentObject private var workspace:WorkspaceModel
-    @ObservedObject var settings:AppSettings
-    @State private var instruction=""
+    @EnvironmentObject private var workspace: WorkspaceModel
+    @ObservedObject var settings: AppSettings
+    @State private var instruction = ""
+    @State private var showConfiguration = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment:.leading,spacing:16) {
-                    VStack(alignment:.leading,spacing:4) {
-                        HStack {
-                            Image(systemName:"sparkles").font(.largeTitle)
-                            VStack(alignment:.leading) {
-                                Text("Cross Build Agent").font(.largeTitle.bold())
-                                Text("Project-aware build and code automation").foregroundStyle(.secondary)
-                            }
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "sparkles").font(.largeTitle)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Cross Build Agent").font(.largeTitle.bold())
+                            Text("Project-aware build, diagnostics and code automation").foregroundStyle(.secondary)
                         }
+                        Spacer()
+                        Button("Configure", systemImage: "gearshape") { showConfiguration = true }
+                            .buttonStyle(.bordered)
                     }
 
-                    ForgeCard("Ask the Agent",subtitle:"Describe the result you want. Cross Build will detect the project and plan the actions.") {
-                        TextEditor(text:$instruction)
-                            .frame(minHeight:110).padding(8)
-                            .background(.background,in:RoundedRectangle(cornerRadius:10))
+                    ForgeCard("Task", subtitle: "Describe the project operation. The local planner converts it into executable IDE actions.") {
+                        TextEditor(text: $instruction)
+                            .frame(minHeight: 120)
+                            .padding(8)
+                            .background(.background, in: RoundedRectangle(cornerRadius: 10))
+
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 8)], spacing: 8) {
+                            quick("Detect & Build", "Detect this project, configure it automatically, and build it")
+                            quick("Fix Build", "Inspect diagnostics, identify the build failure, and rebuild")
+                            quick("Clean & Package", "Clean the project and package the final artifact")
+                            quick("Run Tests", "Run the project tests and inspect failures")
+                        }
+
                         HStack {
-                            Button("Run Task",systemImage:"arrow.up.circle.fill",action:run).buttonStyle(.borderedProminent)
-                                .disabled(instruction.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || workspace.isExecuting)
-                            Menu("Quick Actions",systemImage:"bolt.fill") {
-                                Button("Detect, Configure & Build") { instruction="Detect this project, configure it automatically, and build it" }
-                                Button("Fix Build") { instruction="Inspect build errors, fix what can be fixed, and rebuild" }
-                                Button("Clean & Package") { instruction="Clean the project and package the final artifact" }
-                                Button("Run Tests") { instruction="Run the project tests" }
-                            }
+                            Button("Run Task", systemImage: "arrow.up.circle.fill", action: run)
+                                .buttonStyle(.borderedProminent)
+                                .disabled(instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || workspace.isExecuting)
+                            Button("Clear", systemImage: "xmark") { instruction = "" }
+                                .buttonStyle(.bordered)
+                                .disabled(instruction.isEmpty)
                             Spacer()
-                            if workspace.isExecuting { ProgressView(); Text(workspace.executionStatus).font(.caption).foregroundStyle(.secondary) }
-                        }
-                    }
-
-                    ForgeCard("Automatic Project Context",subtitle:"Configuration is generated from the current workspace") {
-                        LazyVGrid(columns:[GridItem(.adaptive(minimum:140),spacing:12)],spacing:12) {
-                            ForgeMetric(title:"Toolchain",value:workspace.analysis?.primaryToolchain.rawValue ?? "Not detected",icon:"cpu")
-                            ForgeMetric(title:"Files",value:"\(workspace.projectFiles.count)",icon:"doc.on.doc")
-                            ForgeMetric(title:"Backend",value:settings.executionBackend,icon:"terminal")
-                            ForgeMetric(title:"Status",value:workspace.executionStatus,icon:"waveform")
-                        }
-                        if !workspace.generatedConfigurationSummary.isEmpty {
-                            Divider()
-                            ForEach(workspace.generatedConfigurationSummary,id:\.self) { item in Label(item,systemImage:"checkmark.circle").font(.caption) }
-                        }
-                        Button("Refresh Project Detection",systemImage:"arrow.clockwise",action:workspace.detectSampleProject)
-                    }
-
-                    ForgeCard("Agent Access",subtitle:"Simple defaults; expand control only when needed") {
-                        Toggle("Allow code edits",isOn:$settings.allowAgentEdits)
-                        Toggle("Allow builds and compiler actions",isOn:$settings.allowAgentBuilds)
-                        Toggle("Allow dependency changes",isOn:$settings.allowAgentDependencies)
-                    }
-
-                    ForgeCard("Activity",subtitle:"Actions performed in this session") {
-                        if workspace.agentActivity.isEmpty {
-                            VStack(spacing:8) {
-                                Image(systemName:"sparkles").font(.largeTitle).foregroundStyle(.secondary)
-                                Text("No Activity").font(.headline)
-                                Text("Run a task to see the agent plan and actions.").font(.caption).foregroundStyle(.secondary)
-                            }.frame(maxWidth:.infinity).padding(.vertical,24)
-                        } else {
-                            ForEach(Array(workspace.agentActivity.enumerated()),id:\.offset) { index,item in
-                                HStack(alignment:.top) {
-                                    Image(systemName:"checkmark.circle.fill")
-                                    VStack(alignment:.leading) { Text(item); Text("Step \(index+1)").font(.caption2).foregroundStyle(.secondary) }
-                                    Spacer()
-                                }.padding(.vertical,5)
+                            if workspace.isExecuting {
+                                ProgressView()
+                                Text(workspace.executionStatus).font(.caption).foregroundStyle(.secondary)
                             }
                         }
                     }
-                }.padding().frame(maxWidth:900).frame(maxWidth:.infinity)
-            }.navigationTitle("Agent")
+
+                    ForgeCard("Agent State", subtitle: "The values below are the context the planner will use.") {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], spacing: 12) {
+                            ForgeMetric(title: "Toolchain", value: workspace.analysis?.primaryToolchain.rawValue ?? workspace.selectedToolchain.rawValue, icon: "cpu")
+                            ForgeMetric(title: "Files", value: "\(workspace.projectFiles.count)", icon: "doc.on.doc")
+                            ForgeMetric(title: "Backend", value: settings.executionBackend, icon: "terminal")
+                            ForgeMetric(title: "Status", value: workspace.executionStatus, icon: "waveform")
+                        }
+                        Divider()
+                        HStack {
+                            Label(settings.allowAgentEdits ? "Edits enabled" : "Read only", systemImage: settings.allowAgentEdits ? "pencil" : "lock")
+                            Label(settings.allowAgentBuilds ? "Build enabled" : "Build blocked", systemImage: "hammer")
+                            Label("Max \(settings.agentMaxSteps) steps", systemImage: "list.number")
+                            Spacer()
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                        Button("Refresh Project Context", systemImage: "arrow.clockwise") { workspace.detectSampleProject() }
+                    }
+
+                    ForgeCard("Activity", subtitle: "Actions performed by the current Agent session") {
+                        HStack {
+                            Text("\(workspace.agentActivity.count) events").font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Clear Activity", systemImage: "trash") { workspace.agentActivity.removeAll() }
+                                .buttonStyle(.borderless)
+                                .disabled(workspace.agentActivity.isEmpty)
+                        }
+                        if workspace.agentActivity.isEmpty {
+                            VStack(spacing: 8) {
+                                Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(.secondary)
+                                Text("No Activity").font(.headline)
+                                Text("Run a task to see each planned action and result.").font(.caption).foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 24)
+                        } else {
+                            ForEach(Array(workspace.agentActivity.enumerated()), id: \.offset) { index, item in
+                                HStack(alignment: .top, spacing: 10) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(item)
+                                        Text("Event \(index + 1)").font(.caption2).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                }
+                                .padding(.vertical, 5)
+                            }
+                        }
+                    }
+                }
+                .padding(settings.compactUI ? 10 : 16)
+                .frame(maxWidth: 950)
+                .frame(maxWidth: .infinity)
+            }
+            .navigationTitle("Agent")
+            .sheet(isPresented: $showConfiguration) {
+                NavigationStack {
+                    AgentConfigurationView(settings: settings)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { showConfiguration = false }
+                            }
+                        }
+                }
+            }
         }
     }
 
+    @ViewBuilder
+    private func quick(_ title: String, _ prompt: String) -> some View {
+        Button(title) { instruction = prompt }
+            .buttonStyle(.bordered)
+            .frame(maxWidth: .infinity)
+    }
+
     private func run() {
-        if workspace.analysis == nil { workspace.detectSampleProject() }
-        workspace.agentPrompt=instruction
+        let request = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !request.isEmpty else { return }
+        workspace.agentPrompt = request
         workspace.runAgent()
-        instruction=""
+        instruction = ""
     }
 }
