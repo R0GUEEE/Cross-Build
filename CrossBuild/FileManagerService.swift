@@ -46,6 +46,7 @@ final class FileManagerService: ObservableObject {
     private var showTemporary = true
     private var showHidden = false
     private var followSymlinks = false
+    private var searchCaseSensitive = false
     private var excludedNames: Set<String> = [".git", "DerivedData", ".build", "node_modules", "Caches"]
 
     init() {
@@ -71,19 +72,23 @@ final class FileManagerService: ObservableObject {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !needle.isEmpty else { return [] }
         return flattened.filter {
-            $0.name.localizedCaseInsensitiveContains(needle) || $0.path.localizedCaseInsensitiveContains(needle)
+            if searchCaseSensitive {
+                return $0.name.contains(needle) || $0.path.contains(needle)
+            }
+            return $0.name.localizedCaseInsensitiveContains(needle) || $0.path.localizedCaseInsensitiveContains(needle)
         }
     }
 
     func configure(showAppDirectories: Bool, showBundle: Bool, showLibrary: Bool,
                    showTemporary: Bool, showHidden: Bool, followSymlinks: Bool,
-                   excludePatterns: String) {
+                   searchCaseSensitive: Bool, excludePatterns: String) {
         includeAppDirectories = showAppDirectories
         self.showBundle = showBundle
         self.showLibrary = showLibrary
         self.showTemporary = showTemporary
         self.showHidden = showHidden
         self.followSymlinks = followSymlinks
+        self.searchCaseSensitive = searchCaseSensitive
         let configured = excludePatterns
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
