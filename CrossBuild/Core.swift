@@ -54,6 +54,7 @@ struct AgentTask: Identifiable {
 
 @MainActor
 final class WorkspaceModel: ObservableObject {
+    private let compilersKey = "crossbuild.customCompilers"
     @Published var selectedToolchain: ToolchainKind = .theos
     @Published var editorText = "// Cross Build\n// Open or create a project to begin.\n"
     @Published var console = "Ready. Toolchain auto-detection enabled.\n"
@@ -67,6 +68,19 @@ final class WorkspaceModel: ObservableObject {
     let configuration = WorkspaceConfiguration()
 
     var activeCompiler: CustomCompiler? { customCompilers.first { $0.id == selectedCustomCompilerID } }
+
+    init() {
+        if let data = UserDefaults.standard.data(forKey: compilersKey),
+           let saved = try? JSONDecoder().decode([CustomCompiler].self, from: data) {
+            customCompilers = saved
+        }
+    }
+
+    private func persistCompilers() {
+        if let data = try? JSONEncoder().encode(customCompilers) {
+            UserDefaults.standard.set(data, forKey: compilersKey)
+        }
+    }
     @Published var tasks: [AgentTask] = [
         .init(title: "Repair failed builds", instruction: "Inspect diagnostics, patch safe compiler errors, and rebuild."),
         .init(title: "Build & Package", instruction: "Detect the toolchain, resolve dependencies, build, test, and package the artifact.")
@@ -111,8 +125,10 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func addCompiler(_ compiler: CustomCompiler) {
+        customCompilers.removeAll { $0.name == compiler.name && $0.executable == compiler.executable }
         customCompilers.append(compiler)
         selectedCustomCompilerID = compiler.id
+        persistCompilers()
         console += "Added custom compiler: \(compiler.name) [\(compiler.executable)]\n"
     }
 
