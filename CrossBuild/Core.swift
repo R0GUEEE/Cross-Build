@@ -915,7 +915,7 @@ final class WorkspaceModel: ObservableObject {
     }
 
     @discardableResult
-    func executeAgentAction(_ execution: AgentExecution) async -> AgentActionOutcome {
+    private func executeAgentAction(_ execution: AgentExecution) async -> AgentActionOutcome {
         let settings = appSettings
         agentActivity.append(execution.summary)
         console += "Agent → \(execution.summary)\n"
