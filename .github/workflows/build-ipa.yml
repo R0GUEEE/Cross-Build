@@ -95,7 +95,39 @@ jobs:
           ./build-host/tools/fakefsify "$ROOTFS" "$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root"
           test -d "$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root" || { echo "::error::fakefs image was not produced"; exit 1; }
           du -sh "$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root"
-          find "$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root" -maxdepth 1 | head
+
+      - name: Pre-provision the root with the required tools
+        run: |
+          set -uo pipefail
+          cd Vendor/linuxkit
+          # The root ships with its must-haves already installed, so the guest is
+          # usable the moment it boots rather than requiring an apk run first.
+          #
+          # This is done by booting the guest on the runner with the NATIVE ish
+          # binary and letting its own apk resolve and install -- the alternative,
+          # unpacking .apk archives by hand, would not run dependency resolution or
+          # post-install scripts and would produce a subtly broken root.
+          meson compile -C build-host ish
+          test -x ./build-host/ish || { echo "::error::native ish was not built"; exit 1; }
+
+          ROOT="$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root"
+          PACKAGES="bash coreutils findutils grep sed gawk make python3 py3-pip git build-base"
+          echo "Installing: $PACKAGES"
+          # Kept non-fatal on purpose: if the emulated apk run fails or is slow, the
+          # app should still build and the root still boots -- just without the
+          # extras. The verification below reports what actually landed.
+          ./build-host/ish -f "$ROOT" /bin/sh -c "apk update && apk add --no-cache $PACKAGES" \
+            || echo "::warning::apk provisioning did not complete; see the output above"
+
+          echo "=== what landed in the root ==="
+          for tool in bash make gcc python3 git; do
+            if ./build-host/ish -f "$ROOT" /bin/sh -c "command -v $tool" >/dev/null 2>&1; then
+              echo "  ok   $tool"
+            else
+              echo "  MISS $tool"
+            fi
+          done
+          du -sh "$ROOT"
 
       - name: Generate project
         env:

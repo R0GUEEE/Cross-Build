@@ -12,6 +12,7 @@ struct BundledResourcesView: View {
     @State private var isRunningSelfTest = false
     @State private var guestTestOutput: String?
     @State private var isRunningGuestTest = false
+    @ObservedObject private var session = LinuxGuestSession.shared
 
     var body: some View {
         Form {
@@ -124,11 +125,11 @@ struct BundledResourcesView: View {
                         Label("Boot the Linux guest", systemImage: "play.circle")
                     }
                 }
-                .disabled(isRunningGuestTest || LinuxGuestEngine.hasBooted)
-                if LinuxGuestEngine.hasBooted {
-                    Text("Already booted this launch. The interpreter cannot be restarted, so relaunch the app to test again.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                .disabled(isRunningGuestTest)
+                HStack {
+                    Text("Guest")
+                    Spacer()
+                    Text(guestStateDescription).font(.caption).foregroundStyle(.secondary)
                 }
                 if let guestTestOutput {
                     Text(guestTestOutput)
@@ -168,6 +169,16 @@ struct BundledResourcesView: View {
     /// Boots the guest and runs one real command inside it. Deliberately routed
     /// through the same backend the app would use, so a pass here means the
     /// execution path works end to end, not just that the library is present.
+    private var guestStateDescription: String {
+        switch session.state {
+        case .idle: return "not started"
+        case .starting: return "starting…"
+        case .running: return "running (root is up)"
+        case .unavailable(let message): return "unavailable — \(message)"
+        case .failed(let message): return "failed — \(message)"
+        }
+    }
+
     private func runGuestTest() {
         isRunningGuestTest = true
         guestTestOutput = "Booting the guest — this runs an emulated Linux kernel, so expect it to take a moment…"
