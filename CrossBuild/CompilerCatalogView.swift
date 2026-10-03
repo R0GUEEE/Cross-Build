@@ -104,16 +104,26 @@ struct CompilerCatalogDetailView: View {
                 }
                 Section {
                     Button("Use Built-in Toolchain", systemImage: "checkmark.circle") {
-                        workspace.addCompiler(CustomCompiler(
-                            name: item.name, executable: item.executable, arguments: "",
-                            buildCommand: item.buildCommand, cleanCommand: item.cleanCommand,
-                            testCommand: item.testCommand, packageCommand: item.packageCommand,
-                            detectionMarkers: item.markers.joined(separator: ",")
-                        ))
+                        workspace.selectedToolchain = toolchain(for: item.id)
+                        workspace.selectedCustomCompilerID = nil
                         dismiss()
                     }.buttonStyle(.borderedProminent)
                 }
             }.navigationTitle("Toolchain")
+        }
+    }
+
+    private func toolchain(for id: String) -> ToolchainKind {
+        switch id {
+        case "clang": return .clang
+        case "swift": return .swift
+        case "theos", "dpkg", "ldid": return .theos
+        case "rust": return .rust
+        case "go": return .go
+        case "zig": return .zig
+        case "python": return .python
+        case "node", "typescript": return .javascript
+        default: return .custom
         }
     }
 
