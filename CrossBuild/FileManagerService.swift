@@ -261,8 +261,8 @@ final class FileManagerService: ObservableObject {
                 var visited = Set<String>()
                 return FileManagerService.node(for: request.root,
                                                displayName: request.displayName,
-                                               skipWorkspaceChild: request.skipWorkspaceChild,
                                                visited: &visited,
+                                               skipWorkspaceChild: request.skipWorkspaceChild,
                                                options: options)
             }
         }.value
