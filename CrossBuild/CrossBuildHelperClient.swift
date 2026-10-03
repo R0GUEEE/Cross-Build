@@ -63,7 +63,7 @@ struct CrossBuildHelperClient: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         authorize(&request)
         do {
-            request.httpBody = try JSONEncoder().encode(HelperExecuteRequest(command: command.command, workingDirectory: command.workingDirectory, environment: command.environment))
+            request.httpBody = try JSONEncoder().encode(HelperExecuteRequest(command: command.command, workingDirectory: command.workingDirectory, environment: command.environment, shell: command.shell, loginShell: command.loginShell, interactiveShell: command.interactiveShell, initCommand: command.initCommand, timeout: command.timeout))
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 return .init(exitCode: 125, stdout: "", stderr: "Helper returned no HTTP response.", duration: Date().timeIntervalSince(started))
