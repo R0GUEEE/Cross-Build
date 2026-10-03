@@ -1,4 +1,5 @@
 import Foundation
+import ZIPFoundation
 
 struct GitRepository: Identifiable, Codable, Hashable {
     var id = UUID()
@@ -36,7 +37,7 @@ final class GitHubWorkspaceService: ObservableObject {
 
     var projectsDirectory: URL {
         let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        return root.appendingPathComponent(projectsFolderName, isDirectory: true)
+        return root.appendingPathComponent("Workspace", isDirectory: true)
     }
 
     init() {
@@ -58,7 +59,7 @@ final class GitHubWorkspaceService: ObservableObject {
     }
 
     func destination(owner: String, name: String) -> URL {
-        projectsDirectory.appendingPathComponent("\(owner)-\(name)", isDirectory: true)
+        projectsDirectory.appendingPathComponent(name, isDirectory: true)
     }
 
     func registerImportedRepository(url: String, branch: String) throws -> GitRepository {
@@ -100,14 +101,32 @@ final class GitHubWorkspaceService: ObservableObject {
             let zip = dest.appendingPathComponent("source.zip")
             try fm.moveItem(at: temporaryURL, to: zip)
             log("Downloaded archive: \(zip.lastPathComponent)")
-            progressStage = "Archive downloaded"; progress = 0.78
-            status = "Downloaded GitHub source archive. Extraction backend required to unpack source.zip."
-            log("Stored in app sandbox: \(dest.path)")
+            progressStage = "Extracting repository"; progress = 0.78
+            let staging = dest.appendingPathComponent(".extract", isDirectory: true)
+            try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+            try fm.unzipItem(at: zip, to: staging)
+            let extracted = try fm.contentsOfDirectory(at: staging, includingPropertiesForKeys: nil)
+            let sourceRoot: URL
+            if extracted.count == 1, (try? extracted[0].resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                sourceRoot = extracted[0]
+            } else { sourceRoot = staging }
+            let items = try fm.contentsOfDirectory(at: sourceRoot, includingPropertiesForKeys: nil)
+            progressStage = "Saving project files"; progress = 0.90
+            for item in items {
+                let target = dest.appendingPathComponent(item.lastPathComponent)
+                if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
+                try fm.moveItem(at: item, to: target)
+            }
+            try? fm.removeItem(at: staging)
+            try? fm.removeItem(at: zip)
+            log("Extracted \(items.count) top-level items")
+            log("Saved project to: \(dest.path)")
             let entry = GitRepository(owner: parsed.owner, name: parsed.name, url: parsed.normalized,
                                       branch: ref.isEmpty ? "default" : ref, localPath: dest.path)
             repositories.removeAll { $0.owner == entry.owner && $0.name == entry.name }
             repositories.insert(entry, at: 0)
             progressStage = "Complete"; progress = 1
+            status = "Repository imported to \(dest.path)"
         } catch {
             errorMessage = error.localizedDescription
             progressStage = "Failed"
