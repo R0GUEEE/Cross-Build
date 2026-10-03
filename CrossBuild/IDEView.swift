@@ -5,6 +5,7 @@ struct IDEView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var showCompilerManager = false
     @State private var showGitHub = false
+    @State private var showWorkspaceConfiguration = false
     @State private var bottomPanel: ForgePanel = .terminal
     @State private var bottomExpanded = true
 
@@ -21,6 +22,9 @@ struct IDEView: View {
         .sheet(isPresented: $showGitHub) {
             GitHubCloneView(github: workspace.github)
         }
+        .sheet(isPresented: $showWorkspaceConfiguration) {
+            WorkspaceConfigurationView(config: workspace.configuration).environmentObject(workspace)
+        }
     }
 
     private var navigator: some View {
@@ -32,6 +36,7 @@ struct IDEView: View {
                     Button("Auto Detect Compiler", systemImage: "waveform.badge.magnifyingglass", action: workspace.detectSampleProject)
                     Button("Manage Compilers", systemImage: "cpu") { showCompilerManager = true }
                     Button("Clone from GitHub", systemImage: "arrow.down.circle") { showGitHub = true }
+                    Button("Workspace Configuration", systemImage: "slider.horizontal.3") { showWorkspaceConfiguration = true }
                 } label: { Image(systemName: "ellipsis.circle") }
             }.padding(10)
 
