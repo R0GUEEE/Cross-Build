@@ -54,6 +54,14 @@ struct IDEView: View {
             tabBar
             Divider()
             detectionBar
+            if workspace.editor.showFind {
+                HStack {
+                    TextField("Find", text: $workspace.editor.findText).textFieldStyle(.roundedBorder)
+                    TextField("Replace", text: $workspace.editor.replaceText).textFieldStyle(.roundedBorder)
+                    Button("Replace All", action: workspace.editor.replaceAll)
+                    Button { workspace.editor.showFind = false } label: { Image(systemName: "xmark") }
+                }.padding(8).background(.secondary.opacity(0.04))
+            }
             editor
             Divider()
             if bottomExpanded {
@@ -85,6 +93,7 @@ struct IDEView: View {
             } label: {
                 IDEStatusPill(icon: "cpu", text: workspace.activeCompiler?.name ?? workspace.selectedToolchain.rawValue)
             }
+            Button { workspace.editor.showFind.toggle() } label: { Image(systemName: "magnifyingglass") }.buttonStyle(.bordered)
             Button(action: workspace.saveEditor) { Image(systemName: "square.and.arrow.down") }
                 .buttonStyle(.bordered)
             Button(action: { workspace.runBuild(settings: settings) }) {
@@ -96,12 +105,19 @@ struct IDEView: View {
     private var tabBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
-                editorTab("main.swift", icon: "swift", selected: true)
-                editorTab("Makefile", icon: "hammer", selected: false)
-                editorTab("control", icon: "shippingbox", selected: false)
-                Button { workspace.files.createFile(named: "Untitled.swift") } label: {
-                    Image(systemName: "plus").padding(8)
-                }.buttonStyle(.plain)
+                ForEach(workspace.editor.documents) { doc in
+                    Button { workspace.selectDocument(doc.id) } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "doc.text")
+                            Text(doc.name)
+                            if doc.isDirty { Circle().frame(width: 6, height: 6) }
+                            Button { workspace.editor.close(doc.id) } label: { Image(systemName: "xmark").font(.caption2) }
+                        }
+                        .font(.caption).padding(.horizontal, 9).padding(.vertical, 7)
+                        .background(RoundedRectangle(cornerRadius: ForgeTheme.compactCorner).fill(workspace.editor.selectedID == doc.id ? Color.secondary.opacity(0.12) : Color.clear))
+                    }.buttonStyle(.plain)
+                }
+                Button { workspace.files.createFile(named: "Untitled.swift") } label: { Image(systemName: "plus").padding(8) }.buttonStyle(.plain)
             }.padding(.horizontal, 8).padding(.vertical, 5)
         }.background(.secondary.opacity(0.04))
     }
@@ -136,7 +152,7 @@ struct IDEView: View {
 
     private var editor: some View {
         ZStack(alignment: .topLeading) {
-            TextEditor(text: $workspace.editorText)
+            TextEditor(text: Binding(get: { workspace.editorText }, set: { workspace.updateEditorText($0) }))
                 .font(.system(size: settings.editorFontSize, design: .monospaced))
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .padding(.leading, sizeClass == .compact ? 2 : 36)
