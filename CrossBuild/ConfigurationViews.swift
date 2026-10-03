@@ -38,6 +38,29 @@ struct AppConfigurationView: View {
                     Text("Remote / SSH").tag("Remote / SSH")
                 }
                 Toggle("Forward configured environment", isOn: $settings.forwardEnvironment)
+                Stepper("Connection timeout: \(settings.connectionTimeout)s", value: $settings.connectionTimeout, in: 2...120)
+            }
+
+            Section("Remote Build Helper") {
+                TextField("Host", text: $settings.remoteHost)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Picker("Scheme", selection: $settings.helperScheme) {
+                    Text("HTTP").tag("http")
+                    Text("HTTPS").tag("https")
+                }
+                Stepper("Helper port: \(settings.helperPort)", value: $settings.helperPort, in: 1...65535)
+                SecureField("Bearer token (optional)", text: $settings.remoteAPIToken)
+                TextField("Remote workspace", text: $settings.remoteWorkspace)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+            }
+
+            Section("Jailbreak Local Helper") {
+                TextField("Helper host", text: $settings.jailbreakHelperHost)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Stepper("Helper port: \(settings.jailbreakHelperPort)", value: $settings.jailbreakHelperPort, in: 1...65535)
+                SecureField("Bearer token (optional)", text: $settings.jailbreakAPIToken)
+                Text("Default localhost helper endpoint is 127.0.0.1:8765.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .navigationTitle("App Configuration")
