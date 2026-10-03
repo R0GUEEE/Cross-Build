@@ -3,6 +3,7 @@ import SwiftUI
 struct CompilerDashboardView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
     @State private var showManager = false
+    @State private var showCatalog = false
 
     var body: some View {
         NavigationStack {
@@ -25,7 +26,8 @@ struct CompilerDashboardView: View {
                             HStack {
                                 Button("Auto Detect", systemImage: "sparkle.magnifyingglass", action: workspace.detectSampleProject)
                                     .buttonStyle(.borderedProminent)
-                                Button("Add Compiler", systemImage: "plus") { showManager = true }.buttonStyle(.bordered)
+                                Button("Catalogue", systemImage: "square.grid.2x2") { showCatalog = true }.buttonStyle(.bordered)
+                                Button("Custom", systemImage: "plus") { showManager = true }.buttonStyle(.bordered)
                             }
                         }
                     }
@@ -77,6 +79,7 @@ struct CompilerDashboardView: View {
             }
             .navigationTitle("Compiler")
             .sheet(isPresented: $showManager) { CompilerManagerView().environmentObject(workspace) }
+            .sheet(isPresented: $showCatalog) { CompilerCatalogView().environmentObject(workspace) }
         }
     }
 
