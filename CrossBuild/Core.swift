@@ -85,6 +85,19 @@ final class WorkspaceModel: ObservableObject {
            let saved = try? JSONDecoder().decode([CustomCompiler].self, from: data) {
             customCompilers = saved
         }
+        syncFileConfiguration()
+    }
+
+    func syncFileConfiguration() {
+        files.configure(
+            showAppDirectories: configuration.showAppDirectories,
+            showBundle: configuration.showAppBundle,
+            showLibrary: configuration.showContainerLibrary,
+            showTemporary: configuration.showTemporaryFiles,
+            showHidden: configuration.searchHiddenFiles || appSettings?.showHiddenFiles == true,
+            followSymlinks: configuration.followSymlinks,
+            excludePatterns: configuration.excludePatterns
+        )
     }
 
     private func persistCompilers() {
@@ -124,44 +137,104 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func runBuild(settings: AppSettings? = nil) {
-        let command = activeCompiler?.buildCommand ?? ToolchainRegistry.providers.first { $0.kind == selectedToolchain }?.buildCommands.first ?? "build"
-        runCommand(command, settings: settings)
+        runCommand(buildCommand(), settings: settings)
+    }
+
+    func buildCommand() -> String {
+        if let custom = activeCompiler, !custom.buildCommand.isEmpty { return custom.buildCommand }
+        return ToolchainRegistry.providers.first { $0.kind == selectedToolchain }?.buildCommands.first ?? "make"
+    }
+
+    func cleanCommand() -> String {
+        if let custom = activeCompiler, !custom.cleanCommand.isEmpty { return custom.cleanCommand }
+        switch selectedToolchain {
+        case .theos, .custom, .clang: return "make clean"
+        case .swift: return "swift package clean"
+        case .rust: return "cargo clean"
+        case .go: return "go clean"
+        case .zig: return "rm -rf .zig-cache zig-cache zig-out"
+        case .python: return "find . -name __pycache__ -type d -prune -exec rm -rf {} +"
+        case .javascript: return "npm run clean"
+        }
+    }
+
+    func testCommand() -> String {
+        if let custom = activeCompiler, !custom.testCommand.isEmpty { return custom.testCommand }
+        switch selectedToolchain {
+        case .theos: return "make"
+        case .swift: return "swift test"
+        case .rust: return "cargo test"
+        case .go: return "go test ./..."
+        case .zig: return "zig build test"
+        case .python: return "python3 -m unittest"
+        case .javascript: return "npm test"
+        case .clang, .custom: return "make test"
+        }
+    }
+
+    func packageCommand() -> String {
+        if let custom = activeCompiler, !custom.packageCommand.isEmpty { return custom.packageCommand }
+        switch selectedToolchain {
+        case .theos: return "make package"
+        case .swift: return "swift build -c release"
+        case .rust: return "cargo build --release"
+        case .go: return "go build -trimpath ./..."
+        case .zig: return "zig build -Doptimize=ReleaseSafe"
+        case .python: return "python3 -m build"
+        case .javascript: return "npm pack"
+        case .clang, .custom: return "make package"
+        }
     }
 
     func runEmbedded(id: String, source: String? = nil) {
+        guard !isExecuting else {
+            console += "A command is already running.\n"
+            return
+        }
         let input = source ?? editorText
         isExecuting = true
         executionStatus = "Running embedded \(id)"
         Task {
             let result = await embeddedToolchains.run(id: id, source: input)
-            await MainActor.run {
-                if !result.output.isEmpty { console += result.output + "\n" }
-                result.diagnostics.forEach { console += "embedded: \($0)\n" }
-                lastExitCode = result.succeeded ? 0 : 1
-                executionStatus = result.succeeded ? "Succeeded" : "Failed"
-                isExecuting = false
-            }
+            if !result.output.isEmpty { console += result.output + "\n" }
+            result.diagnostics.forEach { console += "embedded: \($0)\n" }
+            lastExitCode = result.succeeded ? 0 : 1
+            executionStatus = result.succeeded ? "Succeeded" : "Failed"
+            isExecuting = false
         }
     }
 
-    func runCommand(_ command: String, settings: AppSettings? = nil) {
-        let mode = settings?.executionBackend ?? "Sideload / Embedded"
-        let host = settings?.remoteHost ?? ""
-        let port = settings?.remotePort ?? 22
+    @discardableResult
+    func executeCommand(_ command: String, settings: AppSettings? = nil) async -> CommandResult {
+        guard !isExecuting else {
+            let result = CommandResult(exitCode: 75, stdout: "", stderr: "Another command is already running.", duration: 0)
+            console += "error: \(result.stderr)\n"
+            return result
+        }
+        let resolvedSettings = settings ?? appSettings
+        let mode = resolvedSettings?.executionBackend ?? "Sideload / Embedded"
+        let host = resolvedSettings?.remoteHost ?? ""
+        let port = resolvedSettings?.remotePort ?? 22
         let backend = ExecutionBackendFactory.make(mode: mode, host: host, port: port)
+        let workingDirectory = configuration.workingDirectory.isEmpty ? files.workspaceRoot.path : configuration.workingDirectory
         console += "$ \(command)\nBackend: \(backend.name)\n"
         isExecuting = true
         executionStatus = "Running"
-        Task {
-            let result = await backend.execute(.init(command: command, workingDirectory: configuration.workingDirectory.isEmpty ? files.workspaceRoot.path : configuration.workingDirectory))
-            await MainActor.run {
-                if !result.stdout.isEmpty { console += result.stdout + "\n" }
-                if !result.stderr.isEmpty { console += "error: " + result.stderr + "\n" }
-                lastExitCode = result.exitCode
-                executionStatus = result.succeeded ? "Succeeded" : "Failed (\(result.exitCode))"
-                isExecuting = false
-            }
+        let result = await backend.execute(.init(command: command, workingDirectory: workingDirectory))
+        if !result.stdout.isEmpty { console += result.stdout + "\n" }
+        if !result.stderr.isEmpty { console += "error: " + result.stderr + "\n" }
+        lastExitCode = result.exitCode
+        executionStatus = result.succeeded ? "Succeeded" : "Failed (\(result.exitCode))"
+        isExecuting = false
+        return result
+    }
+
+    func runCommand(_ command: String, settings: AppSettings? = nil) {
+        guard !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            console += "error: No command is configured for this action.\n"
+            return
         }
+        Task { _ = await executeCommand(command, settings: settings) }
     }
 
     func openSelectedFile() {
@@ -204,27 +277,74 @@ final class WorkspaceModel: ObservableObject {
         return true
     }
 
-    func executeAgentAction(_ execution: AgentExecution) {
+    func executeAgentAction(_ execution: AgentExecution) async {
+        let settings = appSettings
         agentActivity.append(execution.summary)
         console += "Agent → \(execution.summary)\n"
+
         switch execution.action {
-        case .replaceEditor(let text): editorText = text
-        case .appendEditor(let text): editorText += text
-        case .selectToolchain(let kind): selectedToolchain = kind; selectedCustomCompilerID = nil
-        case .runCompiler(let command): runCommand(command, settings: appSettings)
-        case .clean: runCommand(activeCompiler?.cleanCommand.isEmpty == false ? activeCompiler!.cleanCommand : "clean", settings: appSettings)
-        case .test: runCommand(activeCompiler?.testCommand.isEmpty == false ? activeCompiler!.testCommand : "test", settings: appSettings)
-        case .package: runCommand(activeCompiler?.packageCommand.isEmpty == false ? activeCompiler!.packageCommand : (selectedToolchain == .theos ? "make package" : "package"), settings: appSettings)
-        case .inspectDiagnostics: console += "Diagnostics requested by agent.\n"
+        case .replaceEditor(let text):
+            guard settings?.allowAgentEdits != false else {
+                console += "Agent edit blocked by permissions.\n"
+                return
+            }
+            updateEditorText(text)
+        case .appendEditor(let text):
+            guard settings?.allowAgentEdits != false else {
+                console += "Agent edit blocked by permissions.\n"
+                return
+            }
+            updateEditorText(editorText + text)
+        case .selectToolchain(let kind):
+            selectedToolchain = kind
+            selectedCustomCompilerID = nil
+        case .runCompiler(let command):
+            guard settings?.allowAgentBuilds != false else {
+                console += "Agent build blocked by permissions.\n"
+                return
+            }
+            _ = await executeCommand(command, settings: settings)
+        case .clean:
+            guard settings?.allowAgentBuilds != false else {
+                console += "Agent clean blocked by permissions.\n"
+                return
+            }
+            _ = await executeCommand(cleanCommand(), settings: settings)
+        case .test:
+            guard settings?.allowAgentBuilds != false else {
+                console += "Agent test blocked by permissions.\n"
+                return
+            }
+            _ = await executeCommand(testCommand(), settings: settings)
+        case .package:
+            guard settings?.allowAgentBuilds != false else {
+                console += "Agent package blocked by permissions.\n"
+                return
+            }
+            _ = await executeCommand(packageCommand(), settings: settings)
+        case .inspectDiagnostics:
+            let lines = console.split(separator: "\n")
+                .filter { $0.localizedCaseInsensitiveContains("error") || $0.localizedCaseInsensitiveContains("warning") }
+                .suffix(20)
+            if lines.isEmpty { console += "Diagnostics: no errors or warnings captured.\n" }
+            else { console += "Diagnostics snapshot:\n" + lines.joined(separator: "\n") + "\n" }
         }
     }
 
     func runAgent() {
         let request = agentPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !request.isEmpty else { return }
+        guard !isExecuting else {
+            console += "Agent is waiting for the active command to finish.\n"
+            return
+        }
         console += "Agent task: \(request)\n"
         let plan = AgentController.plan(request, workspace: self)
-        plan.forEach(executeAgentAction)
         agentPrompt = ""
+        Task {
+            for execution in plan {
+                await executeAgentAction(execution)
+            }
+        }
     }
 }
