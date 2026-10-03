@@ -133,7 +133,7 @@ jobs:
           # scripting, Python and git tooling; a compiler can be added inside the
           # guest with apk when it is actually wanted, which is the same command
           # the user would run anyway.
-          PACKAGES="bash coreutils findutils grep sed gawk make python3 py3-pip git tar gzip xz ca-certificates"
+          PACKAGES="bash coreutils findutils grep sed gawk make python3 py3-pip git tar gzip xz ca-certificates clang llvm lld musl-dev cmake ninja"
           echo "Installing: $PACKAGES"
 
           # The guest's emulated network stack does not resolve DNS, so apk fails
@@ -176,7 +176,7 @@ jobs:
           echo "  python lib: $(./build-host/ish -f "$ROOT" /bin/sh -c "du -sh /usr/lib/python3.14 2>/dev/null | cut -f1" 2>/dev/null || echo n/a)"
 
           echo "=== what landed in the root ==="
-          for tool in bash make python3 git tar; do
+          for tool in bash make python3 git tar clang ld.lld cmake ninja; do
             if ./build-host/ish -f "$ROOT" /bin/sh -c "command -v $tool" >/dev/null 2>&1; then
               echo "  ok   $tool"
             else
@@ -184,6 +184,11 @@ jobs:
             fi
           done
           du -sh "$ROOT"
+
+          echo "=== compiler smoke test ==="
+          ./build-host/ish -f "$ROOT" /bin/sh -c "printf 'int main(void){return 0;}\\n' >/tmp/crossbuild-smoke.c && clang /tmp/crossbuild-smoke.c -o /tmp/crossbuild-smoke && /tmp/crossbuild-smoke"
+          ./build-host/ish -f "$ROOT" /bin/sh -c "python3 -c 'print(\"python-ok\")' | grep -q python-ok"
+          ./build-host/ish -f "$ROOT" /bin/sh -c "cmake --version >/dev/null && ninja --version >/dev/null"
 
       - name: Generate project
         env:
