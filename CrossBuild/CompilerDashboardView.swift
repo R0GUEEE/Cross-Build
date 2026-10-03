@@ -4,6 +4,7 @@ struct CompilerDashboardView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
     @State private var showManager = false
     @State private var showCatalog = false
+    @State private var showConfiguration = false
 
     var body: some View {
         NavigationStack {
@@ -28,6 +29,7 @@ struct CompilerDashboardView: View {
                                     .buttonStyle(.borderedProminent)
                                 Button("Catalogue", systemImage: "square.grid.2x2") { showCatalog = true }.buttonStyle(.bordered)
                                 Button("Custom", systemImage: "plus") { showManager = true }.buttonStyle(.bordered)
+                                Button("Configure", systemImage: "slider.horizontal.3") { showConfiguration = true }.buttonStyle(.bordered)
                             }
                         }
                     }
@@ -67,6 +69,16 @@ struct CompilerDashboardView: View {
                         }
                     }
 
+                    GroupBox("Target Summary") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            LabeledContent("SDK", value: workspace.compilerConfiguration.sdk)
+                            LabeledContent("Architecture", value: workspace.compilerConfiguration.architectures)
+                            LabeledContent("Deployment", value: "iOS " + workspace.compilerConfiguration.deploymentTarget)
+                            LabeledContent("Package", value: workspace.compilerConfiguration.packageFormat.uppercased())
+                            LabeledContent("Signing", value: workspace.compilerConfiguration.signingMode)
+                        }
+                    }
+
                     GroupBox("Build Actions") {
                         HStack {
                             action("Clean", "trash") { workspace.console += "$ clean\n" }
@@ -80,6 +92,9 @@ struct CompilerDashboardView: View {
             .navigationTitle("Compiler")
             .sheet(isPresented: $showManager) { CompilerManagerView().environmentObject(workspace) }
             .sheet(isPresented: $showCatalog) { CompilerCatalogView().environmentObject(workspace) }
+            .sheet(isPresented: $showConfiguration) {
+                NavigationStack { CompilerConfigurationView(config: workspace.compilerConfiguration) }
+            }
         }
     }
 
