@@ -58,14 +58,35 @@ final class WorkspaceModel: ObservableObject {
     @Published var editorText = "// Cross Build\n// Open or create a project to begin.\n"
     @Published var console = "Ready. Toolchain auto-detection enabled.\n"
     @Published var agentPrompt = ""
+    @Published var analysis: ProjectAnalysis?
     @Published var tasks: [AgentTask] = [
         .init(title: "Repair failed builds", instruction: "Inspect diagnostics, patch safe compiler errors, and rebuild."),
         .init(title: "Build & Package", instruction: "Detect the toolchain, resolve dependencies, build, test, and package the artifact.")
     ]
 
     func detectSampleProject() {
-        selectedToolchain = ToolchainRegistry.detect(fileNames: ["Makefile", "control", "Tweak.xm"])
-        console += "Detected: \(selectedToolchain.rawValue)\n"
+        let makefile = """
+        ARCHS = arm64 arm64e
+        THEOS_PACKAGE_SCHEME = rootless
+        include $(THEOS)/makefiles/common.mk
+        TWEAK_NAME = CrossBuildDemo
+        include $(THEOS_MAKE_PATH)/tweak.mk
+        """
+        let result = ProjectDetector.analyze(
+            paths: ["Makefile", "control", "CrossBuildDemo.xm"],
+            fileContents: ["Makefile": makefile, "control": "Architecture: iphoneos-arm64"]
+        )
+        analysis = result
+        selectedToolchain = result.primaryToolchain
+        console += "Auto-detect: \(result.primaryToolchain.rawValue) [\(Int(result.confidence * 100))%]\n"
+        console += "Languages: \(result.languages.map(\.rawValue).sorted().joined(separator: ", "))\n"
+        console += "Build systems: \(result.buildSystems.map(\.rawValue).sorted().joined(separator: ", "))\n"
+        if let type = result.theosType {
+            console += "Theos type: \(type.rawValue) • \(result.isRootlessHinted ? "rootless hint" : "scheme unspecified")\n"
+        }
+        if let candidate = result.candidates.first {
+            console += "Recommended: \(candidate.command) — \(candidate.reason)\n"
+        }
     }
 
     func runBuild() {
