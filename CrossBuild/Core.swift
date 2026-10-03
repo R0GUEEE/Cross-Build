@@ -143,11 +143,11 @@ final class WorkspaceModel: ObservableObject {
     }
 
     private func inferProjectRoot(from files: [WorkspaceFile]) -> String {
-        let markers: Set<String> = [
+        let markers: Set<String> = Set([
             "project.yml", "Package.swift", "Cargo.toml", "go.mod", "build.zig",
             "CMakeLists.txt", "meson.build", "package.json", "pyproject.toml",
             "setup.py", "build.gradle", "build.gradle.kts", "Makefile", "control"
-        ].union(customManifestNames())
+        ]).union(customManifestNames())
 
         // When nested-project detection is off, every manifest found anywhere in
         // the workspace is still a "candidate" for the *contextual* (currently
