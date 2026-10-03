@@ -87,7 +87,23 @@ final class GitHubWorkspaceService: ObservableObject {
     }
 
     func destination(owner: String, name: String) -> URL {
-        projectsDirectory.appendingPathComponent(name, isDirectory: true)
+        if let tracked = repositories.first(where: { $0.owner == owner && $0.name == name }) {
+            return URL(fileURLWithPath: tracked.localPath, isDirectory: true)
+        }
+
+        let fm = FileManager.default
+        let preferred = projectsDirectory.appendingPathComponent(name, isDirectory: true)
+        if !fm.fileExists(atPath: preferred.path) { return preferred }
+
+        let ownerSafe = owner.replacingOccurrences(of: "/", with: "-")
+        let baseName = "\(ownerSafe)-\(name)"
+        var candidate = projectsDirectory.appendingPathComponent(baseName, isDirectory: true)
+        var index = 2
+        while fm.fileExists(atPath: candidate.path) {
+            candidate = projectsDirectory.appendingPathComponent("\(baseName)-\(index)", isDirectory: true)
+            index += 1
+        }
+        return candidate
     }
 
     func registerImportedRepository(url: String, branch: String) throws -> GitRepository {
