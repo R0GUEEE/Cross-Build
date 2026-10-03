@@ -36,7 +36,7 @@ struct AppConfigurationView: View {
                     Text("Automatic").tag("Automatic")
                     Text("Sideload / Embedded").tag("Sideload / Embedded")
                     Text("Jailbreak Local").tag("Jailbreak Local")
-                    Text("Remote / SSH").tag("Remote / SSH")
+                    Text("Remote / Helper").tag("Remote / Helper")
                 }
                 Toggle("Forward configured environment", isOn: $settings.forwardEnvironment)
                 Stepper("Connection timeout: \(settings.connectionTimeout)s", value: $settings.connectionTimeout, in: 2...120)
