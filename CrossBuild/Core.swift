@@ -55,6 +55,8 @@ struct AgentTask: Identifiable {
 @MainActor
 final class WorkspaceModel: ObservableObject {
     private let compilersKey = "crossbuild.customCompilers"
+    private let openDocumentsKey = "crossbuild.openDocuments"
+    private let selectedDocumentKey = "crossbuild.selectedDocument"
     @Published var selectedToolchain: ToolchainKind = .theos
     @Published var editorText = "// Cross Build\n// Open or create a project to begin.\n"
     @Published var console = "Ready. Toolchain auto-detection enabled.\n"
@@ -91,6 +93,7 @@ final class WorkspaceModel: ObservableObject {
             customCompilers = saved
         }
         syncFileConfiguration()
+        restoreOpenDocuments()
     }
 
     func syncFileConfiguration() {
@@ -109,6 +112,41 @@ final class WorkspaceModel: ObservableObject {
     private func persistCompilers() {
         if let data = try? JSONEncoder().encode(customCompilers) {
             UserDefaults.standard.set(data, forKey: compilersKey)
+        }
+    }
+
+    private func restoreOpenDocuments() {
+        guard configuration.restoreOpenTabs else { return }
+        let paths = UserDefaults.standard.stringArray(forKey: openDocumentsKey) ?? []
+        let selectedPath = UserDefaults.standard.string(forKey: selectedDocumentKey)
+
+        for path in paths where FileManager.default.fileExists(atPath: path) {
+            guard path == files.workspaceRoot.path || path.hasPrefix(files.workspaceRoot.path + "/") else { continue }
+            let file = files.flattened.first(where: { $0.path == path }) ??
+                WorkspaceFile(name: URL(fileURLWithPath: path).lastPathComponent, path: path)
+            if let text = files.contents(of: file) {
+                editor.open(file: file, text: text)
+            }
+        }
+
+        if let selectedPath,
+           let selected = editor.documents.first(where: { $0.path == selectedPath }) {
+            editor.selectedID = selected.id
+        }
+        editorText = editor.selected?.text ?? editorText
+    }
+
+    private func persistOpenDocuments() {
+        guard configuration.restoreOpenTabs else {
+            UserDefaults.standard.removeObject(forKey: openDocumentsKey)
+            UserDefaults.standard.removeObject(forKey: selectedDocumentKey)
+            return
+        }
+        UserDefaults.standard.set(editor.documents.map(\.path), forKey: openDocumentsKey)
+        if let path = editor.selected?.path {
+            UserDefaults.standard.set(path, forKey: selectedDocumentKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: selectedDocumentKey)
         }
     }
 
@@ -336,12 +374,14 @@ final class WorkspaceModel: ObservableObject {
     func openSelectedFile() {
         guard let file = files.selected, let text = files.contents(of: file) else { return }
         editor.open(file: file, text: text)
-        editorText = text
+        editorText = editor.selected?.text ?? text
+        persistOpenDocuments()
     }
 
     func selectDocument(_ id: UUID) {
         editor.selectedID = id
         if let doc = editor.selected { editorText = doc.text }
+        persistOpenDocuments()
     }
 
     func updateEditorText(_ text: String) {
