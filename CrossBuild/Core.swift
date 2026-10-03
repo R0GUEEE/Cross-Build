@@ -66,6 +66,8 @@ final class WorkspaceModel: ObservableObject {
     @Published var isExecuting = false
     @Published var lastExitCode: Int32?
     @Published var executionStatus = "Idle"
+    @Published var generatedConfigurationSummary: [String] = []
+    weak var appSettings: AppSettings?
     let files = FileManagerService()
     let github = GitHubWorkspaceService()
     let configuration = WorkspaceConfiguration()
@@ -106,6 +108,10 @@ final class WorkspaceModel: ObservableObject {
         let result = ProjectDetector.analyze(paths: projectPaths, fileContents: contents)
         analysis = result
         selectedToolchain = result.primaryToolchain
+        let generated = ConfigurationGenerator.generate(from: result, files: scopedFiles)
+        ConfigurationGenerator.apply(generated, workspace: self)
+        generatedConfigurationSummary = generated.summary
+        console += "Configuration: " + generated.summary.joined(separator: " • ") + "\n"
         console += "Auto-detect: \(result.primaryToolchain.rawValue) [\(Int(result.confidence * 100))%]\n"
         console += "Languages: \(result.languages.map(\.rawValue).sorted().joined(separator: ", "))\n"
         console += "Build systems: \(result.buildSystems.map(\.rawValue).sorted().joined(separator: ", "))\n"
@@ -205,10 +211,10 @@ final class WorkspaceModel: ObservableObject {
         case .replaceEditor(let text): editorText = text
         case .appendEditor(let text): editorText += text
         case .selectToolchain(let kind): selectedToolchain = kind; selectedCustomCompilerID = nil
-        case .runCompiler(let command): runCommand(command)
-        case .clean: console += "$ \(activeCompiler?.cleanCommand ?? "clean")\n"
-        case .test: console += "$ \(activeCompiler?.testCommand ?? "test")\n"
-        case .package: console += "$ \(activeCompiler?.packageCommand ?? "package")\n"
+        case .runCompiler(let command): runCommand(command, settings: appSettings)
+        case .clean: runCommand(activeCompiler?.cleanCommand.isEmpty == false ? activeCompiler!.cleanCommand : "clean", settings: appSettings)
+        case .test: runCommand(activeCompiler?.testCommand.isEmpty == false ? activeCompiler!.testCommand : "test", settings: appSettings)
+        case .package: runCommand(activeCompiler?.packageCommand.isEmpty == false ? activeCompiler!.packageCommand : (selectedToolchain == .theos ? "make package" : "package"), settings: appSettings)
         case .inspectDiagnostics: console += "Diagnostics requested by agent.\n"
         }
     }
