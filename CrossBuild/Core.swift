@@ -394,7 +394,7 @@ final class WorkspaceModel: ObservableObject {
             if embeddedToolchains.isAvailable(embeddedID(for: selectedToolchain)) {
                 mode = "Sideload / Embedded"
             } else if !(resolvedSettings?.remoteHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
-                mode = "Remote / SSH"
+                mode = "Remote / Helper"
             } else {
                 mode = "Sideload / Embedded"
             }
@@ -402,7 +402,7 @@ final class WorkspaceModel: ObservableObject {
         let backend = ExecutionBackendFactory.make(mode: mode, settings: resolvedSettings)
         let localWorkingDirectory = configuration.workingDirectory.isEmpty ? (activeProjectRoot ?? files.workspaceRoot.path) : configuration.workingDirectory
         let remoteWorkspace = resolvedSettings?.remoteWorkspace.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let workingDirectory = mode == "Remote / SSH" && !remoteWorkspace.isEmpty ? remoteWorkspace : localWorkingDirectory
+        let workingDirectory = (mode == "Remote / Helper" || mode == "Remote / SSH") && !remoteWorkspace.isEmpty ? remoteWorkspace : localWorkingDirectory
         console += "$ \(command)\nBackend: \(backend.name)\n"
         isExecuting = true
         executionStatus = "Running"
