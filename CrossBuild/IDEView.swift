@@ -34,10 +34,19 @@ struct IDEView: View {
                 IDEStatusPill(icon: "folder.fill", text: "Workspace")
                 Spacer()
                 Menu {
-                    Button("Auto Detect Compiler", systemImage: "waveform.badge.magnifyingglass", action: workspace.detectSampleProject)
-                    Button("Manage Compilers", systemImage: "cpu") { showCompilerManager = true }
-                    Button("Clone from GitHub", systemImage: "arrow.down.circle") { showGitHub = true }
-                    Button("Workspace Configuration", systemImage: "slider.horizontal.3") { showWorkspaceConfiguration = true }
+                    Section("Project") {
+                        Button("Refresh Workspace", systemImage: "arrow.clockwise") { workspace.files.reload() }
+                        Button("Save Current File", systemImage: "square.and.arrow.down", action: workspace.saveEditor)
+                        Button("Detect Project & Compiler", systemImage: "waveform.badge.magnifyingglass", action: workspace.detectSampleProject)
+                    }
+                    Section("Source Control") {
+                        Button("Clone from GitHub", systemImage: "arrow.down.circle") { showGitHub = true }
+                    }
+                    Section("Tools") {
+                        Button("Manage Compilers", systemImage: "cpu") { showCompilerManager = true }
+                        Button("Workspace Configuration", systemImage: "slider.horizontal.3") { showWorkspaceConfiguration = true }
+                        Button("Toggle Bottom Panel", systemImage: "rectangle.bottomthird.inset.filled") { bottomExpanded.toggle() }
+                    }
                 } label: { Image(systemName: "ellipsis.circle") }
             }.padding(10)
 
