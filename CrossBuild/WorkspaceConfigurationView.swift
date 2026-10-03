@@ -61,7 +61,16 @@ struct WorkspaceConfigurationView: View {
                     LabeledContent("Files", value: "\(workspace.files.flattened.filter { !$0.isDirectory }.count)")
                     LabeledContent("Projects storage", value: "Documents/Workspace")
                 }
-            }.navigationTitle("Workspace Configuration")
+            }
+            .navigationTitle("Workspace Configuration")
+            .onAppear { workspace.syncFileConfiguration() }
+            .onChange(of: config.showAppDirectories) { _ in workspace.syncFileConfiguration() }
+            .onChange(of: config.showAppBundle) { _ in workspace.syncFileConfiguration() }
+            .onChange(of: config.showContainerLibrary) { _ in workspace.syncFileConfiguration() }
+            .onChange(of: config.showTemporaryFiles) { _ in workspace.syncFileConfiguration() }
+            .onChange(of: config.searchHiddenFiles) { _ in workspace.syncFileConfiguration() }
+            .onChange(of: config.followSymlinks) { _ in workspace.syncFileConfiguration() }
+            .onChange(of: config.excludePatterns) { _ in workspace.syncFileConfiguration() }
         }
     }
 }
