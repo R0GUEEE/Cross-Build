@@ -59,6 +59,11 @@ final class WorkspaceModel: ObservableObject {
     @Published var console = "Ready. Toolchain auto-detection enabled.\n"
     @Published var agentPrompt = ""
     @Published var analysis: ProjectAnalysis?
+    @Published var customCompilers: [CustomCompiler] = []
+    @Published var selectedCustomCompilerID: UUID?
+    @Published var agentActivity: [String] = []
+
+    var activeCompiler: CustomCompiler? { customCompilers.first { $0.id == selectedCustomCompilerID } }
     @Published var tasks: [AgentTask] = [
         .init(title: "Repair failed builds", instruction: "Inspect diagnostics, patch safe compiler errors, and rebuild."),
         .init(title: "Build & Package", instruction: "Detect the toolchain, resolve dependencies, build, test, and package the artifact.")
@@ -94,10 +99,42 @@ final class WorkspaceModel: ObservableObject {
         console += "$ \(provider?.buildCommands.first ?? "build")\nBuild queued through \(selectedToolchain.rawValue).\n"
     }
 
+    func addCompiler(_ compiler: CustomCompiler) {
+        customCompilers.append(compiler)
+        selectedCustomCompilerID = compiler.id
+        console += "Added custom compiler: \(compiler.name) [\(compiler.executable)]\n"
+    }
+
+    func autoSelectCustomCompiler(paths: [String]) -> Bool {
+        guard let match = customCompilers.first(where: { compiler in
+            compiler.markers.contains(where: { marker in paths.contains(where: { $0.hasSuffix(marker) || ($0 as NSString).lastPathComponent == marker }) })
+        }) else { return false }
+        selectedCustomCompilerID = match.id
+        console += "Custom compiler detected: \(match.name)\n"
+        return true
+    }
+
+    func executeAgentAction(_ execution: AgentExecution) {
+        agentActivity.append(execution.summary)
+        console += "Agent → \(execution.summary)\n"
+        switch execution.action {
+        case .replaceEditor(let text): editorText = text
+        case .appendEditor(let text): editorText += text
+        case .selectToolchain(let kind): selectedToolchain = kind; selectedCustomCompilerID = nil
+        case .runCompiler(let command): console += "$ \(command)\nCompiler execution queued.\n"
+        case .clean: console += "$ \(activeCompiler?.cleanCommand ?? "clean")\n"
+        case .test: console += "$ \(activeCompiler?.testCommand ?? "test")\n"
+        case .package: console += "$ \(activeCompiler?.packageCommand ?? "package")\n"
+        case .inspectDiagnostics: console += "Diagnostics requested by agent.\n"
+        }
+    }
+
     func runAgent() {
         let request = agentPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !request.isEmpty else { return }
-        console += "Agent task: \(request)\nPlan: inspect → detect → execute → diagnose → verify → artifact\n"
+        console += "Agent task: \(request)\n"
+        let plan = AgentController.plan(request, workspace: self)
+        plan.forEach(executeAgentAction)
         agentPrompt = ""
     }
 }
