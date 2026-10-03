@@ -138,7 +138,7 @@ final class WorkspaceModel: ObservableObject {
         }).first {
             return candidate
         }
-        return files.workspaceRoot.path
+        return self.files.workspaceRoot.path
     }
 
     private func filesServiceSelectedPath() -> String? {
