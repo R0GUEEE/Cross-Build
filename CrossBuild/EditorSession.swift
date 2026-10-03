@@ -34,7 +34,21 @@ final class EditorSession: ObservableObject {
         if selectedID==id { selectedID=documents.indices.contains(i) ? documents[i].id : documents.last?.id }
     }
     func updateText(_ value:String) { guard let i=selectedIndex else{return}; documents[i].text=value }
-    func markSaved() { guard let i=selectedIndex else{return}; documents[i].savedText=documents[i].text }
+    func document(_ id: UUID) -> EditorDocument? {
+        documents.first { $0.id == id }
+    }
+
+    func markSaved(_ id: UUID, text: String? = nil) {
+        guard let i = documents.firstIndex(where: { $0.id == id }) else { return }
+        if let text { documents[i].text = text }
+        documents[i].savedText = documents[i].text
+    }
+
+    func markSaved() {
+        guard let id = selectedID else { return }
+        markSaved(id)
+    }
+
     func replaceAll() {
         guard let i=selectedIndex,!findText.isEmpty else{return}
         documents[i].text=documents[i].text.replacingOccurrences(of:findText,with:replaceText)
