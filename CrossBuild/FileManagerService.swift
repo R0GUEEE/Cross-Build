@@ -58,9 +58,9 @@ final class FileManagerService: ObservableObject {
     private var excludedNames: Set<String> = [".git", "DerivedData", ".build", "node_modules", "Caches"]
 
     init() {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
         documentsRoot = docs
-        libraryRoot = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
+        libraryRoot = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first ?? docs.appendingPathComponent("Library", isDirectory: true)
         temporaryRoot = FileManager.default.temporaryDirectory
         appBundleRoot = Bundle.main.bundleURL
         workspaceRoot = docs.appendingPathComponent("Workspace", isDirectory: true)
