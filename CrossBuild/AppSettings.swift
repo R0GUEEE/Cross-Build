@@ -6,6 +6,15 @@ final class AppSettings: ObservableObject {
     @AppStorage("editor.fontSize") var editorFontSize = 15.0
     @AppStorage("editor.autosave") var autosave = true
     @AppStorage("editor.trimWhitespace") var trimWhitespace = true
+    @AppStorage("editor.tabWidth") var editorTabWidth = 4
+    @AppStorage("editor.insertSpaces") var editorInsertSpaces = true
+    @AppStorage("editor.wordWrap") var editorWordWrap = true
+    @AppStorage("editor.lineNumbers") var editorLineNumbers = true
+    @AppStorage("editor.highlightLine") var editorHighlightCurrentLine = true
+    @AppStorage("editor.autoClosePairs") var editorAutoClosePairs = true
+    @AppStorage("editor.invisibles") var editorShowInvisibles = false
+    @AppStorage("editor.minimap") var editorMinimap = false
+    @AppStorage("editor.stickyHeader") var editorStickyHeader = true
 
     @AppStorage("build.parallel") var parallelBuilds = true
     @AppStorage("build.autoDetect") var autoDetect = true
