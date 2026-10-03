@@ -106,6 +106,7 @@ struct WorkspaceConfigurationView: View {
             .onChange(of: config.searchCaseSensitive) { _ in workspace.syncFileConfiguration() }
             .onChange(of: config.followSymlinks) { _ in workspace.syncFileConfiguration() }
             .onChange(of: config.excludePatterns) { _ in workspace.syncFileConfiguration() }
+            .onChange(of: config.maxRecentFiles) { _ in workspace.syncFileConfiguration() }
         }
     }
 
