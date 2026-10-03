@@ -38,6 +38,30 @@ struct AgentDashboardView: View {
                             }
                         }
 
+                        GroupBox("Provider & Model") {
+                            VStack {
+                                Picker("Provider", selection: $settings.agentProvider) {
+                                    Text("OpenAI Compatible").tag("OpenAI Compatible")
+                                    Text("Local / Custom").tag("Local / Custom")
+                                    Text("Remote Agent").tag("Remote Agent")
+                                }
+                                TextField("Model", text: $settings.agentModel)
+                                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                TextField("Endpoint (optional)", text: $settings.agentEndpoint)
+                                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                Stepper("Maximum task steps: \(settings.agentMaxSteps)", value: $settings.agentMaxSteps, in: 1...50)
+                            }
+                        }
+
+                        GroupBox("Context") {
+                            VStack {
+                                Toggle("Include workspace files", isOn: $settings.agentContextFiles)
+                                Toggle("Include diagnostics", isOn: $settings.agentContextDiagnostics)
+                                Toggle("Include Git diff", isOn: $settings.agentContextGitDiff)
+                                Toggle("Retry recoverable failures", isOn: $settings.agentAutoRetry)
+                            }
+                        }
+
                         GroupBox("Permissions") {
                             VStack {
                                 Toggle("Edit source code", isOn: $settings.allowAgentEdits)
