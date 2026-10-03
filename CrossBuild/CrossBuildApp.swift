@@ -24,7 +24,7 @@ struct RootView: View {
                 .tabItem { Label("Workspace", systemImage: AppSection.workspace.icon) }
                 .tag(AppSection.workspace)
 
-            CompilerDashboardView()
+            CompilerDashboardView(settings: settings)
                 .tabItem { Label("Compiler", systemImage: AppSection.compiler.icon) }
                 .tag(AppSection.compiler)
 
