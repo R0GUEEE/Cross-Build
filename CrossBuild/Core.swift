@@ -99,6 +99,7 @@ final class WorkspaceModel: ObservableObject {
             showTemporary: configuration.showTemporaryFiles,
             showHidden: configuration.searchHiddenFiles || appSettings?.showHiddenFiles == true,
             followSymlinks: configuration.followSymlinks,
+            searchCaseSensitive: configuration.searchCaseSensitive,
             excludePatterns: configuration.excludePatterns
         )
     }
