@@ -34,70 +34,22 @@ protocol ExecutionBackend {
     func execute(_ request: CommandRequest) async -> CommandResult
 }
 
-struct SideloadExecutionBackend: ExecutionBackend {
-    let name = "Sideload / Embedded"
-    let capabilities = ExecutionCapabilities(canSpawnProcesses:false, canUseNetwork:true, canAccessWorkspace:true, canInstallPackages:false)
-    func execute(_ request: CommandRequest) async -> CommandResult {
-        CommandResult(exitCode:126, stdout:"", stderr:"Cross Build cannot spawn arbitrary executables in the stock sideload sandbox. Use an embedded engine or CrossBuild Helper backend.", duration:0)
-    }
-}
+struct EmbeddedExecutionBackend: ExecutionBackend {
+    let name = "Embedded Runtime"
+    private let guest = LinuxGuestExecutionBackend()
 
-struct HelperExecutionBackend: ExecutionBackend {
-    let name: String
-    let client: CrossBuildHelperClient
-    let localWorkspace: Bool
-    let packageAccess: Bool
-
-    var capabilities: ExecutionCapabilities {
-        .init(canSpawnProcesses:true, canUseNetwork:true, canAccessWorkspace:localWorkspace, canInstallPackages:packageAccess)
-    }
+    var capabilities: ExecutionCapabilities { guest.capabilities }
 
     func execute(_ request: CommandRequest) async -> CommandResult {
-        let health = await client.health()
-        guard health.0 else {
-            return .init(exitCode:125, stdout:"", stderr:"\(name) unavailable: \(health.1)", duration:0)
-        }
-        return await client.execute(request)
+        await guest.execute(request)
     }
 }
 
 @MainActor
 enum ExecutionBackendFactory {
+    // mode is retained only to migrate old persisted settings. Every legacy
+    // helper/remote/jailbreak value resolves to the in-app runtime.
     static func make(mode:String, settings:AppSettings?) -> any ExecutionBackend {
-        switch mode {
-        case "Jailbreak Local":
-            let client = CrossBuildHelperClient(
-                host: settings?.jailbreakHelperHost ?? "127.0.0.1",
-                port: settings?.jailbreakHelperPort ?? 8765,
-                scheme: settings?.helperScheme ?? "http",
-                token: SecureExecutionSecrets.shared.jailbreakToken,
-                timeout: settings?.connectionTimeout ?? 15
-            )
-            return HelperExecutionBackend(name:"Jailbreak Local", client:client, localWorkspace:true, packageAccess:true)
-        case "Remote / Helper", "Remote / SSH":
-            let host = settings?.remoteHost.trimmingCharacters(in:.whitespacesAndNewlines) ?? ""
-            guard !host.isEmpty else { return UnavailableExecutionBackend(name:"Remote / Helper", reason:"Configure a remote host.") }
-            let client = CrossBuildHelperClient(
-                host:host,
-                port:settings?.helperPort ?? 8765,
-                scheme:settings?.helperScheme ?? "http",
-                token:SecureExecutionSecrets.shared.remoteToken,
-                timeout:settings?.connectionTimeout ?? 15
-            )
-            return HelperExecutionBackend(name:"Remote / Helper", client:client, localWorkspace:false, packageAccess:true)
-        case "Linux Guest":
-            return LinuxGuestExecutionBackend()
-        default:
-            return SideloadExecutionBackend()
-        }
-    }
-}
-
-struct UnavailableExecutionBackend: ExecutionBackend {
-    let name:String
-    let reason:String
-    let capabilities = ExecutionCapabilities(canSpawnProcesses:false,canUseNetwork:true,canAccessWorkspace:false,canInstallPackages:false)
-    func execute(_ request:CommandRequest) async -> CommandResult {
-        .init(exitCode:125,stdout:"",stderr:reason,duration:0)
+        EmbeddedExecutionBackend()
     }
 }
