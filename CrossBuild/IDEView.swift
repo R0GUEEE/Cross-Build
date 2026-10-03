@@ -21,7 +21,10 @@ struct IDEView: View {
         .sheet(isPresented: $showCompilerManager) {
             CompilerManagerView().environmentObject(workspace)
         }
-        .sheet(isPresented: $showGitHub) {
+        .sheet(isPresented: $showGitHub, onDismiss: {
+            workspace.files.reload()
+            workspace.detectSampleProject()
+        }) {
             GitHubCloneView(github: workspace.github)
         }
         .sheet(isPresented: $showWorkspaceConfiguration) {
