@@ -107,7 +107,9 @@ jobs:
           # binary and letting its own apk resolve and install -- the alternative,
           # unpacking .apk archives by hand, would not run dependency resolution or
           # post-install scripts and would produce a subtly broken root.
-          meson compile -C build-host ish
+          # There are two targets named "ish" (the libish library and the CLI
+          # executable), so the type has to be given to disambiguate.
+          meson compile -C build-host ish:executable
           test -x ./build-host/ish || { echo "::error::native ish was not built"; exit 1; }
 
           ROOT="$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root"
