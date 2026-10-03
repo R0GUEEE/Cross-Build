@@ -73,6 +73,13 @@ final class AppSettings: ObservableObject {
     @AppStorage("runtime.commandTimeout") var commandTimeout = 0
     @AppStorage("runtime.keepAlive") var keepAlive = true
     @AppStorage("runtime.forwardEnvironment") var forwardEnvironment = true
+    @AppStorage("runtime.transport") var remoteTransport = "CrossBuild Helper"
+    @AppStorage("runtime.helperScheme") var helperScheme = "http"
+    @AppStorage("runtime.helperPort") var helperPort = 8765
+    @AppStorage("runtime.apiToken") var remoteAPIToken = ""
+    @AppStorage("runtime.jailbreakHost") var jailbreakHelperHost = "127.0.0.1"
+    @AppStorage("runtime.jailbreakPort") var jailbreakHelperPort = 8765
+    @AppStorage("runtime.jailbreakToken") var jailbreakAPIToken = ""
 }
 
 enum AppSection: String, CaseIterable, Identifiable {
