@@ -89,13 +89,17 @@ jobs:
           # fstatat/makedev/DT_*; _DARWIN_C_SOURCE forces the level back to
           # __DARWIN_C_FULL while still satisfying ucontext.h.
           #
-          # The -include shim declares posix_spawn_file_actions_addchdir, whose
-          # prototype the runner's SDK headers hide behind an availability macro.
-          # It applies to the native build only; see Tools/native-offload-shim.h.
+          # posix_spawn_file_actions_addchdir is declared in Tools/native-offload-shim.h
+          # and prepended to the one translation unit that needs it. It is NOT
+          # passed via c_args: Meson applies those to assembly as well, and the
+          # asbestos gadget .S files then fail with "unrecognized instruction
+          # mnemonic" -- the same trap hit earlier with the dispatch header.
           shim="$GITHUB_WORKSPACE/Tools/native-offload-shim.h"
           test -f "$shim" || { echo "::error::native-offload-shim.h is missing"; exit 1; }
+          cat "$shim" kernel/native_offload.c > kernel/native_offload.c.patched
+          mv kernel/native_offload.c.patched kernel/native_offload.c
           meson setup build-host --buildtype=release -Dguest_arch=arm64 \
-            -Dc_args="-D_XOPEN_SOURCE=600 -D_DARWIN_C_SOURCE -include$shim"
+            -Dc_args="-D_XOPEN_SOURCE=600 -D_DARWIN_C_SOURCE"
           meson compile -C build-host fakefsify
           ./build-host/tools/fakefsify --help >/dev/null 2>&1 || true
           test -x ./build-host/tools/fakefsify || { echo "::error::fakefsify was not built"; exit 1; }
