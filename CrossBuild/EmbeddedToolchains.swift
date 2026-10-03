@@ -28,7 +28,7 @@ final class JavaScriptCoreEngine: EmbeddedToolchainEngine {
 }
 
 struct LogosPreprocessorEngine: EmbeddedToolchainEngine {
-    let id="theos"
+    let id="logos-preprocessor"
     let name="Logos Preprocessor"
     let version="CrossBuild 1"
     func run(source:String, options:[String:String]) async -> EmbeddedToolchainResult {
