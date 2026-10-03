@@ -49,16 +49,11 @@ final class AppSettings: ObservableObject {
     @AppStorage("agent.maxSteps") var agentMaxSteps = 12
     @AppStorage("agent.maxRetries") var agentMaxRetries = 2
     @AppStorage("agent.stopOnBuildFailure") var agentStopOnBuildFailure = true
-    @AppStorage("agent.contextFiles") var agentContextFiles = true
-    @AppStorage("agent.contextDiagnostics") var agentContextDiagnostics = true
-    @AppStorage("agent.contextGitDiff") var agentContextGitDiff = true
     @AppStorage("agent.autoDetect") var agentAutoDetectProject = true
     @AppStorage("agent.autoConfigure") var agentAutoConfigureProject = true
     @AppStorage("agent.clearActivity") var agentClearActivityBeforeRun = false
     @AppStorage("agent.diagnosticsLimit") var agentDiagnosticsLimit = 40
     @AppStorage("agent.preferredAction") var agentPreferredAction = "Build"
-    @AppStorage("agent.includeOpenFile") var agentIncludeOpenFile = true
-    @AppStorage("agent.includeBuildCommand") var agentIncludeBuildCommand = true
 
     @AppStorage("files.showHidden") var showHiddenFiles = false
 

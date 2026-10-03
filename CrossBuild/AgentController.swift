@@ -12,6 +12,11 @@ enum AgentAction {
     case runCompiler(command: String)
     case clean, test, package
     case inspectDiagnostics
+    /// Resolves whatever dependency manifest the project actually has. The
+    /// command is chosen when the action runs, from the live file tree, because
+    /// which ecosystem applies is a property of the project and not of a string
+    /// the planner matched.
+    case resolveDependencies
 }
 
 struct AgentExecution {
@@ -36,6 +41,10 @@ enum AgentController {
             else {
                 plan.append(.init(action: .inspectDiagnostics, summary: "Clean requested but destructive actions are disabled"))
             }
+        }
+        if q.contains("dependency") || q.contains("dependencies") || q.contains("deps")
+            || q.contains("install") || q.contains("resolve") || q.contains("fetch") {
+            plan.append(.init(action: .resolveDependencies, summary: "Resolve project dependencies"))
         }
         if q.contains("test") { plan.append(.init(action: .test, summary: "Run tests")) }
         if q.contains("package") || q.contains("ipa") || q.contains("deb") { plan.append(.init(action: .package, summary: "Package artifact")) }

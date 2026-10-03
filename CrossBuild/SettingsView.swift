@@ -95,9 +95,6 @@ struct SettingsView: View {
                         Stepper("Maximum retries: \(settings.agentMaxRetries)", value: $settings.agentMaxRetries, in: 0...5)
                     }
                     Toggle("Stop on build failure", isOn: $settings.agentStopOnBuildFailure)
-                    Toggle("Include project files in context", isOn: $settings.agentContextFiles)
-                    Toggle("Include diagnostics in context", isOn: $settings.agentContextDiagnostics)
-                    Toggle("Include Git diff in context", isOn: $settings.agentContextGitDiff)
                 }
 
                 Section("Execution Runtime") {

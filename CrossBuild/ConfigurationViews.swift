@@ -120,13 +120,14 @@ struct AgentConfigurationView: View {
                 Toggle("Confirm command execution", isOn: $settings.confirmAgentCommands)
             }
 
-            Section("Context") {
-                Toggle("Include project files", isOn: $settings.agentContextFiles)
-                Toggle("Include open editor", isOn: $settings.agentIncludeOpenFile)
-                Toggle("Include diagnostics", isOn: $settings.agentContextDiagnostics)
-                Toggle("Include Git diff", isOn: $settings.agentContextGitDiff)
-                Toggle("Include generated build command", isOn: $settings.agentIncludeBuildCommand)
-                Stepper("Diagnostics context: \(settings.agentDiagnosticsLimit) lines",
+            Section("Diagnostics") {
+                // The former "Context" toggles are gone rather than sitting there
+                // inert: the planner builds no model prompt, so "include project
+                // files / open editor / diagnostics / Git diff / build command"
+                // had nothing to act on and could not change any behaviour. The
+                // one thing the planner really does consume is diagnostics, and
+                // this stepper is what bounds that snapshot.
+                Stepper("Diagnostics snapshot: \(settings.agentDiagnosticsLimit) lines",
                         value: $settings.agentDiagnosticsLimit, in: 10...200, step: 10)
             }
 

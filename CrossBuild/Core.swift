@@ -266,7 +266,14 @@ final class WorkspaceModel: ObservableObject {
         analysis = result
         selectedToolchain = result.primaryToolchain
         let generated = ConfigurationGenerator.generate(from: result, files: scopedFiles, fileContents: contents)
-        ConfigurationGenerator.apply(generated, workspace: self)
+        // "Generate project configuration automatically" gates the write now.
+        // The summary is kept either way, because that is what the detection
+        // screens (Compiler Configuration, Workspace Configuration) display.
+        if appSettings?.agentAutoConfigureProject != false {
+            ConfigurationGenerator.apply(generated, workspace: self)
+        } else {
+            console += "Automatic configuration is off: toolchain, deployment target and architectures were left as they are.\n"
+        }
         generatedConfigurationSummary = generated.summary
         projectContext = ProjectContext.detected(root: root, analysis: result, compiler: compilerConfiguration)
         console += "Configuration: " + generated.summary.joined(separator: " • ") + "\n"
@@ -1055,6 +1062,19 @@ final class WorkspaceModel: ObservableObject {
             if lines.isEmpty { console += "Diagnostics: no errors or warnings captured.\n" }
             else { console += "Diagnostics snapshot:\n" + lines.joined(separator: "\n") + "\n" }
             return .noCommand
+        case .resolveDependencies:
+            guard settings?.allowAgentDependencies == true else {
+                console += "Agent dependency changes blocked by permissions.\n"
+                return .noCommand
+            }
+            guard let ecosystem = DependencyManager.detected(in: projectFiles).first else {
+                let manifests = DependencyManager.ecosystems.map(\.manifest).joined(separator: ", ")
+                console += "No dependency manifest found. Looked for: \(manifests).\n"
+                return .noCommand
+            }
+            console += "Dependencies: \(ecosystem.name) (\(ecosystem.manifest))\n"
+            let result = await executeCommand(ecosystem.resolveCommand, settings: settings, timeoutOverride: resolvedBuildTimeout(settings))
+            return .command(succeeded: result.succeeded)
         }
     }
 
@@ -1154,7 +1174,7 @@ final class WorkspaceModel: ObservableObject {
 
     private func agentActionRunsCommand(_ execution: AgentExecution) -> Bool {
         switch execution.action {
-        case .runCompiler, .clean, .test, .package:
+        case .runCompiler, .clean, .test, .package, .resolveDependencies:
             return true
         default:
             return false

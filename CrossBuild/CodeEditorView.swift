@@ -134,8 +134,13 @@ struct CodeEditorView: UIViewRepresentable {
         func highlight(text: String, fileName: String) {
             guard let textView = container?.textView else { return }
             // A debounced highlight can outlive its text; never paint attributes
-            // computed for a previous revision onto the current document.
-            guard textView.text == text else { return }
+            // computed for a previous revision onto the current document. The
+            // file name matters as much as the text: it selects the language, so
+            // a stale name paints the wrong grammar whenever the queued text
+            // happens to match the document now on screen -- which is exactly
+            // what two empty files, or a file switch inside the debounce window,
+            // looks like.
+            guard textView.text == text, parent.fileName == fileName else { return }
             let selected = textView.selectedRange
             let baseFont = UIFont.monospacedSystemFont(ofSize: parent.options.fontSize, weight: .regular)
             let attributed = NSMutableAttributedString(string: text, attributes: [
