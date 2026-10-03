@@ -63,6 +63,7 @@ final class WorkspaceModel: ObservableObject {
     @Published var selectedCustomCompilerID: UUID?
     @Published var agentActivity: [String] = []
     let files = FileManagerService()
+    let github = GitHubWorkspaceService()
 
     var activeCompiler: CustomCompiler? { customCompilers.first { $0.id == selectedCustomCompilerID } }
     @Published var tasks: [AgentTask] = [
