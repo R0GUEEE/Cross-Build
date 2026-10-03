@@ -2,7 +2,6 @@ import SwiftUI
 
 struct AppConfigurationView: View {
     @ObservedObject var settings: AppSettings
-    @ObservedObject private var secrets = SecureExecutionSecrets.shared
 
     var body: some View {
         Form {
@@ -32,15 +31,11 @@ struct AppConfigurationView: View {
             }
 
             Section("Default Runtime") {
-                Picker("Execution backend", selection: $settings.executionBackend) {
-                    Text("Automatic").tag("Automatic")
-                    Text("Sideload / Embedded").tag("Sideload / Embedded")
-                    Text("Jailbreak Local").tag("Jailbreak Local")
-                        Text("Linux Guest").tag("Linux Guest")
-                    Text("Remote / Helper").tag("Remote / Helper")
-                }
+                LabeledContent("Execution", value: "Embedded / In-App")
+                LabeledContent("Compatibility runtime", value: "ios-linuxkit")
                 Toggle("Forward configured environment", isOn: $settings.forwardEnvironment)
-                Stepper("Connection timeout: \(settings.connectionTimeout)s", value: $settings.connectionTimeout, in: 2...120)
+                Text("Cross Build is self-contained. Linked native engines handle supported languages and the embedded Linux runtime handles shell/POSIX workflows.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section("Shell Integration") {
@@ -63,27 +58,7 @@ struct AppConfigurationView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section("Remote Build Helper") {
-                TextField("Host", text: $settings.remoteHost)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                Picker("Scheme", selection: $settings.helperScheme) {
-                    Text("HTTP").tag("http")
-                    Text("HTTPS").tag("https")
-                }
-                Stepper("Helper port: \(settings.helperPort)", value: $settings.helperPort, in: 1...65535)
-                SecureField("Bearer token (optional)", text: $secrets.remoteToken)
-                TextField("Remote workspace", text: $settings.remoteWorkspace)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-            }
 
-            Section("Jailbreak Local Helper") {
-                TextField("Helper host", text: $settings.jailbreakHelperHost)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                Stepper("Helper port: \(settings.jailbreakHelperPort)", value: $settings.jailbreakHelperPort, in: 1...65535)
-                SecureField("Bearer token (optional)", text: $secrets.jailbreakToken)
-                Text("Default localhost helper endpoint is 127.0.0.1:8765.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
         }
         .navigationTitle("App Configuration")
     }
