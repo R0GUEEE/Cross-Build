@@ -46,8 +46,22 @@ struct WorkspaceBrowserView: View {
                 for url in urls { files.createFile(named: url.lastPathComponent) }
             }
         }
-        .alert("New File", isPresented: $showNewFile) { itemAlert(folder: false) }
-        .alert("New Folder", isPresented: $showNewFolder) { itemAlert(folder: true) }
+        .alert("New File", isPresented: $showNewFile) {
+            TextField("File name", text: $newItemName)
+            Button("Create") {
+                files.createFile(named: newItemName)
+                newItemName = ""
+            }
+            Button("Cancel", role: .cancel) { newItemName = "" }
+        }
+        .alert("New Folder", isPresented: $showNewFolder) {
+            TextField("Folder name", text: $newItemName)
+            Button("Create") {
+                files.createFolder(named: newItemName)
+                newItemName = ""
+            }
+            Button("Cancel", role: .cancel) { newItemName = "" }
+        }
     }
 
     @ViewBuilder private func row(_ file: WorkspaceFile) -> some View {
@@ -72,14 +86,6 @@ struct WorkspaceBrowserView: View {
         }
     }
 
-    private func itemAlert(folder: Bool) -> some View {
-        TextField(folder ? "Folder name" : "File name", text: $newItemName)
-        Button("Create") {
-            if folder { files.createFolder(named: newItemName) } else { files.createFile(named: newItemName) }
-            newItemName = ""
-        }
-        Button("Cancel", role: .cancel) { newItemName = "" }
-    }
 
     private func icon(for name: String) -> String {
         let ext = (name as NSString).pathExtension.lowercased()
