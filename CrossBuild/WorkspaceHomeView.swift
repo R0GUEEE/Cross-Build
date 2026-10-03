@@ -78,7 +78,7 @@ struct WorkspaceHomeView: View {
         workspace.analysis?.primaryToolchain.rawValue ?? workspace.selectedToolchain.rawValue
     }
     private func newFile() {
-        if let file = workspace.files.createFile(named: "Untitled.swift") {
+        if let file = workspace.files.createFile(named: workspace.newFileName()) {
             workspace.files.open(file)
             workspace.openSelectedFile()
         }
