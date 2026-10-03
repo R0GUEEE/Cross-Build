@@ -18,4 +18,13 @@ final class WorkspaceConfiguration: ObservableObject {
     @AppStorage("workspace.gitShallow") var gitShallowClone = true
     @AppStorage("workspace.gitBranch") var gitDefaultBranch = ""
     @AppStorage("workspace.gitSubmodules") var gitSubmodules = false
+    @AppStorage("workspace.restoreTabs") var restoreOpenTabs = true
+    @AppStorage("workspace.confirmCloseDirty") var confirmCloseDirty = true
+    @AppStorage("workspace.searchCase") var searchCaseSensitive = false
+    @AppStorage("workspace.searchHidden") var searchHiddenFiles = false
+    @AppStorage("workspace.excludePatterns") var excludePatterns = ".git,DerivedData,.build,node_modules"
+    @AppStorage("workspace.defaultEncoding") var defaultEncoding = "UTF-8"
+    @AppStorage("workspace.lineEndings") var lineEndings = "LF"
+    @AppStorage("workspace.followSymlinks") var followSymlinks = false
+    @AppStorage("workspace.gitDestination") var gitDestination = "Workspace"
 }
