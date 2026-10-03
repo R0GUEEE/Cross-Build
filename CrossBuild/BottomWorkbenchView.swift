@@ -19,7 +19,7 @@ struct BottomWorkbenchView: View {
                 panelButton(item)
             }
             Spacer()
-            IDEStatusPill(icon: "checkmark.circle", text: "Ready")
+            IDEStatusPill(icon: statusIcon, text: workspace.executionStatus)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -45,7 +45,7 @@ struct BottomWorkbenchView: View {
         case .terminal, .build:
             consoleView
         case .problems:
-            emptyProblemsView
+            problemsView
         case .agent:
             agentView
         }
@@ -61,13 +61,46 @@ struct BottomWorkbenchView: View {
         }
     }
 
-    private var emptyProblemsView: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "checkmark.circle").font(.largeTitle).foregroundStyle(.secondary)
-            Text("No Problems").font(.headline)
-            Text("Compiler diagnostics will appear here.").font(.caption).foregroundStyle(.secondary)
+    private var problemLines: [String] {
+        workspace.console
+            .split(separator: "\n")
+            .map(String.init)
+            .filter {
+                $0.localizedCaseInsensitiveContains("error:") ||
+                $0.localizedCaseInsensitiveContains("warning:")
+            }
+    }
+
+    @ViewBuilder private var problemsView: some View {
+        if problemLines.isEmpty {
+            VStack(spacing: 8) {
+                Image(systemName: "checkmark.circle").font(.largeTitle).foregroundStyle(.secondary)
+                Text("No Problems").font(.headline)
+                Text("No errors or warnings have been captured in the current output.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(problemLines.enumerated()), id: \.offset) { _, line in
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: line.localizedCaseInsensitiveContains("error:") ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                            Text(line).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                            Spacer()
+                        }
+                        .padding(8)
+                        .background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }.padding(10)
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var statusIcon: String {
+        if workspace.isExecuting { return "hourglass" }
+        if let code = workspace.lastExitCode { return code == 0 ? "checkmark.circle" : "xmark.circle" }
+        return "circle"
     }
 
     private var agentView: some View {
@@ -86,11 +119,13 @@ struct BottomWorkbenchView: View {
             HStack {
                 TextField("Ask agent to edit, build, fix, test, package…", text: $workspace.agentPrompt)
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit { workspace.runAgent() }
+                    .onSubmit { if !workspace.isExecuting { workspace.runAgent() } }
+                    .disabled(workspace.isExecuting)
                 Button(action: workspace.runAgent) {
                     Image(systemName: "arrow.up.circle.fill").font(.title2)
                 }
                 .buttonStyle(.plain)
+                .disabled(workspace.isExecuting)
             }
         }
         .padding(10)
