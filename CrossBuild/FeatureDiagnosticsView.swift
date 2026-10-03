@@ -23,8 +23,8 @@ struct FeatureDiagnosticsView: View {
             .init(name: "Local Agent Planner", detail: "Sequenced IDE/build actions with permissions and retries", ready: true, icon: "sparkles"),
             .init(name: "JavaScriptCore", detail: "Embedded JavaScript evaluation with console output", ready: workspace.embeddedToolchains.isAvailable("javascriptcore"), icon: "curlybraces"),
             .init(name: "Embedded Clang", detail: workspace.embeddedToolchains.clang.version, ready: workspace.embeddedToolchains.clang.isLinked, icon: "hammer"),
-            .init(name: "Remote SSH", detail: remoteConfigured ? "Host configured; transport module still required" : "Configure a remote host; transport module still required", ready: false, icon: "network"),
-            .init(name: "Jailbreak Helper", detail: "Privileged helper/daemon payload required for local process spawning", ready: false, icon: "lock.open"),
+            .init(name: "Remote Helper", detail: remoteConfigured ? "CrossBuild Helper host configured" : "Configure a CrossBuild Helper host", ready: remoteConfigured, icon: "network"),
+            .init(name: "Jailbreak Helper", detail: "CrossBuild Helper protocol and shell execution are integrated; helper service must be running on the configured endpoint", ready: true, icon: "lock.open"),
             .init(name: "Full Logos Lowering", detail: "Directive recognition is embedded; full Logos parser payload required", ready: false, icon: "wrench.and.screwdriver")
         ]
     }
