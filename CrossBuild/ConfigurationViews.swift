@@ -42,6 +42,25 @@ struct AppConfigurationView: View {
                 Stepper("Connection timeout: \(settings.connectionTimeout)s", value: $settings.connectionTimeout, in: 2...120)
             }
 
+            Section("Shell Integration") {
+                Picker("Shell", selection: $settings.shellPath) {
+                    Text("Auto Detect").tag("Auto")
+                    Text("Rootless zsh").tag("/var/jb/bin/zsh")
+                    Text("Rootless bash").tag("/var/jb/bin/bash")
+                    Text("Rootless sh").tag("/var/jb/bin/sh")
+                    Text("zsh").tag("/bin/zsh")
+                    Text("bash").tag("/bin/bash")
+                    Text("sh").tag("/bin/sh")
+                }
+                Toggle("Login shell", isOn: $settings.shellLogin)
+                Toggle("Interactive shell", isOn: $settings.shellInteractive)
+                TextField("Shell initialization command", text: $settings.shellInitCommand, axis: .vertical)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Stepper("Command timeout: \(settings.commandTimeout)s", value: $settings.commandTimeout, in: 0...3600, step: 5)
+                Text("Auto Detect prefers rootless jailbreak shells under /var/jb before system shells. A timeout of 0 disables the command timeout.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             Section("Remote Build Helper") {
                 TextField("Host", text: $settings.remoteHost)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
