@@ -81,7 +81,7 @@ struct IDEView: View {
             }.padding(10)
 
             Divider()
-            WorkspaceBrowserView(files: workspace.files)
+            WorkspaceBrowserView(files: workspace.files, onDelete: workspace.deleteFile)
                 .onChange(of: workspace.files.selected) { _ in workspace.openSelectedFile() }
         }
     }
