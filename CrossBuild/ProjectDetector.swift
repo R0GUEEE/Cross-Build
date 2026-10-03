@@ -45,6 +45,7 @@ struct ProjectAnalysis {
     let evidence: [DetectionEvidence]
     let theosType: TheosProjectType?
     let isRootlessHinted: Bool
+    let isRootfulHinted: Bool
     let isMonorepo: Bool
 
     var confidence: Double { candidates.first?.confidence ?? 0 }
@@ -79,6 +80,10 @@ enum ProjectDetector {
             languages.insert(language); hit(toolchain, 8, "source", "Detected \(language.rawValue) sources")
         }
 
+        if has("project.yml"), (fileContents["project.yml"] ?? "").localizedCaseInsensitiveContains("targets:") {
+            systems.insert(.xcode); hit(.swift, 50, "manifest", "XcodeGen project.yml")
+            candidates.append(.init(system: .xcode, toolchain: .swift, command: "xcodegen generate", confidence: 0.98, reason: "XcodeGen project manifest"))
+        }
         if has("Package.swift") {
             systems.insert(.swiftPM); hit(.swift, 45, "manifest", "Package.swift")
             candidates.append(.init(system: .swiftPM, toolchain: .swift, command: "swift build", confidence: 0.96, reason: "SwiftPM manifest"))
@@ -140,18 +145,32 @@ enum ProjectDetector {
 
         let theosType: TheosProjectType? = systems.contains(.theos) ? detectTheosType(makefile: makefile, paths: paths) : nil
         let rootless = makefile.localizedCaseInsensitiveContains("rootless") ||
-            control.localizedCaseInsensitiveContains("iphoneos-arm64") ||
+            control.localizedCaseInsensitiveContains("Architecture: iphoneos-arm64") ||
             paths.contains { $0.localizedCaseInsensitiveContains("rootless") }
+        let rootful = makefile.localizedCaseInsensitiveContains("rootful") ||
+            (control.localizedCaseInsensitiveContains("Architecture: iphoneos-arm") &&
+             !control.localizedCaseInsensitiveContains("Architecture: iphoneos-arm64")) ||
+            paths.contains { $0.localizedCaseInsensitiveContains("rootful") }
 
         let best = scores.max { $0.value < $1.value }?.key ?? .custom
         if candidates.isEmpty {
             candidates.append(.init(system: .unknown, toolchain: best, command: defaultCommand(best), confidence: 0.55, reason: "Source-language inference"))
         }
         candidates.sort { $0.confidence > $1.confidence }
-        let roots = Set(paths.compactMap { $0.split(separator: "/").first.map(String.init) })
+        let manifestNames: Set<String> = [
+            "project.yml", "Package.swift", "Cargo.toml", "go.mod", "build.zig", "CMakeLists.txt",
+            "meson.build", "package.json", "pyproject.toml", "setup.py", "build.gradle",
+            "build.gradle.kts", "Makefile", "control"
+        ]
+        let projectRoots = Set(paths.compactMap { path -> String? in
+            let url = URL(fileURLWithPath: path)
+            guard manifestNames.contains(url.lastPathComponent) else { return nil }
+            return url.deletingLastPathComponent().path
+        })
         return .init(primaryToolchain: best, languages: languages, buildSystems: systems,
                      candidates: candidates, evidence: evidence, theosType: theosType,
-                     isRootlessHinted: rootless, isMonorepo: roots.count > 1)
+                     isRootlessHinted: rootless, isRootfulHinted: rootful,
+                     isMonorepo: projectRoots.count > 1)
     }
 
     private static func detectTheosType(makefile: String, paths: [String]) -> TheosProjectType {
