@@ -37,6 +37,24 @@ struct IDEView: View {
                 }
                 .padding()
 
+                if let analysis = workspace.analysis {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Label(analysis.primaryToolchain.rawValue, systemImage: "cpu")
+                            Spacer()
+                            Text("\(Int(analysis.confidence * 100))% confidence").foregroundStyle(.secondary)
+                        }
+                        Text(analysis.languages.map(\.rawValue).sorted().joined(separator: " • "))
+                            .font(.caption).foregroundStyle(.secondary)
+                        if let candidate = analysis.candidates.first {
+                            Text("$ \(candidate.command)")
+                                .font(.system(.caption, design: .monospaced))
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+                }
+
                 Divider()
                 TextEditor(text: $workspace.editorText)
                     .font(.system(.body, design: .monospaced))
