@@ -5,6 +5,11 @@ struct CommandRequest: Identifiable, Sendable {
     var command: String
     var workingDirectory: String?
     var environment: [String:String] = [:]
+    var shell: String? = nil
+    var loginShell = false
+    var interactiveShell = false
+    var initCommand: String? = nil
+    var timeout: Int = 0
 }
 
 struct CommandResult: Sendable {
