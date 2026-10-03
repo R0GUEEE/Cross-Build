@@ -64,6 +64,7 @@ final class EmbeddedToolchainManager: ObservableObject {
         available[javascript.id]=javascript.version
         available[logos.id]=logos.version
         if python.isLinked { available[python.id]=python.version }
+        if LinuxGuestEngine.isLinked { available[LinuxGuestEngine.id]=LinuxGuestEngine.version }
         if clang.isLinked { available["clang"]=clang.version }
     }
 

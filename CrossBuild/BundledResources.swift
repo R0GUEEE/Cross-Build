@@ -71,6 +71,19 @@ enum BundledResources {
             icon: "chevron.left.forwardslash.chevron.right"
         ))
 
+        items.append(BundledResource(
+            id: "linux",
+            name: "Linux guest (ios-linuxkit)",
+            detail: LinuxGuestEngine.isLinked
+                ? "AArch64 Linux userland running in-process with the asbestos threaded-code interpreter. No process is spawned and no JIT entitlement is needed, so it works on a stock sideload. The Alpine rootfs still has to be built into a fakefs image before it has anything to boot."
+                : "Engine not linked into this build.",
+            location: "Statically linked (libish + libish_emu + libfakefs)",
+            present: LinuxGuestEngine.isLinked,
+            sizeBytes: 0,
+            execution: .inProcess,
+            icon: "terminal.fill"
+        ))
+
         // Bundled support data.
         items.append(resourceItem(
             id: "helper",
