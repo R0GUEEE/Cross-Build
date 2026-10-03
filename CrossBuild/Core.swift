@@ -63,6 +63,9 @@ final class WorkspaceModel: ObservableObject {
     @Published var customCompilers: [CustomCompiler] = []
     @Published var selectedCustomCompilerID: UUID?
     @Published var agentActivity: [String] = []
+    @Published var isExecuting = false
+    @Published var lastExitCode: Int32?
+    @Published var executionStatus = "Idle"
     let files = FileManagerService()
     let github = GitHubWorkspaceService()
     let configuration = WorkspaceConfiguration()
@@ -108,10 +111,29 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
-    func runBuild() {
+    func runBuild(settings: AppSettings? = nil) {
         let command = activeCompiler?.buildCommand ?? ToolchainRegistry.providers.first { $0.kind == selectedToolchain }?.buildCommands.first ?? "build"
-        console += "$ \(command)\n"
-        console += "Execution backend is not configured for this runtime; command was not executed.\n"
+        runCommand(command, settings: settings)
+    }
+
+    func runCommand(_ command: String, settings: AppSettings? = nil) {
+        let mode = settings?.executionBackend ?? "Sideload / Embedded"
+        let host = settings?.remoteHost ?? ""
+        let port = settings?.remotePort ?? 22
+        let backend = ExecutionBackendFactory.make(mode: mode, host: host, port: port)
+        console += "$ \(command)\nBackend: \(backend.name)\n"
+        isExecuting = true
+        executionStatus = "Running"
+        Task {
+            let result = await backend.execute(.init(command: command, workingDirectory: configuration.workingDirectory.isEmpty ? files.workspaceRoot.path : configuration.workingDirectory))
+            await MainActor.run {
+                if !result.stdout.isEmpty { console += result.stdout + "\n" }
+                if !result.stderr.isEmpty { console += "error: " + result.stderr + "\n" }
+                lastExitCode = result.exitCode
+                executionStatus = result.succeeded ? "Succeeded" : "Failed (\(result.exitCode))"
+                isExecuting = false
+            }
+        }
     }
 
     func openSelectedFile() {
@@ -149,7 +171,7 @@ final class WorkspaceModel: ObservableObject {
         case .replaceEditor(let text): editorText = text
         case .appendEditor(let text): editorText += text
         case .selectToolchain(let kind): selectedToolchain = kind; selectedCustomCompilerID = nil
-        case .runCompiler(let command): console += "$ \(command)\nCompiler execution queued.\n"
+        case .runCompiler(let command): runCommand(command)
         case .clean: console += "$ \(activeCompiler?.cleanCommand ?? "clean")\n"
         case .test: console += "$ \(activeCompiler?.testCommand ?? "test")\n"
         case .package: console += "$ \(activeCompiler?.packageCommand ?? "package")\n"
