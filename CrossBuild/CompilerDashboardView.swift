@@ -2,6 +2,7 @@ import SwiftUI
 
 struct CompilerDashboardView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
+    @ObservedObject var settings: AppSettings
     @State private var showManager = false
     @State private var showCatalog = false
     @State private var showConfiguration = false
@@ -79,12 +80,28 @@ struct CompilerDashboardView: View {
                         }
                     }
 
+                    GroupBox("Execution Backend") {
+                        let backend = ExecutionBackendFactory.make(mode: settings.executionBackend, host: settings.remoteHost, port: settings.remotePort)
+                        VStack(alignment: .leading, spacing: 8) {
+                            LabeledContent("Backend", value: backend.name)
+                            LabeledContent("Status", value: workspace.executionStatus)
+                            HStack {
+                                IDEStatusPill(icon: "terminal", text: backend.capabilities.canSpawnProcesses ? "Process execution" : "No process spawn")
+                                IDEStatusPill(icon: "network", text: backend.capabilities.canUseNetwork ? "Network" : "Offline")
+                            }
+                            HStack {
+                                IDEStatusPill(icon: "folder", text: backend.capabilities.canAccessWorkspace ? "Workspace" : "No local workspace")
+                                IDEStatusPill(icon: "shippingbox", text: backend.capabilities.canInstallPackages ? "Packages" : "No package install")
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
                     GroupBox("Build Actions") {
                         HStack {
-                            action("Clean", "trash") { workspace.console += "$ \(workspace.activeCompiler?.cleanCommand.isEmpty == false ? workspace.activeCompiler!.cleanCommand : "clean")\n" }
-                            action("Build", "hammer.fill", workspace.runBuild)
-                            action("Test", "checkmark.seal") { workspace.console += "$ \(workspace.activeCompiler?.testCommand.isEmpty == false ? workspace.activeCompiler!.testCommand : "test")\n" }
-                            action("Package", "shippingbox.fill") { workspace.console += "$ \(workspace.activeCompiler?.packageCommand.isEmpty == false ? workspace.activeCompiler!.packageCommand : "package")\n" }
+                            action("Clean", "trash") { workspace.runCommand(workspace.activeCompiler?.cleanCommand.isEmpty == false ? workspace.activeCompiler!.cleanCommand : "clean", settings: settings) }
+                            action("Build", "hammer.fill") { workspace.runBuild(settings: settings) }
+                            action("Test", "checkmark.seal") { workspace.runCommand(workspace.activeCompiler?.testCommand.isEmpty == false ? workspace.activeCompiler!.testCommand : "test", settings: settings) }
+                            action("Package", "shippingbox.fill") { workspace.runCommand(workspace.activeCompiler?.packageCommand.isEmpty == false ? workspace.activeCompiler!.packageCommand : "package", settings: settings) }
                         }
                     }
                 }.padding()
