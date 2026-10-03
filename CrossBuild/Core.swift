@@ -387,7 +387,7 @@ final class WorkspaceModel: ObservableObject {
     func updateEditorText(_ text: String) {
         editorText = text
         editor.updateText(text)
-        guard appSettings?.autosave == true || configuration.autosave,
+        guard (appSettings?.autosave ?? true) && configuration.autosave,
               let documentID = editor.selectedID else { return }
 
         autosaveTask?.cancel()
