@@ -81,11 +81,15 @@ struct IDEView: View {
                 HStack {
                     TextField("Find", text: Binding(get: { workspace.editor.findText }, set: { workspace.editor.findText = $0 })).textFieldStyle(.roundedBorder)
                     TextField("Replace", text: Binding(get: { workspace.editor.replaceText }, set: { workspace.editor.replaceText = $0 })).textFieldStyle(.roundedBorder)
-                    Button("Replace All", action: workspace.editor.replaceAll)
+                    Button("Replace All") { workspace.editor.replaceAll(); if let doc = workspace.editor.selected { workspace.editorText = doc.text } }
                     Button { workspace.editor.showFind = false } label: { Image(systemName: "xmark") }
                 }.padding(8).background(.secondary.opacity(0.04))
             }
-            editor
+            if workspace.editor.documents.isEmpty {
+                WorkspaceHomeView(clone: { showGitHub = true }, configure: { showWorkspaceConfiguration = true }).environmentObject(workspace)
+            } else {
+                editor
+            }
             Divider()
             if bottomExpanded {
                 BottomWorkbenchView(panel: $bottomPanel)
@@ -140,7 +144,7 @@ struct IDEView: View {
                         .background(RoundedRectangle(cornerRadius: ForgeTheme.compactCorner).fill(workspace.editor.selectedID == doc.id ? Color.secondary.opacity(0.12) : Color.clear))
                     }.buttonStyle(.plain)
                 }
-                Button { workspace.files.createFile(named: "Untitled.swift") } label: { Image(systemName: "plus").padding(8) }.buttonStyle(.plain)
+                Button { workspace.files.createFile(named: "Untitled.swift"); workspace.files.reload(); if let file = workspace.projectFiles.first(where: { $0.name == "Untitled.swift" }) { workspace.files.open(file); workspace.openSelectedFile() } } label: { Image(systemName: "plus").padding(8) }.buttonStyle(.plain)
             }.padding(.horizontal, 8).padding(.vertical, 5)
         }.background(.secondary.opacity(0.04))
     }
