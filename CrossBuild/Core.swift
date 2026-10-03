@@ -401,7 +401,7 @@ final class WorkspaceModel: ObservableObject {
         }
         let host = resolvedSettings?.remoteHost ?? ""
         let port = resolvedSettings?.remotePort ?? 22
-        let backend = ExecutionBackendFactory.make(mode: mode, host: host, port: port)
+        let backend = ExecutionBackendFactory.make(mode: mode, settings: resolvedSettings)
         let workingDirectory = configuration.workingDirectory.isEmpty ? (activeProjectRoot ?? files.workspaceRoot.path) : configuration.workingDirectory
         console += "$ \(command)\nBackend: \(backend.name)\n"
         isExecuting = true
