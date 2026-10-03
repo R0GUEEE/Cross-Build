@@ -17,15 +17,13 @@ struct IDEView: View {
                         Label(task.title, systemImage: "bolt.badge.clock")
                     }
                 }
-            }
-            .navigationTitle("Cross Build")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
+                Section("Compiler") {
                     Button(action: workspace.detectSampleProject) {
-                        Image(systemName: "waveform.badge.magnifyingglass")
+                        Label("Auto Detect Project", systemImage: "waveform.badge.magnifyingglass")
                     }
                 }
             }
+            .navigationTitle("Cross Build")
         } detail: {
             VStack(spacing: 0) {
                 HStack {
