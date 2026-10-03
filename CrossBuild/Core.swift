@@ -456,16 +456,9 @@ final class WorkspaceModel: ObservableObject {
     /// execution and Full Setup cannot disagree about which backend is active.
     func resolvedBackend(settings: AppSettings? = nil) -> (backend: any ExecutionBackend, mode: String) {
         let resolvedSettings = settings ?? appSettings
-        var mode = resolvedSettings?.executionBackend ?? "Sideload / Embedded"
-        if mode == "Automatic" {
-            if embeddedToolchains.isAvailable(embeddedID(for: selectedToolchain)) {
-                mode = "Sideload / Embedded"
-            } else if !(resolvedSettings?.remoteHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
-                mode = "Remote / Helper"
-            } else {
-                mode = "Sideload / Embedded"
-            }
-        }
+        // Native engines execute through linked libraries. Shell/POSIX work
+        // executes inside the embedded ios-linuxkit runtime.
+        let mode = "Embedded Runtime"
         return (ExecutionBackendFactory.make(mode: mode, settings: resolvedSettings), mode)
     }
 
@@ -484,8 +477,7 @@ final class WorkspaceModel: ObservableObject {
         let mode = resolved.mode
         let backend = resolved.backend
         let localWorkingDirectory = configuration.workingDirectory.isEmpty ? (activeProjectRoot ?? files.workspaceRoot.path) : configuration.workingDirectory
-        let remoteWorkspace = resolvedSettings?.remoteWorkspace.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let workingDirectory = (mode == "Remote / Helper" || mode == "Remote / SSH") && !remoteWorkspace.isEmpty ? remoteWorkspace : localWorkingDirectory
+        let workingDirectory = localWorkingDirectory
         let startedAt = Date()
         if resolvedSettings?.timestampBuildOutput == true {
             console += "[\(Self.timestampFormatter.string(from: startedAt))] $ \(command)\nBackend: \(backend.name)\n"
