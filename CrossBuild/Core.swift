@@ -399,10 +399,10 @@ final class WorkspaceModel: ObservableObject {
                 mode = "Sideload / Embedded"
             }
         }
-        let host = resolvedSettings?.remoteHost ?? ""
-        let port = resolvedSettings?.remotePort ?? 22
         let backend = ExecutionBackendFactory.make(mode: mode, settings: resolvedSettings)
-        let workingDirectory = configuration.workingDirectory.isEmpty ? (activeProjectRoot ?? files.workspaceRoot.path) : configuration.workingDirectory
+        let localWorkingDirectory = configuration.workingDirectory.isEmpty ? (activeProjectRoot ?? files.workspaceRoot.path) : configuration.workingDirectory
+        let remoteWorkspace = resolvedSettings?.remoteWorkspace.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let workingDirectory = mode == "Remote / SSH" && !remoteWorkspace.isEmpty ? remoteWorkspace : localWorkingDirectory
         console += "$ \(command)\nBackend: \(backend.name)\n"
         isExecuting = true
         executionStatus = "Running"
