@@ -70,6 +70,7 @@ final class WorkspaceModel: ObservableObject {
     let github = GitHubWorkspaceService()
     let configuration = WorkspaceConfiguration()
     let compilerConfiguration = CompilerConfiguration()
+    let editor = EditorSession()
 
     var activeCompiler: CustomCompiler? { customCompilers.first { $0.id == selectedCustomCompilerID } }
 
@@ -138,12 +139,24 @@ final class WorkspaceModel: ObservableObject {
 
     func openSelectedFile() {
         guard let file = files.selected, let text = files.contents(of: file) else { return }
+        editor.open(file: file, text: text)
         editorText = text
     }
 
+    func selectDocument(_ id: UUID) {
+        editor.selectedID = id
+        if let doc = editor.selected { editorText = doc.text }
+    }
+
+    func updateEditorText(_ text: String) {
+        editorText = text
+        editor.updateText(text)
+    }
+
     func saveEditor() {
-        guard let file = files.selected else { return }
-        do { try files.save(editorText, to: file); console += "Saved \(file.name)\n" }
+        guard let doc = editor.selected else { return }
+        let file = WorkspaceFile(name: doc.name, path: doc.path)
+        do { try files.save(editorText, to: file); editor.markSaved(); console += "Saved \(doc.name)\n" }
         catch { console += "Save failed: \(error.localizedDescription)\n" }
     }
 
