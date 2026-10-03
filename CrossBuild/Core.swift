@@ -249,13 +249,13 @@ final class WorkspaceModel: ObservableObject {
         if settings.parallelBuilds {
             let jobs = max(1, settings.buildJobs)
             if command.hasPrefix("make") {
-                command += " -j\(jobs)"
+                command += " -j \(jobs)"
             } else if command.hasPrefix("swift build") {
                 command += " -j \(jobs)"
             } else if command.hasPrefix("cargo build") {
                 command += " -j \(jobs)"
             } else if command.hasPrefix("go build") {
-                command += " -p \(jobs)"
+                command = command.replacingOccurrences(of: "go build", with: "go build -p \(jobs)", options: .anchored)
             } else if command.hasPrefix("zig build") {
                 command += " -j\(jobs)"
             }
@@ -267,7 +267,7 @@ final class WorkspaceModel: ObservableObject {
             } else if command.hasPrefix("swift build") || command.hasPrefix("cargo build") {
                 command += " -v"
             } else if command.hasPrefix("go build") {
-                command += " -x"
+                command = command.replacingOccurrences(of: "go build", with: "go build -x", options: .anchored)
             }
         }
 
