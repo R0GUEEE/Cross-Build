@@ -23,6 +23,9 @@ struct SettingsView: View {
                     NavigationLink("Custom Compilers") {
                         CompilerManagerView().environmentObject(workspace)
                     }
+                    NavigationLink("Feature Diagnostics") {
+                        FeatureDiagnosticsView(settings: settings).environmentObject(workspace)
+                    }
                 }
 
                 Section("Editor") {
