@@ -42,6 +42,7 @@ struct IDEView: View {
 
             Divider()
             WorkspaceBrowserView(files: workspace.files)
+                .onChange(of: workspace.files.selected) { _ in workspace.openSelectedFile() }
         }
     }
 
@@ -83,6 +84,8 @@ struct IDEView: View {
             } label: {
                 IDEStatusPill(icon: "cpu", text: workspace.activeCompiler?.name ?? workspace.selectedToolchain.rawValue)
             }
+            Button(action: workspace.saveEditor) { Image(systemName: "square.and.arrow.down") }
+                .buttonStyle(.bordered)
             Button(action: workspace.runBuild) {
                 Label("Build", systemImage: "play.fill").font(.subheadline.weight(.semibold))
             }.buttonStyle(.borderedProminent)
