@@ -7,51 +7,49 @@ struct WorkspaceConfigurationView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Automatic Project Setup") {
-                    LabeledContent("Project", value: activeProjectName)
+                Section("Project Detection") {
+                    LabeledContent("Active project", value: activeProjectName)
                     LabeledContent("Toolchain", value: workspace.activeCompiler?.name ?? workspace.selectedToolchain.rawValue)
+                    Toggle("Auto-detect toolchain", isOn: $config.autoDetectToolchain)
+                    Toggle("Detect nested projects", isOn: $config.detectNestedProjects)
+                    Toggle("Prefer nearest manifest", isOn: $config.preferNearestManifest)
+                    Toggle("Index source files", isOn: $config.indexSources)
+                    TextField("Additional manifest names", text: $config.customManifestNames, axis: .vertical)
+                    Button("Detect & Generate Settings", systemImage: "wand.and.stars") { workspace.detectSampleProject() }
+                        .buttonStyle(.borderedProminent)
                     if let root = workspace.activeProjectRoot {
-                        Text(root)
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                    Button("Detect & Generate Settings", systemImage: "wand.and.stars") {
-                        workspace.detectSampleProject()
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    if !workspace.generatedConfigurationSummary.isEmpty {
-                        ForEach(workspace.generatedConfigurationSummary, id: \.self) { item in
-                            Label(item, systemImage: "checkmark.circle")
-                                .font(.caption)
-                        }
+                        Text(root).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
                     }
                 }
 
-                Section("Build Overrides") {
+                Section("Build Profile") {
                     Picker("Configuration", selection: $config.buildTarget) {
                         Text("Debug").tag("Debug")
                         Text("Release").tag("Release")
                     }
-                    TextField("Working directory", text: $config.workingDirectory)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    TextField("SDK / sysroot path (optional)", text: $config.sdkPath)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    TextField("Additional build arguments", text: $config.buildArguments, axis: .vertical)
-                    TextField("Environment (KEY=VALUE, one per line)", text: $config.environmentVariables, axis: .vertical)
-                        .lineLimit(2...8)
-                    Text("Leave overrides empty to use automatically generated project settings.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    TextField("Working directory override", text: $config.workingDirectory)
+                    TextField("SDK / sysroot override", text: $config.sdkPath)
+                    TextField("Build arguments", text: $config.buildArguments, axis: .vertical)
+                    TextField("Clean arguments", text: $config.cleanArguments, axis: .vertical)
+                    TextField("Test arguments", text: $config.testArguments, axis: .vertical)
+                    TextField("Package arguments", text: $config.packageArguments, axis: .vertical)
+                    TextField("Environment — KEY=VALUE per line", text: $config.environmentVariables, axis: .vertical)
+                        .lineLimit(3...10)
+                }
+
+                Section("Artifacts") {
+                    TextField("Artifact output directory", text: $config.artifactDirectory)
+                    Toggle("Keep build artifacts", isOn: $config.keepBuildArtifacts)
+                    Toggle("Clean artifact directory before build", isOn: $config.cleanArtifactDirectory)
                 }
 
                 Section("Editor & Documents") {
                     Toggle("Workspace autosave", isOn: $config.autosave)
                     Toggle("Restore open tabs", isOn: $config.restoreOpenTabs)
                     Toggle("Confirm closing unsaved files", isOn: $config.confirmCloseDirty)
+                    Picker("Default new-file extension", selection: $config.defaultNewFileExtension) {
+                        ForEach(["swift","m","mm","c","cpp","h","xm","x","rs","go","zig","py","js","ts"], id: \.self) { Text($0).tag($0) }
+                    }
                     Picker("Text encoding", selection: $config.defaultEncoding) {
                         Text("UTF-8").tag("UTF-8")
                         Text("UTF-16").tag("UTF-16")
@@ -60,6 +58,7 @@ struct WorkspaceConfigurationView: View {
                         Text("LF").tag("LF")
                         Text("CRLF").tag("CRLF")
                     }
+                    Stepper("Recent files limit: \(config.maxRecentFiles)", value: $config.maxRecentFiles, in: 5...100, step: 5)
                 }
 
                 Section("Loaded Directories") {
@@ -72,20 +71,29 @@ struct WorkspaceConfigurationView: View {
                     LabeledContent("Workspace", value: workspace.files.workspaceRoot.path)
                 }
 
-                Section("File Discovery") {
+                Section("Search & Traversal") {
                     Toggle("Include hidden files", isOn: $config.searchHiddenFiles)
                     Toggle("Case-sensitive search", isOn: $config.searchCaseSensitive)
+                    Toggle("Search file contents", isOn: $config.searchFileContents)
                     Toggle("Follow symbolic links", isOn: $config.followSymlinks)
                     TextField("Excluded directory names", text: $config.excludePatterns, axis: .vertical)
-                    Text("Separate exclusions with commas. Core exclusions such as .git, DerivedData, .build and node_modules remain protected.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                }
+
+                Section("Generated Configuration") {
+                    if workspace.generatedConfigurationSummary.isEmpty {
+                        Text("No generated project configuration yet.").foregroundStyle(.secondary)
+                    } else {
+                        ForEach(workspace.generatedConfigurationSummary, id: \.self) {
+                            Label($0, systemImage: "checkmark.circle")
+                        }
+                    }
                 }
 
                 Section("Workspace Information") {
                     LabeledContent("Project files", value: "\(workspace.projectFiles.count)")
                     LabeledContent("Open editors", value: "\(workspace.editor.documents.count)")
                     LabeledContent("Execution", value: workspace.executionStatus)
+                    if let code = workspace.lastExitCode { LabeledContent("Last exit code", value: "\(code)") }
                 }
             }
             .navigationTitle("Workspace Configuration")
