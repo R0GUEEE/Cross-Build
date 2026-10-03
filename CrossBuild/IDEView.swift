@@ -20,8 +20,10 @@ struct IDEView: View {
             }
             .navigationTitle("Cross Build")
             .toolbar {
-                Button(action: workspace.detectSampleProject) {
-                    Image(systemName: "waveform.badge.magnifyingglass")
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: workspace.detectSampleProject) {
+                        Image(systemName: "waveform.badge.magnifyingglass")
+                    }
                 }
             }
         } detail: {
