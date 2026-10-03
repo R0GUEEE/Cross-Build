@@ -1,9 +1,15 @@
 import SwiftUI
 
 struct CompilerConfigurationView: View {
+    @EnvironmentObject private var workspace: WorkspaceModel
     @ObservedObject var config: CompilerConfiguration
     var body: some View {
         Form {
+            Section("Embedded Toolchain Status") {
+                LabeledContent("LLVM / Clang", value: workspace.embeddedToolchains.clang.isLinked ? workspace.embeddedToolchains.clang.version : "Bridge ready • payload missing")
+                LabeledContent("Bundled iOS SDKs", value: "\(IOSSDKDiscovery.bundledSDKs().count)")
+                if let sdk=IOSSDKDiscovery.preferred() { LabeledContent("Preferred SDK", value:sdk.lastPathComponent) }
+            }
             Section("Target & SDK") {
                 TextField("SDK", text: $config.sdk)
                 TextField("Sysroot / SDK path", text: $config.sysroot)
