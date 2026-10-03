@@ -97,6 +97,9 @@ final class WorkspaceModel: ObservableObject {
     let compilerConfiguration = CompilerConfiguration()
     let editor = EditorSession()
     let embeddedToolchains = EmbeddedToolchainManager()
+    let toolchainRuntime = ToolchainRuntimeManager()
+    @Published var projectContext: ProjectContext?
+    @Published var buildDiagnostics: [BuildDiagnostic] = []
 
     var activeCompiler: CustomCompiler? { customCompilers.first { $0.id == selectedCustomCompilerID } }
     var projectFiles: [WorkspaceFile] {
@@ -254,6 +257,7 @@ final class WorkspaceModel: ObservableObject {
         let generated = ConfigurationGenerator.generate(from: result, files: scopedFiles, fileContents: contents)
         ConfigurationGenerator.apply(generated, workspace: self)
         generatedConfigurationSummary = generated.summary
+        projectContext = ProjectContext.detected(root: root, analysis: result, compiler: compilerConfiguration)
         console += "Configuration: " + generated.summary.joined(separator: " • ") + "\n"
         console += "Auto-detect: \(result.primaryToolchain.rawValue) [\(Int(result.confidence * 100))%]\n"
         console += "Languages: \(result.languages.map(\.rawValue).sorted().joined(separator: ", "))\n"
