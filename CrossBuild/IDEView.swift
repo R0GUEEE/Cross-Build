@@ -10,6 +10,7 @@ struct IDEView: View {
     @State private var showWorkspaceConfiguration = false
     @State private var bottomPanel: ForgePanel = .terminal
     @State private var bottomExpanded = true
+    @State private var pendingCloseDocument: EditorDocument?
 
     var body: some View {
         NavigationSplitView {
@@ -29,6 +30,14 @@ struct IDEView: View {
         }
         .sheet(isPresented: $showWorkspaceConfiguration) {
             WorkspaceConfigurationView(config: workspace.configuration).environmentObject(workspace)
+        }
+        .alert(item: $pendingCloseDocument) { doc in
+            Alert(
+                title: Text("Discard unsaved changes?"),
+                message: Text("\(doc.name) has changes that have not been saved."),
+                primaryButton: .destructive(Text("Discard")) { workspace.closeDocument(doc.id) },
+                secondaryButton: .cancel()
+            )
         }
     }
 
@@ -138,20 +147,55 @@ struct IDEView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
                 ForEach(workspace.editor.documents) { doc in
-                    Button { workspace.selectDocument(doc.id) } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "doc.text")
-                            Text(doc.name)
-                            if doc.isDirty { Circle().frame(width: 6, height: 6) }
-                            Button { workspace.editor.close(doc.id) } label: { Image(systemName: "xmark").font(.caption2) }
+                    HStack(spacing: 5) {
+                        Button {
+                            workspace.selectDocument(doc.id)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "doc.text")
+                                Text(doc.name)
+                                if doc.isDirty { Circle().frame(width: 6, height: 6) }
+                            }
                         }
-                        .font(.caption).padding(.horizontal, 9).padding(.vertical, 7)
-                        .background(RoundedRectangle(cornerRadius: ForgeTheme.compactCorner).fill(workspace.editor.selectedID == doc.id ? Color.secondary.opacity(0.12) : Color.clear))
-                    }.buttonStyle(.plain)
+                        .buttonStyle(.plain)
+
+                        Button {
+                            requestClose(doc)
+                        } label: {
+                            Image(systemName: "xmark").font(.caption2)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Close \(doc.name)")
+                    }
+                    .font(.caption)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 7)
+                    .background(
+                        RoundedRectangle(cornerRadius: ForgeTheme.compactCorner)
+                            .fill(workspace.editor.selectedID == doc.id ? Color.secondary.opacity(0.12) : Color.clear)
+                    )
                 }
-                Button { workspace.files.createFile(named: "Untitled.swift"); workspace.files.reload(); if let file = workspace.projectFiles.first(where: { $0.name == "Untitled.swift" }) { workspace.files.open(file); workspace.openSelectedFile() } } label: { Image(systemName: "plus").padding(8) }.buttonStyle(.plain)
+                Button {
+                    if let file = workspace.files.createFile(named: "Untitled.swift") {
+                        workspace.files.open(file)
+                        workspace.openSelectedFile()
+                    }
+                } label: {
+                    Image(systemName: "plus").padding(8)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("New file")
             }.padding(.horizontal, 8).padding(.vertical, 5)
-        }.background(.secondary.opacity(0.04))
+        }
+        .background(.secondary.opacity(0.04))
+    }
+
+    private func requestClose(_ doc: EditorDocument) {
+        if doc.isDirty && workspace.configuration.confirmCloseDirty {
+            pendingCloseDocument = doc
+        } else {
+            workspace.closeDocument(doc.id)
+        }
     }
 
     private func editorTab(_ title: String, icon: String, selected: Bool) -> some View {
