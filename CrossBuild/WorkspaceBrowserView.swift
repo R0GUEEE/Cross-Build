@@ -78,6 +78,14 @@ struct WorkspaceBrowserView: View {
             }
             Button("Cancel", role: .cancel) { newItemName = "" }
         }
+        .alert("File Operation Failed", isPresented: Binding(
+            get: { files.errorMessage != nil },
+            set: { if !$0 { files.errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { files.errorMessage = nil }
+        } message: {
+            Text(files.errorMessage ?? "Unknown file error.")
+        }
     }
 
     @ViewBuilder private func row(_ file: WorkspaceFile) -> some View {
@@ -97,6 +105,8 @@ struct WorkspaceBrowserView: View {
         .buttonStyle(.plain)
         .contextMenu {
             Button("Copy Path", systemImage: "doc.on.doc") { UIPasteboard.general.string = file.path }
+            Button(file.isFavorite ? "Remove Favorite" : "Add Favorite",
+                   systemImage: file.isFavorite ? "star.slash" : "star") { files.toggleFavorite(file) }
             if !files.isReadOnly(file) {
                 Button("Duplicate", systemImage: "plus.square.on.square") { files.duplicate(file) }
                 Button("Delete", systemImage: "trash", role: .destructive) { files.delete(file) }
