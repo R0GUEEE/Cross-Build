@@ -35,6 +35,16 @@ struct WorkspaceConfigurationView: View {
                     Picker("Default encoding", selection: $config.defaultEncoding) { Text("UTF-8").tag("UTF-8"); Text("UTF-16").tag("UTF-16") }
                     Picker("Line endings", selection: $config.lineEndings) { Text("LF").tag("LF"); Text("CRLF").tag("CRLF") }
                 }
+                Section("Loaded Directories") {
+                    Toggle("Show app directories", isOn: $config.showAppDirectories)
+                    Toggle("Show application bundle", isOn: $config.showAppBundle)
+                    Toggle("Show app Library", isOn: $config.showContainerLibrary)
+                    Toggle("Show temporary files", isOn: $config.showTemporaryFiles)
+                    LabeledContent("Workspace", value: workspace.files.workspaceRoot.path)
+                    LabeledContent("Documents", value: workspace.files.documentsRoot.path)
+                    LabeledContent("Library", value: workspace.files.libraryRoot.path)
+                    LabeledContent("Bundle", value: workspace.files.appBundleRoot.path)
+                }
                 Section("Search & Files") {
                     Toggle("Case-sensitive search", isOn: $config.searchCaseSensitive)
                     Toggle("Search hidden files", isOn: $config.searchHiddenFiles)
