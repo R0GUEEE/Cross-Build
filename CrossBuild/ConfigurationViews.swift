@@ -54,6 +54,7 @@ struct AppConfigurationView: View {
                 }
                 Toggle("Login shell", isOn: $settings.shellLogin)
                 Toggle("Interactive shell", isOn: $settings.shellInteractive)
+                Toggle("Persistent terminal session", isOn: $settings.terminalPersistentSession)
                 TextField("Shell initialization command", text: $settings.shellInitCommand, axis: .vertical)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                 Stepper("Command timeout: \(settings.commandTimeout)s", value: $settings.commandTimeout, in: 0...3600, step: 5)
