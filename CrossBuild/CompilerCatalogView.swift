@@ -36,7 +36,7 @@ struct CompilerCatalogView: View {
                                 HStack {
                                     Text(item.category.rawValue)
                                     Text("•")
-                                    Text(item.installMethod.rawValue)
+                                    Text(AppToolchainLibraries.item(item.id)?.availability.rawValue ?? "Integrated")
                                 }.font(.caption2).foregroundStyle(.secondary)
                             }
                             Spacer()
@@ -77,7 +77,10 @@ struct CompilerCatalogDetailView: View {
                 Section("Capabilities") {
                     LabeledContent("Category", value: item.category.rawValue)
                     LabeledContent("Executable", value: item.executable)
-                    LabeledContent("Install", value: item.installMethod.rawValue)
+                    LabeledContent("App Library", value: AppToolchainLibraries.item(item.id)?.availability.rawValue ?? "Integrated")
+                    LabeledContent("Module", value: AppToolchainLibraries.item(item.id)?.module ?? item.id)
+                    LabeledContent("Version", value: AppToolchainLibraries.item(item.id)?.version ?? "built-in")
+                    LabeledContent("Process backend", value: AppToolchainLibraries.item(item.id)?.requiresProcessBackend == true ? "Required" : "Not required")
                     if !item.languages.isEmpty { LabeledContent("Languages", value: item.languages.joined(separator: ", ")) }
                 }
                 Section("Project Detection") {
@@ -94,7 +97,7 @@ struct CompilerCatalogDetailView: View {
                 }
                 Section("Compatibility") { Text(item.notes).font(.callout) }
                 Section {
-                    Button("Add to Cross Build", systemImage: "square.and.arrow.down") {
+                    Button("Use Built-in Toolchain", systemImage: "checkmark.circle") {
                         workspace.addCompiler(CustomCompiler(
                             name: item.name, executable: item.executable, arguments: "",
                             buildCommand: item.buildCommand, cleanCommand: item.cleanCommand,
