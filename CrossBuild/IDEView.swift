@@ -87,7 +87,7 @@ struct IDEView: View {
             }
             Button(action: workspace.saveEditor) { Image(systemName: "square.and.arrow.down") }
                 .buttonStyle(.bordered)
-            Button(action: workspace.runBuild) {
+            Button(action: { workspace.runBuild(settings: settings) }) {
                 Label("Build", systemImage: "play.fill").font(.subheadline.weight(.semibold))
             }.buttonStyle(.borderedProminent)
         }.padding(.horizontal, 12).padding(.vertical, 9)
