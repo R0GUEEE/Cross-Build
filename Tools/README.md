@@ -26,5 +26,19 @@ Configure the host, port, remote workspace and token in Cross Build. Prefer HTTP
 Protocol:
 - `GET /v1/health`
 - `POST /v1/execute`
+- `POST /v1/session/reset` — clears a session's remembered working directory and environment
 
 The helper constrains requested working directories to `--workspace` when supplied.
+
+### Persistent sessions
+
+Each `/v1/execute` call still runs as its own subprocess — there is no long-lived shell
+process behind a session. When a request includes `sessionID`, the helper instead
+remembers that session's **working directory and exported environment variables**
+after the command finishes and applies them as the starting point for the next
+request with the same `sessionID`. This is enough for a terminal-style UI to feel
+continuous (`cd foo` on one line affects the next line, `export FOO=bar` persists),
+but it does **not** preserve shell functions/aliases, job control, or any state held
+by a long-running foreground process (e.g. a REPL or `tail -f`) — those only live for
+the single command that started them. Use `/v1/session/reset` to clear a session's
+remembered state (e.g. when the app's terminal panel is cleared).

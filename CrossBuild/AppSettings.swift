@@ -13,8 +13,6 @@ final class AppSettings: ObservableObject {
     @AppStorage("editor.highlightLine") var editorHighlightCurrentLine = true
     @AppStorage("editor.autoClosePairs") var editorAutoClosePairs = true
     @AppStorage("editor.invisibles") var editorShowInvisibles = false
-    @AppStorage("editor.minimap") var editorMinimap = false
-    @AppStorage("editor.stickyHeader") var editorStickyHeader = true
 
     @AppStorage("app.compactUI") var compactUI = false
     @AppStorage("app.showStatusBadges") var showStatusBadges = true
@@ -66,14 +64,10 @@ final class AppSettings: ObservableObject {
 
     @AppStorage("runtime.backend") var executionBackend = "Automatic"
     @AppStorage("runtime.remoteHost") var remoteHost = ""
-    @AppStorage("runtime.remotePort") var remotePort = 22
-    @AppStorage("runtime.remoteUser") var remoteUser = ""
     @AppStorage("runtime.remoteWorkspace") var remoteWorkspace = ""
     @AppStorage("runtime.connectTimeout") var connectionTimeout = 15
     @AppStorage("runtime.commandTimeout") var commandTimeout = 0
-    @AppStorage("runtime.keepAlive") var keepAlive = true
     @AppStorage("runtime.forwardEnvironment") var forwardEnvironment = true
-    @AppStorage("runtime.transport") var remoteTransport = "CrossBuild Helper"
     @AppStorage("runtime.helperScheme") var helperScheme = "http"
     @AppStorage("runtime.helperPort") var helperPort = 8765
     @AppStorage("runtime.jailbreakHost") var jailbreakHelperHost = "127.0.0.1"
@@ -83,7 +77,6 @@ final class AppSettings: ObservableObject {
     @AppStorage("runtime.shellInteractive") var shellInteractive = false
     @AppStorage("runtime.shellInit") var shellInitCommand = ""
     @AppStorage("runtime.terminalPersistent") var terminalPersistentSession = true
-    @AppStorage("runtime.terminalCwd") var terminalWorkingDirectory = ""
 }
 
 enum AppSection: String, CaseIterable, Identifiable {

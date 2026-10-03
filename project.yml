@@ -17,6 +17,7 @@ targets:
       - path: CrossBuild
         excludes:
           - Resources/Toolchains
+          - Assets.xcassets/AppIcon.appiconset/make_icon.py
     resources:
       - path: CrossBuild/Resources/Toolchains
         type: folder
@@ -27,8 +28,11 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.rogueee.crossbuild
         PRODUCT_NAME: CrossBuild
         SWIFT_VERSION: "5.0"
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "${CROSSBUILD_BUILD_NUMBER}"
         CODE_SIGNING_ALLOWED: NO
         GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_CFBundleDisplayName: "Cross Build"
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
