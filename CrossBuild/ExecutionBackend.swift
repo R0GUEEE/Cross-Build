@@ -55,7 +55,7 @@ struct HelperExecutionBackend: ExecutionBackend {
     }
 }
 
-enum ExecutionBackendFactory {
+@MainActor\nenum ExecutionBackendFactory {
     static func make(mode:String, settings:AppSettings?) -> any ExecutionBackend {
         switch mode {
         case "Jailbreak Local":
