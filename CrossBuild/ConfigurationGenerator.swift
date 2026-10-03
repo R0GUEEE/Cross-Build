@@ -81,7 +81,6 @@ enum ConfigurationGenerator {
         workspace.compilerConfiguration.theosScheme = generated.theosScheme
         workspace.configuration.deploymentTarget = generated.deploymentTarget
         workspace.configuration.architecture = generated.architectures
-        workspace.configuration.compilerOverride = ""
         workspace.configuration.autoDetectToolchain = true
     }
 
