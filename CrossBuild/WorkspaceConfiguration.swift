@@ -27,4 +27,8 @@ final class WorkspaceConfiguration: ObservableObject {
     @AppStorage("workspace.lineEndings") var lineEndings = "LF"
     @AppStorage("workspace.followSymlinks") var followSymlinks = false
     @AppStorage("workspace.gitDestination") var gitDestination = "Workspace"
+    @AppStorage("workspace.showAppDirectories") var showAppDirectories = true
+    @AppStorage("workspace.showBundle") var showAppBundle = true
+    @AppStorage("workspace.showContainerLibrary") var showContainerLibrary = true
+    @AppStorage("workspace.showTemporary") var showTemporaryFiles = true
 }
