@@ -382,7 +382,7 @@ final class WorkspaceModel: ObservableObject {
     }
 
     @discardableResult
-    func executeCommand(_ command: String, settings: AppSettings? = nil) async -> CommandResult {
+    func executeCommand(_ command: String, settings: AppSettings? = nil, sessionID: String? = nil) async -> CommandResult {
         guard !isExecuting else {
             let result = CommandResult(exitCode: 75, stdout: "", stderr: "Another command is already running.", duration: 0)
             console += "error: \(result.stderr)\n"
@@ -539,6 +539,17 @@ final class WorkspaceModel: ObservableObject {
         if !compilerConfiguration.signingIdentity.isEmpty { environment["CROSSBUILD_SIGNING_IDENTITY"] = compilerConfiguration.signingIdentity }
         if !compilerConfiguration.provisioningProfile.isEmpty { environment["CROSSBUILD_PROVISIONING_PROFILE"] = compilerConfiguration.provisioningProfile }
         return environment
+    }
+
+    func runTerminalCommand(_ command: String, settings: AppSettings? = nil) {
+        guard !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let resolved = settings ?? appSettings
+        Task {
+            let result = await executeCommand(command, settings: resolved, sessionID: resolved?.terminalPersistentSession == false ? nil : "terminal")
+            if result.succeeded, command.trimmingCharacters(in: .whitespacesAndNewlines) == "clear" {
+                console = ""
+            }
+        }
     }
 
     func runCommand(_ command: String, settings: AppSettings? = nil) {
