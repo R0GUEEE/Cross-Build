@@ -70,7 +70,7 @@ struct IDEView: View {
                         Button("Clone from GitHub", systemImage: "arrow.down.circle") { openGitHubImporter() }
                     }
                     Section("File Operations") {
-                        Button("New File", systemImage: "doc.badge.plus") { workspace.files.createFile(named: workspace.newFileName()) }
+                        Button("New File", systemImage: "doc.badge.plus") { if let file = workspace.files.createFile(named: workspace.newFileName()) { workspace.files.open(file); workspace.openSelectedFile() } }
                         Button("New Folder", systemImage: "folder.badge.plus") { workspace.files.createFolder(named: "New Folder") }
                         if let selected = workspace.files.selected {
                             Button("Duplicate Selected", systemImage: "plus.square.on.square") { workspace.files.duplicate(selected) }
