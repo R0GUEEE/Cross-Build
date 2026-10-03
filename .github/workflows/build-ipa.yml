@@ -24,6 +24,29 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Vendor Python runtime
+        run: |
+          set -euo pipefail
+          PY_VER=3.13
+          PY_TAG=3.13-b15
+          PY_BUILD=${PY_TAG#*-}
+          ASSET="Python-${PY_VER}-iOS-support.${PY_BUILD}.tar.gz"
+          URL="https://github.com/beeware/Python-Apple-support/releases/download/${PY_TAG}/${ASSET}"
+          echo "Fetching $URL"
+          curl -sSL "$URL" -o /tmp/python-support.tar.gz
+          mkdir -p Vendor/Python
+          tar xzf /tmp/python-support.tar.gz -C Vendor/Python
+          test -d Vendor/Python/Python.xcframework || { echo "::error::Python.xcframework missing from the support package"; exit 1; }
+          # Assemble the PYTHONHOME tree CPython documents for iOS: the pure
+          # standard library and the compiled extension modules ship in two
+          # different places inside the support package and must be merged.
+          STDLIB=Vendor/Python/stdlib/python/lib/python${PY_VER}
+          mkdir -p "$STDLIB" Vendor/Python/stdlib/app
+          cp -R "Vendor/Python/Python.xcframework/lib/python${PY_VER}/." "$STDLIB/"
+          cp -R "Vendor/Python/Python.xcframework/ios-arm64/lib-arm64/python${PY_VER}/lib-dynload" "$STDLIB/lib-dynload"
+          test -f "$STDLIB/os.py" || { echo "::error::standard library did not stage correctly (os.py missing)"; exit 1; }
+          echo "# Placeholder: user Python modules live here at runtime." > Vendor/Python/stdlib/app/README.txt
+
       - name: Generate project
         env:
           CROSSBUILD_BUILD_NUMBER: ${{ github.run_number }}
@@ -43,6 +66,10 @@ jobs:
           test -d "$APP/Toolchains" || fail "Toolchains folder is missing from the app bundle"
           test -f "$APP/Toolchains/LLVM/manifest.json" || fail "Toolchains/LLVM/manifest.json is missing from the app bundle"
           test -f "$APP/Info.plist" || fail "Info.plist is missing from the app bundle"
+          test -f "$APP/python/lib/python3.13/os.py" || fail "Python standard library is missing from the app bundle"
+          test -d "$APP/app" || fail "Python PYTHONPATH 'app' folder is missing from the app bundle"
+          test -d "$APP/Frameworks/Python.framework" || fail "Python.framework was not embedded"
+          test -f "$APP/Frameworks/Python.framework/Info.plist" || fail "embedded Python.framework has no Info.plist"
           # An embedded framework without an Info.plist makes installd reject the
           # IPA outright, so assert the invariant rather than rediscovering it.
           if [ -d "$APP/Frameworks" ]; then

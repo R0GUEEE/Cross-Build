@@ -55,6 +55,7 @@ final class EmbeddedToolchainManager: ObservableObject {
     @Published private(set) var available:[String:String]=[:]
     private let javascript=JavaScriptCoreEngine()
     private let logos=LogosPreprocessorEngine()
+    private let python=PythonEmbeddedEngine()
     let clang=ClangEmbeddedBridge()
 
     init(){ probe() }
@@ -62,6 +63,7 @@ final class EmbeddedToolchainManager: ObservableObject {
     func probe() {
         available[javascript.id]=javascript.version
         available[logos.id]=logos.version
+        if python.isLinked { available[python.id]=python.version }
         if clang.isLinked { available["clang"]=clang.version }
     }
 
@@ -71,6 +73,7 @@ final class EmbeddedToolchainManager: ObservableObject {
         switch id {
         case javascript.id: return await javascript.run(source:source,options:options)
         case logos.id: return await logos.run(source:source,options:options)
+        case python.id: return await python.run(source:source,options:options)
         case "clang":
             guard let path=options["sourcePath"], let output=options["outputPath"] else {
                 return .init(output:"",diagnostics:["Clang requires sourcePath and outputPath options."],succeeded:false)

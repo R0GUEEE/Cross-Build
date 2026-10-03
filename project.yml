@@ -33,9 +33,28 @@ targets:
       # drift apart. buildPhase is forced because a .py file has no default phase.
       - path: Tools/crossbuild-helper.py
         buildPhase: resources
+      # Vendored CPython support package (see the "Vendor Python runtime" CI step).
+      # Neither path exists in a clean checkout, so both are gitignored; the CI
+      # step fails the build with a clear message if they are missing.
+      #
+      # The bundle layout is the one CPython documents for iOS: `python` is
+      # PYTHONHOME and contains lib/python3.13 (plus lib-dynload), and `app` is on
+      # PYTHONPATH for user code.
+      - path: Vendor/Python/stdlib/python
+        type: folder
+        buildPhase: resources
+      - path: Vendor/Python/stdlib/app
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: ZIPFoundation
       - target: CrossBuildClang
+      - target: CrossBuildPython
+      # Embedded CPython. Dynamic framework, so it is linked and embedded into the
+      # app; the support package ships it with its own Info.plist, which is the
+      # thing installd insists on for embedded frameworks.
+      - framework: Vendor/Python/Python.xcframework
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.rogueee.crossbuild
@@ -82,3 +101,27 @@ targets:
         CLANG_CXX_LANGUAGE_STANDARD: "c++17"
         GENERATE_INFOPLIST_FILE: NO
         MACH_O_TYPE: staticlib
+
+  CrossBuildPython:
+    # C shim over the vendored CPython runtime. Same static-library shape as
+    # CrossBuildClang, so Swift imports it as a module and never sees Python.h.
+    # It needs the framework only for headers; the app target does the linking
+    # and embedding, because a static library does not link anything.
+    type: library.static
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Native/CrossBuildPython
+    dependencies:
+      - framework: Vendor/Python/Python.xcframework
+        embed: false
+        link: false
+    settings:
+      base:
+        PRODUCT_NAME: CrossBuildPython
+        PRODUCT_BUNDLE_IDENTIFIER: dev.rogueee.crossbuild.python
+        SKIP_INSTALL: YES
+        CODE_SIGNING_ALLOWED: NO
+        GENERATE_INFOPLIST_FILE: NO
+        MACH_O_TYPE: staticlib
+        CLANG_ENABLE_MODULES: YES

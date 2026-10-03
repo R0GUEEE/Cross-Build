@@ -1,0 +1,8 @@
+// Matches XcodeGen's static-library convention (Module/module.modulemap beside
+// the header, `header` rather than `umbrella header`). Deliberately no
+// DEFINES_MODULE or MODULEMAP_FILE on the target: either produces a duplicate
+// module and clang fails with "redefinition of module 'CrossBuildPython'".
+module CrossBuildPython {
+    header "CrossBuildPython.h"
+    export *
+}

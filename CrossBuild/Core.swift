@@ -421,6 +421,7 @@ final class WorkspaceModel: ObservableObject {
         case .javascript: return "javascriptcore"
         case .theos: return "logos-preprocessor"
         case .clang: return "clang"
+        case .python: return "python3"
         default: return toolchain.rawValue.lowercased()
         }
     }

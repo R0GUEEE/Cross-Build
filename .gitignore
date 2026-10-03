@@ -4,3 +4,6 @@ DerivedData/
 xcuserdata/
 .DS_Store
 CrossBuild.xcodeproj/
+
+# Vendored at build time (see the "Vendor Python runtime" CI step)
+Vendor/
