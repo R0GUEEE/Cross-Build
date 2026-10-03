@@ -9,7 +9,11 @@ struct CrossBuildApp: App {
         WindowGroup {
             RootView(settings: settings)
                 .environmentObject(workspace)
-                .onAppear { workspace.appSettings = settings }
+                .onAppear {
+                    workspace.appSettings = settings
+                    workspace.syncFileConfiguration()
+                    if settings.autoDetect && !workspace.projectFiles.isEmpty { workspace.detectSampleProject() }
+                }
         }
     }
 }
