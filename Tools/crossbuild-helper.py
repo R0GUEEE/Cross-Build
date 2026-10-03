@@ -2,8 +2,17 @@
 import argparse, json, os, subprocess, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+def resolve_shell(requested=""):
+    candidates = [requested] if requested else []
+    candidates += [os.environ.get("SHELL",""), "/var/jb/bin/zsh", "/var/jb/bin/bash", "/var/jb/bin/sh",
+                   "/bin/zsh", "/bin/bash", "/bin/sh"]
+    for shell in candidates:
+        if shell and os.path.isfile(shell) and os.access(shell, os.X_OK):
+            return shell
+    return ""
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CrossBuildHelper/1.0"
+    server_version = "CrossBuildHelper/1.1"
 
     def _authorized(self):
         token = self.server.token
@@ -21,7 +30,9 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             return self._json(401, {"error":"unauthorized"})
         if self.path == "/v1/health":
-            return self._json(200, {"ready":True,"version":"1.0","capabilities":["execute","environment","working-directory"]})
+            return self._json(200, {"ready":True,"version":"1.1",
+                "capabilities":["execute","environment","working-directory","shell-selection","command-timeout"],
+                "shell":resolve_shell()})
         self._json(404, {"error":"not found"})
 
     def do_POST(self):
@@ -43,13 +54,28 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(403, {"error":"working directory is outside configured workspace"})
             env = os.environ.copy()
             env.update({str(k):str(v) for k,v in (payload.get("environment") or {}).items()})
+            requested_shell = str(payload.get("shell") or "").strip()
+            shell = resolve_shell(requested_shell)
+            if not shell:
+                return self._json(500, {"error":"no executable shell found"})
+            init_command = str(payload.get("initCommand") or "").strip()
+            full_command = (init_command + "\n" + command) if init_command else command
+            args = [shell]
+            if payload.get("loginShell"):
+                args.append("-l")
+            if payload.get("interactiveShell"):
+                args.append("-i")
+            args += ["-c", full_command]
+            timeout = int(payload.get("timeout") or 0) or self.server.command_timeout or None
             started = time.monotonic()
-            result = subprocess.run(command, cwd=cwd, env=env, shell=True, executable="/bin/sh",
-                                    capture_output=True, text=True, timeout=self.server.command_timeout or None)
+            result = subprocess.run(args, cwd=cwd, env=env, shell=False,
+                                    capture_output=True, text=True, timeout=timeout)
             self._json(200, {"exitCode":result.returncode,"stdout":result.stdout,"stderr":result.stderr,
-                             "duration":time.monotonic()-started})
+                             "duration":time.monotonic()-started,"shell":shell})
         except subprocess.TimeoutExpired as e:
-            self._json(200, {"exitCode":124,"stdout":e.stdout or "","stderr":"Command timed out.","duration":self.server.command_timeout})
+            out = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+            err = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+            self._json(200, {"exitCode":124,"stdout":out,"stderr":err + "\nCommand timed out.","duration":0})
         except Exception as e:
             self._json(500, {"error":str(e)})
 
@@ -71,7 +97,7 @@ def main():
     server.workspace=os.path.realpath(a.workspace) if a.workspace else ""
     server.command_timeout=a.command_timeout
     server.verbose=a.verbose
-    print(f"CrossBuild Helper listening on {a.host}:{a.port}", flush=True)
+    print("CrossBuild Helper listening on %s:%s shell=%s" % (a.host,a.port,resolve_shell() or "none"), flush=True)
     server.serve_forever()
 
 if __name__=="__main__":
