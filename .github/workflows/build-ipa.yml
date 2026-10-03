@@ -34,6 +34,26 @@ jobs:
           set -o pipefail
           xcodebuild             -project CrossBuild.xcodeproj             -scheme CrossBuild             -configuration Release             -sdk iphoneos             -derivedDataPath build/DerivedData             CODE_SIGNING_ALLOWED=NO             CODE_SIGNING_REQUIRED=NO             CODE_SIGN_IDENTITY=""             build | tee build.log
 
+      - name: Verify bundled resources
+        run: |
+          APP="$(find build/DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
+          test -n "$APP"
+          fail() { echo "::error::$1"; exit 1; }
+          test -f "$APP/crossbuild-helper.py" || fail "crossbuild-helper.py is missing from the app bundle"
+          test -d "$APP/Toolchains" || fail "Toolchains folder is missing from the app bundle"
+          test -f "$APP/Toolchains/LLVM/manifest.json" || fail "Toolchains/LLVM/manifest.json is missing from the app bundle"
+          test -f "$APP/Info.plist" || fail "Info.plist is missing from the app bundle"
+          # An embedded framework without an Info.plist makes installd reject the
+          # IPA outright, so assert the invariant rather than rediscovering it.
+          if [ -d "$APP/Frameworks" ]; then
+            for fw in "$APP/Frameworks"/*.framework; do
+              [ -e "$fw" ] || continue
+              test -f "$fw/Info.plist" || fail "embedded framework $(basename "$fw") has no Info.plist (installd will reject the IPA)"
+            done
+          fi
+          echo "Bundle contents:"
+          find "$APP" -maxdepth 2 | sort
+
       - name: Package IPA
         run: |
           APP="$(find build/DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"

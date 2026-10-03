@@ -18,14 +18,21 @@ targets:
         excludes:
           - Resources/Toolchains
           - Assets.xcassets/AppIcon.appiconset/make_icon.py
+      # Bundled as a folder reference, declared here rather than under the
+      # `resources:` shortcut. The shortcut never actually put this folder into
+      # the built .app -- three consecutive IPAs contained zero Toolchains
+      # entries -- while the app reads these manifests at runtime. Declaring it
+      # as an explicit source with buildPhase: resources is the form XcodeGen
+      # documents, and the "Verify bundled resources" CI step now fails the build
+      # if it ever stops being copied again.
+      - path: CrossBuild/Resources/Toolchains
+        type: folder
+        buildPhase: resources
       # The execution helper is bundled straight from Tools/ rather than copied
       # into the app tree, so there is exactly one copy of it and the two cannot
       # drift apart. buildPhase is forced because a .py file has no default phase.
       - path: Tools/crossbuild-helper.py
         buildPhase: resources
-    resources:
-      - path: CrossBuild/Resources/Toolchains
-        type: folder
     dependencies:
       - package: ZIPFoundation
       - target: CrossBuildClang
