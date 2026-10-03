@@ -1,0 +1,68 @@
+name: Build ios-linuxkit engine
+
+# Deliberately a separate workflow from Build IPA. Cross-compiling a third-party
+# C engine for iOS is the critical unknown for the embedded-Linux work, and
+# iterating on it here keeps the app build green and independently verifiable.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/linuxkit-engine.yml'
+      - 'Tools/linuxkit-cross-ios.txt'
+
+jobs:
+  engine:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: brew install meson ninja
+
+      - name: Vendor ios-linuxkit
+        run: |
+          set -euo pipefail
+          PINNED=c1a4064e84f1a957280a62f77d107162032dc908   # 2.4.1 build 818
+          mkdir -p Vendor
+          git clone --filter=blob:none https://github.com/rcarmo/ios-linuxkit.git Vendor/linuxkit
+          cd Vendor/linuxkit
+          git checkout "$PINNED"
+          git submodule update --init --recursive --depth 1 || echo "::warning::submodule init failed; continuing"
+          git rev-parse HEAD
+
+      - name: Cross-compile engine for iOS arm64
+        run: |
+          set -euo pipefail
+          cd Vendor/linuxkit
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          echo "iPhoneOS SDK: $SDK"
+          sed "s|@IOS_SDK@|$SDK|" "$GITHUB_WORKSPACE/Tools/linuxkit-cross-ios.txt" > cross-ios.txt
+          cat cross-ios.txt
+          meson setup build-ios --cross-file cross-ios.txt \
+            -Dguest_arch=arm64 -Djit=false -Djit_emit=false -Dcli_aot= \
+            --buildtype=release
+          meson compile -C build-ios
+
+      - name: Inspect produced libraries
+        run: |
+          set -euo pipefail
+          cd Vendor/linuxkit/build-ios
+          echo "=== static libraries ==="
+          find . -name '*.a' -exec ls -la {} \;
+          echo
+          echo "=== arch check (must be arm64 iOS, not macOS) ==="
+          for lib in $(find . -name '*.a'); do
+            echo "--- $lib"
+            lipo -info "$lib" || true
+            file "$lib" | head -1
+            otool -l "$lib" 2>/dev/null | grep -A3 LC_BUILD_VERSION | head -8 || true
+          done
+
+      - name: Upload engine libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: linuxkit-engine-ios
+          path: Vendor/linuxkit/build-ios/**/*.a
+          if-no-files-found: error

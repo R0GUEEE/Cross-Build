@@ -1,0 +1,28 @@
+# Meson cross-file for building the ios-linuxkit engine for iOS/arm64.
+#
+# Derived from the recipe ios-linuxkit itself uses from Xcode
+# (app/xcode-meson.sh), with one deliberate difference: inside an Xcode build
+# SDKROOT is already set to the iPhoneOS SDK, so a bare `-arch arm64` targets
+# iOS. In a plain CI shell SDKROOT is unset and the same flags would silently
+# target macOS, so the sysroot is passed explicitly here. @IOS_SDK@ is replaced
+# by the workflow with `xcrun --sdk iphoneos --show-sdk-path`.
+#
+# jit is left off: the native/AOT backend needs a JIT entitlement a sideloaded
+# app does not have, and the threaded-code interpreter is the whole reason this
+# works on a stock device.
+
+[binaries]
+c = 'clang'
+ar = 'ar'
+
+[host_machine]
+system = 'darwin'
+cpu_family = 'aarch64'
+cpu = 'aarch64'
+endian = 'little'
+
+[built-in options]
+c_args = ['-arch', 'arm64', '-isysroot', '@IOS_SDK@', '-miphoneos-version-min=16.0']
+
+[properties]
+needs_exe_wrapper = true
