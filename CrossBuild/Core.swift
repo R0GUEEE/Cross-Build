@@ -406,7 +406,22 @@ final class WorkspaceModel: ObservableObject {
         console += "$ \(command)\nBackend: \(backend.name)\n"
         isExecuting = true
         executionStatus = "Running"
-        let result = await backend.execute(.init(command: command, workingDirectory: workingDirectory, environment: commandEnvironment()))
+        var environment = resolvedSettings?.forwardEnvironment == false ? [:] : commandEnvironment()
+        if environment["PATH"] == nil {
+            environment["PATH"] = "/var/jb/usr/bin:/var/jb/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        }
+        let configuredShell = resolvedSettings?.shellPath.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Auto"
+        let request = CommandRequest(
+            command: command,
+            workingDirectory: workingDirectory,
+            environment: environment,
+            shell: configuredShell == "Auto" || configuredShell.isEmpty ? nil : configuredShell,
+            loginShell: resolvedSettings?.shellLogin ?? false,
+            interactiveShell: resolvedSettings?.shellInteractive ?? false,
+            initCommand: resolvedSettings?.shellInitCommand.trimmingCharacters(in: .whitespacesAndNewlines),
+            timeout: resolvedSettings?.commandTimeout ?? 0
+        )
+        let result = await backend.execute(request)
         if !result.stdout.isEmpty { console += result.stdout + "\n" }
         if !result.stderr.isEmpty { console += "error: " + result.stderr + "\n" }
         lastExitCode = result.exitCode
