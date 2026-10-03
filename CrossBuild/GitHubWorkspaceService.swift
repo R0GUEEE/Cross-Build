@@ -49,7 +49,7 @@ final class GitHubWorkspaceService: ObservableObject {
     private let repositoriesKey = "crossbuild.github.repositories"
 
     var projectsDirectory: URL {
-        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
         return root.appendingPathComponent("Workspace", isDirectory: true)
     }
 
