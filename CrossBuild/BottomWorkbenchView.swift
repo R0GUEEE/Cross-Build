@@ -67,7 +67,7 @@ struct BottomWorkbenchView: View {
     private func runTerminal() {
         let command = terminalCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !command.isEmpty else { return }
-        workspace.runCommand(command, settings: workspace.appSettings)
+        workspace.runTerminalCommand(command, settings: workspace.appSettings)
         terminalCommand = ""
     }
 
