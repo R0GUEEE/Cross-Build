@@ -28,6 +28,9 @@ final class GitHubWorkspaceService: ObservableObject {
     @Published var isImporting = false
     @Published var status = ""
     @Published var errorMessage: String?
+    @Published var progress: Double = 0
+    @Published var progressStage = "Idle"
+    @Published var verboseLog: [String] = []
 
     let projectsFolderName = "Projects"
 
@@ -67,6 +70,54 @@ final class GitHubWorkspaceService: ObservableObject {
         repositories.insert(entry, at: 0)
         status = "Repository destination prepared at \(dest.lastPathComponent)"
         return entry
+    }
+
+    func cloneArchive(url: String, branch: String) async {
+        errorMessage = nil
+        verboseLog.removeAll()
+        progress = 0
+        isImporting = true
+        defer { isImporting = false }
+        do {
+            let parsed = try parse(url)
+            log("Parsed repository: \(parsed.owner)/\(parsed.name)")
+            progressStage = "Resolving repository"; progress = 0.08
+            let ref = branch.trimmingCharacters(in: .whitespacesAndNewlines)
+            let selectedRef = ref.isEmpty ? "HEAD" : ref
+            let archiveURL = URL(string: "https://github.com/\(parsed.owner)/\(parsed.name)/archive/\(selectedRef).zip")!
+            log("Archive: \(archiveURL.absoluteString)")
+            progressStage = "Downloading source archive"; progress = 0.15
+            let (temporaryURL, response) = try await URLSession.shared.download(from: archiveURL)
+            if let http = response as? HTTPURLResponse {
+                log("HTTP status: \(http.statusCode)")
+                guard (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
+            }
+            progress = 0.62
+            let dest = destination(owner: parsed.owner, name: parsed.name)
+            let fm = FileManager.default
+            if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest); log("Removed existing destination") }
+            try fm.createDirectory(at: dest, withIntermediateDirectories: true)
+            let zip = dest.appendingPathComponent("source.zip")
+            try fm.moveItem(at: temporaryURL, to: zip)
+            log("Downloaded archive: \(zip.lastPathComponent)")
+            progressStage = "Archive downloaded"; progress = 0.78
+            status = "Downloaded GitHub source archive. Extraction backend required to unpack source.zip."
+            log("Stored in app sandbox: \(dest.path)")
+            let entry = GitRepository(owner: parsed.owner, name: parsed.name, url: parsed.normalized,
+                                      branch: ref.isEmpty ? "default" : ref, localPath: dest.path)
+            repositories.removeAll { $0.owner == entry.owner && $0.name == entry.name }
+            repositories.insert(entry, at: 0)
+            progressStage = "Complete"; progress = 1
+        } catch {
+            errorMessage = error.localizedDescription
+            progressStage = "Failed"
+            log("ERROR: \(error.localizedDescription)")
+        }
+    }
+
+    private func log(_ message: String) {
+        verboseLog.append(message)
+        status = message
     }
 
     func remove(_ repository: GitRepository) {
