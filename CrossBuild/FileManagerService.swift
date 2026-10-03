@@ -10,103 +10,90 @@ struct WorkspaceFile: Identifiable, Hashable {
     var modified: Date
     var isFavorite: Bool
     var children: [WorkspaceFile]?
-
-    init(id: UUID = UUID(), name: String, path: String, isDirectory: Bool = false,
-         size: Int64 = 0, modified: Date = .now, isFavorite: Bool = false,
-         children: [WorkspaceFile]? = nil) {
-        self.id = id; self.name = name; self.path = path; self.isDirectory = isDirectory
-        self.size = size; self.modified = modified; self.isFavorite = isFavorite; self.children = children
+    init(id: UUID = UUID(), name: String, path: String, isDirectory: Bool = false, size: Int64 = 0,
+         modified: Date = .now, isFavorite: Bool = false, children: [WorkspaceFile]? = nil) {
+        self.id=id; self.name=name; self.path=path; self.isDirectory=isDirectory; self.size=size
+        self.modified=modified; self.isFavorite=isFavorite; self.children=children
     }
 }
 
 @MainActor
 final class FileManagerService: ObservableObject {
-    @Published var roots: [WorkspaceFile] = [
-        .init(name: "CrossBuild", path: "/CrossBuild", isDirectory: true, children: [
-            .init(name: "Sources", path: "/CrossBuild/Sources", isDirectory: true, children: [
-                .init(name: "main.swift", path: "/CrossBuild/Sources/main.swift", size: 128)
-            ]),
-            .init(name: "Makefile", path: "/CrossBuild/Makefile", size: 256),
-            .init(name: "control", path: "/CrossBuild/control", size: 180)
-        ])
-    ]
+    @Published var roots: [WorkspaceFile] = []
     @Published var selected: WorkspaceFile?
     @Published var recent: [WorkspaceFile] = []
     @Published var query = ""
+    @Published var errorMessage: String?
+    let workspaceRoot: URL
 
-    var flattened: [WorkspaceFile] {
-        func walk(_ files: [WorkspaceFile]) -> [WorkspaceFile] {
-            files.flatMap { [$0] + walk($0.children ?? []) }
-        }
-        return walk(roots)
+    init() {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        workspaceRoot = docs.appendingPathComponent("Workspace", isDirectory: true)
+        try? FileManager.default.createDirectory(at: workspaceRoot, withIntermediateDirectories: true)
+        reload()
     }
 
-    var searchResults: [WorkspaceFile] {
+    var flattened: [WorkspaceFile] {
+        func walk(_ f:[WorkspaceFile])->[WorkspaceFile] { f.flatMap { [$0] + walk($0.children ?? []) } }
+        return walk(roots)
+    }
+    var searchResults:[WorkspaceFile] {
         guard !query.isEmpty else { return [] }
         return flattened.filter { $0.name.localizedCaseInsensitiveContains(query) || $0.path.localizedCaseInsensitiveContains(query) }
     }
 
-    func open(_ file: WorkspaceFile) {
-        selected = file
-        guard !file.isDirectory else { return }
-        recent.removeAll { $0.id == file.id }
-        recent.insert(file, at: 0)
-        if recent.count > 20 { recent.removeLast(recent.count - 20) }
+    func reload(from root: URL? = nil) {
+        let base = root ?? workspaceRoot
+        roots = [node(for: base)]
     }
 
-    func createFile(named name: String, in parentPath: String = "/CrossBuild") {
-        insert(.init(name: name, path: parentPath + "/" + name), parentPath: parentPath)
+    func open(_ file: WorkspaceFile) { selected=file; guard !file.isDirectory else{return}; recent.removeAll{$0.path==file.path}; recent.insert(file,at:0); if recent.count>20{recent=Array(recent.prefix(20))} }
+    func contents(of file: WorkspaceFile) -> String? { guard !file.isDirectory else{return nil}; return try? String(contentsOfFile:file.path,encoding:.utf8) }
+    func save(_ text:String, to file:WorkspaceFile) throws { guard !file.isDirectory else{return}; try text.write(toFile:file.path,atomically:true,encoding:.utf8); reload() }
+
+    func createFile(named name:String, in parentPath:String?=nil) {
+        guard valid(name) else { errorMessage="Invalid file name."; return }
+        let parent=URL(fileURLWithPath:parentPath ?? workspaceRoot.path)
+        let url=parent.appendingPathComponent(name)
+        if !FileManager.default.createFile(atPath:url.path,contents:Data()) { errorMessage="Could not create \(name)." }
+        reload()
     }
-
-    func createFolder(named name: String, in parentPath: String = "/CrossBuild") {
-        insert(.init(name: name, path: parentPath + "/" + name, isDirectory: true, children: []), parentPath: parentPath)
+    func createFolder(named name:String, in parentPath:String?=nil) {
+        guard valid(name) else { errorMessage="Invalid folder name."; return }
+        do { try FileManager.default.createDirectory(at:URL(fileURLWithPath:parentPath ?? workspaceRoot.path).appendingPathComponent(name),withIntermediateDirectories:false); reload() }
+        catch { errorMessage=error.localizedDescription }
     }
-
-    func duplicate(_ file: WorkspaceFile) {
-        let ext = (file.name as NSString).pathExtension
-        let base = (file.name as NSString).deletingPathExtension
-        let copyName = base + " copy" + (ext.isEmpty ? "" : "." + ext)
-        var copy = file
-        copy = .init(name: copyName, path: (file.path as NSString).deletingLastPathComponent + "/" + copyName,
-                     isDirectory: file.isDirectory, size: file.size, children: file.children)
-        insert(copy, parentPath: (file.path as NSString).deletingLastPathComponent)
-    }
-
-    func delete(_ file: WorkspaceFile) { mutateTree { $0.removeAll { $0.id == file.id } } }
-
-    func toggleFavorite(_ file: WorkspaceFile) {
-        mutateTree { files in
-            for i in files.indices where files[i].id == file.id { files[i].isFavorite.toggle() }
+    func importFiles(_ urls:[URL], into parentPath:String?=nil) {
+        let parent=URL(fileURLWithPath:parentPath ?? workspaceRoot.path)
+        for source in urls {
+            let access=source.startAccessingSecurityScopedResource(); defer { if access { source.stopAccessingSecurityScopedResource() } }
+            do {
+                let dest=uniqueURL(parent.appendingPathComponent(source.lastPathComponent))
+                try FileManager.default.copyItem(at:source,to:dest)
+            } catch { errorMessage=error.localizedDescription }
         }
+        reload()
     }
+    func duplicate(_ file:WorkspaceFile) {
+        let src=URL(fileURLWithPath:file.path); let ext=src.pathExtension
+        let base=src.deletingPathExtension().lastPathComponent+" copy"+(ext.isEmpty ? "" : "."+ext)
+        do { try FileManager.default.copyItem(at:src,to:uniqueURL(src.deletingLastPathComponent().appendingPathComponent(base))); reload() }
+        catch { errorMessage=error.localizedDescription }
+    }
+    func delete(_ file:WorkspaceFile) { do { try FileManager.default.removeItem(atPath:file.path); if selected?.path==file.path{selected=nil}; reload() } catch { errorMessage=error.localizedDescription } }
+    func rename(_ file:WorkspaceFile,to newName:String) { guard valid(newName) else{return}; do { let src=URL(fileURLWithPath:file.path); try FileManager.default.moveItem(at:src,to:src.deletingLastPathComponent().appendingPathComponent(newName)); reload() } catch { errorMessage=error.localizedDescription } }
+    func toggleFavorite(_ file:WorkspaceFile) { /* favorites are session metadata until project metadata persistence lands */ }
 
-    func rename(_ file: WorkspaceFile, to newName: String) {
-        mutateTree { files in
-            for i in files.indices where files[i].id == file.id {
-                files[i].name = newName
-                files[i].path = (files[i].path as NSString).deletingLastPathComponent + "/" + newName
-            }
+    private func node(for url:URL)->WorkspaceFile {
+        var isDir:ObjCBool=false; FileManager.default.fileExists(atPath:url.path,isDirectory:&isDir)
+        let attrs=try? FileManager.default.attributesOfItem(atPath:url.path)
+        var children:[WorkspaceFile]?=nil
+        if isDir.boolValue {
+            let urls=(try? FileManager.default.contentsOfDirectory(at:url,includingPropertiesForKeys:nil,options:[.skipsHiddenFiles])) ?? []
+            children=urls.sorted{$0.lastPathComponent.localizedStandardCompare($1.lastPathComponent)==.orderedAscending}.map(node)
         }
+        return .init(name:url.lastPathComponent,path:url.path,isDirectory:isDir.boolValue,size:(attrs?[.size] as? NSNumber)?.int64Value ?? 0,modified:(attrs?[.modificationDate] as? Date) ?? .now,children:children)
     }
-
-    private func insert(_ file: WorkspaceFile, parentPath: String) {
-        func add(_ nodes: inout [WorkspaceFile]) -> Bool {
-            for i in nodes.indices {
-                if nodes[i].path == parentPath {
-                    nodes[i].children = (nodes[i].children ?? []) + [file]; return true
-                }
-                if nodes[i].children != nil, add(&nodes[i].children!) { return true }
-            }
-            return false
-        }
-        if !add(&roots) { roots.append(file) }
-    }
-
-    private func mutateTree(_ body: (inout [WorkspaceFile]) -> Void) {
-        func recurse(_ nodes: inout [WorkspaceFile]) {
-            body(&nodes)
-            for i in nodes.indices where nodes[i].children != nil { recurse(&nodes[i].children!) }
-        }
-        recurse(&roots)
-    }
+    private func valid(_ name:String)->Bool { !name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && !name.contains("/") }
+    private func uniqueURL(_ url:URL)->URL { var u=url; var n=2; while FileManager.default.fileExists(atPath:u.path){ let ext=url.pathExtension; let stem=url.deletingPathExtension().lastPathComponent; u=url.deletingLastPathComponent().appendingPathComponent("\(stem) \(n)"+(ext.isEmpty ? "" : "."+ext)); n+=1 }; return u }
 }
