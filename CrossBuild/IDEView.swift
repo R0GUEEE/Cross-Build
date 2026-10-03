@@ -2,6 +2,7 @@ import SwiftUI
 
 struct IDEView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
+    @ObservedObject var settings: AppSettings
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var showCompilerManager = false
     @State private var showGitHub = false
@@ -136,10 +137,10 @@ struct IDEView: View {
     private var editor: some View {
         ZStack(alignment: .topLeading) {
             TextEditor(text: $workspace.editorText)
-                .font(.system(size: sizeClass == .compact ? 14 : 15, design: .monospaced))
+                .font(.system(size: settings.editorFontSize, design: .monospaced))
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .padding(.leading, sizeClass == .compact ? 2 : 36)
-            if sizeClass != .compact {
+            if settings.showLineNumbers && sizeClass != .compact {
                 Text("1\n2\n3\n4\n5\n6\n7\n8\n9\n10")
                     .font(.system(size: 15, design: .monospaced))
                     .foregroundStyle(.tertiary).padding(.top, 8).padding(.leading, 8)
