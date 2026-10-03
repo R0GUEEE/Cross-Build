@@ -201,7 +201,7 @@ struct FullSetupView: View {
                      ? "Installs go through the active backend onto \(service.environment.backendName). Nothing is installed while the toggle is off — the plan still runs and reports."
                      : "Unavailable: no backend can spawn processes. See Environment above.")
                     .font(.caption)
-                Text("Toolchains are large: on Alpine, clang pulls in roughly 1 GB and zig about 1.4 GB of packages. Confirm there is enough free space before installing them all.")
+                Text("Toolchains are large — installing a compiler typically pulls in hundreds of megabytes, and the bigger ones well over a gigabyte with their dependencies. Confirm there is enough free space before installing them all.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

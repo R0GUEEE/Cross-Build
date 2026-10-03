@@ -11,6 +11,9 @@ struct SettingsView: View {
                     NavigationLink("Full Setup") {
                         FullSetupView(settings: settings).environmentObject(workspace)
                     }
+                    NavigationLink("Bundled with the app") {
+                        BundledResourcesView().environmentObject(workspace)
+                    }
                     NavigationLink("App Configuration") {
                         AppConfigurationView(settings: settings)
                     }
