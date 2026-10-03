@@ -305,12 +305,12 @@ final class WorkspaceModel: ObservableObject {
     func cleanCommand() -> String {
         if let custom = activeCompiler, !custom.cleanCommand.isEmpty { return appendActionArguments(custom.cleanCommand, configuration.cleanArguments) }
         switch selectedToolchain {
-        case .theos, .custom, .clang: return "make clean"
-        case .swift: return "swift package clean"
-        case .rust: return "cargo clean"
-        case .go: return "go clean"
-        case .zig: return "rm -rf .zig-cache zig-cache zig-out"
-        case .python: return "find . -name __pycache__ -type d -prune -exec rm -rf {} +"
+        case .theos, .custom, .clang: return appendActionArguments("make clean", configuration.cleanArguments)
+        case .swift: return appendActionArguments("swift package clean", configuration.cleanArguments)
+        case .rust: return appendActionArguments("cargo clean", configuration.cleanArguments)
+        case .go: return appendActionArguments("go clean", configuration.cleanArguments)
+        case .zig: return appendActionArguments("rm -rf .zig-cache zig-cache zig-out", configuration.cleanArguments)
+        case .python: return appendActionArguments("find . -name __pycache__ -type d -prune -exec rm -rf {} +", configuration.cleanArguments)
         case .javascript: return appendActionArguments("npm run clean", configuration.cleanArguments)
         }
     }
@@ -426,6 +426,12 @@ final class WorkspaceModel: ObservableObject {
         var cFlags: [String] = []
         let compilerFlags = compilerConfiguration.compilerFlags.trimmingCharacters(in: .whitespacesAndNewlines)
         if !compilerFlags.isEmpty { cFlags.append(compilerFlags) }
+        if compilerConfiguration.languageStandard != "Default" { cFlags.append("-std=\(compilerConfiguration.languageStandard)") }
+        if compilerConfiguration.cppStandard != "Default" { environment["CXXFLAGS"] = "-std=\(compilerConfiguration.cppStandard)" }
+        if compilerConfiguration.positionIndependentCode { cFlags.append("-fPIC") }
+        if compilerConfiguration.clangModules { cFlags.append("-fmodules") }
+        if !compilerConfiguration.objcARC { cFlags.append("-fno-objc-arc") }
+        if compilerConfiguration.linkTimeOptimization { cFlags.append("-flto") }
         let defines = compilerConfiguration.defines
             .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "," })
             .map(String.init)
@@ -435,6 +441,15 @@ final class WorkspaceModel: ObservableObject {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         cFlags.append(contentsOf: includes.map { "-I\($0)" })
+        let systemIncludes = compilerConfiguration.systemIncludePaths
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        cFlags.append(contentsOf: systemIncludes.map { "-isystem \($0)" })
+        let undefines = compilerConfiguration.undefines
+            .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "," })
+            .map(String.init)
+        cFlags.append(contentsOf: undefines.map { "-U\($0)" })
         switch compilerConfiguration.optimization {
         case "Release": cFlags.append("-O2")
         case "Size": cFlags.append("-Oz")
@@ -451,6 +466,15 @@ final class WorkspaceModel: ObservableObject {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         ldFlags.append(contentsOf: libraryPaths.map { "-L\($0)" })
+        let frameworkPaths = compilerConfiguration.frameworkSearchPaths
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        ldFlags.append(contentsOf: frameworkPaths.map { "-F\($0)" })
+        let libraries = compilerConfiguration.libraries
+            .split(whereSeparator: { $0 == "," || $0 == "\n" || $0 == " " })
+            .map(String.init)
+        ldFlags.append(contentsOf: libraries.map { "-l\($0)" })
         let frameworks = compilerConfiguration.frameworks
             .split(whereSeparator: { $0 == "," || $0 == "\n" })
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -461,6 +485,20 @@ final class WorkspaceModel: ObservableObject {
 
         let entitlements = compilerConfiguration.entitlementsPath.trimmingCharacters(in: .whitespacesAndNewlines)
         if !entitlements.isEmpty { environment["CROSSBUILD_ENTITLEMENTS"] = entitlements }
+        if !compilerConfiguration.targetTriple.isEmpty { environment["CROSSBUILD_TARGET_TRIPLE"] = compilerConfiguration.targetTriple }
+        if !compilerConfiguration.swiftFlags.isEmpty { environment["SWIFTFLAGS"] = compilerConfiguration.swiftFlags }
+        if !compilerConfiguration.rustFlags.isEmpty { environment["RUSTFLAGS"] = compilerConfiguration.rustFlags }
+        if !compilerConfiguration.goFlags.isEmpty { environment["GOFLAGS"] = compilerConfiguration.goFlags }
+        if !compilerConfiguration.zigFlags.isEmpty { environment["ZIGFLAGS"] = compilerConfiguration.zigFlags }
+        if !compilerConfiguration.theosMakeFlags.isEmpty { environment["CROSSBUILD_THEOS_MAKE_FLAGS"] = compilerConfiguration.theosMakeFlags }
+        if !compilerConfiguration.packageName.isEmpty { environment["CROSSBUILD_PACKAGE_NAME"] = compilerConfiguration.packageName }
+        if !compilerConfiguration.packageIdentifier.isEmpty { environment["CROSSBUILD_PACKAGE_ID"] = compilerConfiguration.packageIdentifier }
+        if !compilerConfiguration.packageVersion.isEmpty { environment["CROSSBUILD_PACKAGE_VERSION"] = compilerConfiguration.packageVersion }
+        if !compilerConfiguration.packageArchitecture.isEmpty { environment["CROSSBUILD_PACKAGE_ARCH"] = compilerConfiguration.packageArchitecture }
+        if !compilerConfiguration.packageDepends.isEmpty { environment["CROSSBUILD_PACKAGE_DEPENDS"] = compilerConfiguration.packageDepends }
+        if !compilerConfiguration.bundleIdentifier.isEmpty { environment["PRODUCT_BUNDLE_IDENTIFIER"] = compilerConfiguration.bundleIdentifier }
+        if !compilerConfiguration.signingIdentity.isEmpty { environment["CROSSBUILD_SIGNING_IDENTITY"] = compilerConfiguration.signingIdentity }
+        if !compilerConfiguration.provisioningProfile.isEmpty { environment["CROSSBUILD_PROVISIONING_PROFILE"] = compilerConfiguration.provisioningProfile }
         return environment
     }
 
