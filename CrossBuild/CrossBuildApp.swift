@@ -20,7 +20,7 @@ struct RootView: View {
 
     var body: some View {
         TabView(selection: $section) {
-            IDEView()
+            IDEView(settings: settings)
                 .tabItem { Label("Workspace", systemImage: AppSection.workspace.icon) }
                 .tag(AppSection.workspace)
 
