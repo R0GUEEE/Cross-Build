@@ -9,7 +9,7 @@
 # jit stays off: the native/AOT backend needs an entitlement a sideload lacks, and
 # the threaded-code interpreter is the whole reason this works on a stock device.
 #
-# The three extra flags are not optional, and each was arrived at from a real
+# The two -D flags below are not optional, and both were arrived at from a real
 # compile failure rather than guessed:
 #
 #   _XOPEN_SOURCE      the iPhoneOS SDK's ucontext.h refuses to declare the
@@ -19,10 +19,13 @@
 #                      auto-enabling the full C level, which hides DT_REG/DT_DIR,
 #                      fstatat/unlinkat/linkat and makedev/major/minor. Passing
 #                      both keeps those visible while satisfying ucontext.h.
-#   dispatch.h         platform/darwin.c uses dispatch_once, and the strict C level
-#                      above stops a system header from pulling libdispatch in
-#                      transitively, so it is force-included. The symbol itself
-#                      resolves at link time against the SDK's libdispatch.
+#
+# Deliberately NOT done here: force-including <dispatch/dispatch.h> for
+# platform/darwin.c. Meson applies `c_args` to assembly compilations as well, and
+# the asbestos gadgets are .S files -- a force-included C header fed to the
+# assembler produces "unrecognized instruction mnemonic" across the gadget sources.
+# The workflow prepends that include to platform/darwin.c instead, which keeps it
+# scoped to the one translation unit that needs it.
 
 [binaries]
 c = 'clang'
@@ -36,8 +39,7 @@ endian = 'little'
 
 [built-in options]
 c_args = ['-arch', 'arm64', '-isysroot', '@IOS_SDK@', '-miphoneos-version-min=16.0',
-          '-D_XOPEN_SOURCE=600', '-D_DARWIN_C_SOURCE',
-          '-include', 'dispatch/dispatch.h']
+          '-D_XOPEN_SOURCE=600', '-D_DARWIN_C_SOURCE']
 
 [properties]
 needs_exe_wrapper = true

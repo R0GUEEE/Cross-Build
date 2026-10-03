@@ -32,6 +32,20 @@ jobs:
           git submodule update --init --recursive --depth 1 || echo "::warning::submodule init failed; continuing"
           git rev-parse HEAD
 
+      - name: Patch platform/darwin.c for libdispatch
+        run: |
+          set -euo pipefail
+          cd Vendor/linuxkit
+          # platform/darwin.c calls dispatch_once but relies on a system header
+          # bringing libdispatch in transitively, which stops happening once the
+          # strict C level is set. Adding the include to this one file is the
+          # narrow fix; passing it as a global -include also reaches the .S
+          # gadget sources and breaks the assembler.
+          printf '#include <dispatch/dispatch.h>\n' > /tmp/darwin.c
+          cat platform/darwin.c >> /tmp/darwin.c
+          mv /tmp/darwin.c platform/darwin.c
+          head -3 platform/darwin.c
+
       - name: Cross-compile engine for iOS arm64
         run: |
           set -euo pipefail
