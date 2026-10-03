@@ -50,6 +50,7 @@ jobs:
       - name: Build iOS Linux engine
         run: |
           set -euo pipefail
+          brew install meson ninja
           # The engine is a Meson project, so it is built here rather than inside
           # the app target. Pinned to the release the embedded-Linux work was
           # validated against; see .github/workflows/linuxkit-engine.yml.
