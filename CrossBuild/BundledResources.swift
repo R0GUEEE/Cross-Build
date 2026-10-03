@@ -62,7 +62,7 @@ enum BundledResources {
             id: "python3",
             name: "Python 3",
             detail: pythonStdlibPresent
-                ? "Embedded CPython interpreter and standard library. Runs fully in-process — no helper, no host. Compiled extension modules in lib-dynload are loaded with dlopen, which iOS restricts to signed code inside the app bundle."
+                ? "Embedded CPython interpreter and standard library. Runs fully in-process — no helper, no host. Compiled extension modules (math, ssl, …) load with dlopen from lib-dynload, which works on a signed install; run the self-test below to confirm on your build."
                 : "Interpreter is linked but the standard library was not found in the bundle.",
             location: "Python.framework + python/ stdlib",
             present: pythonEngine.isLinked && pythonStdlibPresent,

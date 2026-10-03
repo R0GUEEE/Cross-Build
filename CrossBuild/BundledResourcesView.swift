@@ -8,6 +8,8 @@ struct BundledResourcesView: View {
     @State private var exportedHelper: URL?
     @State private var exportError: String?
     @State private var items: [BundledResource] = []
+    @State private var pythonSelfTestOutput: String?
+    @State private var isRunningSelfTest = false
 
     var body: some View {
         Form {
@@ -86,9 +88,49 @@ struct BundledResourcesView: View {
                 Text("Listed so the app never implies it ships something it cannot. These run on a build host or jailbroken device through the helper.")
                     .font(.caption)
             }
+
+            Section {
+                Button {
+                    runPythonSelfTest()
+                } label: {
+                    if isRunningSelfTest {
+                        ProgressView()
+                    } else {
+                        Label("Run Python self-test", systemImage: "checklist")
+                    }
+                }
+                .disabled(isRunningSelfTest)
+                if let pythonSelfTestOutput {
+                    Text(pythonSelfTestOutput)
+                        .font(.system(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+            } header: {
+                Text("Verify the embedded interpreter")
+            } footer: {
+                Text("Runs a real probe inside the embedded interpreter and reports which modules import. Compiled extensions (math, ssl, sqlite3, …) load with dlopen, so this is the quickest way to confirm they are working on your install rather than assuming.")
+                    .font(.caption)
+            }
         }
         .navigationTitle("Bundled with the app")
         .onAppear { items = BundledResources.inventory() }
+    }
+
+    private func runPythonSelfTest() {
+        isRunningSelfTest = true
+        pythonSelfTestOutput = "Running…"
+        Task {
+            let result = await workspace.embeddedToolchains.run(id: "python3", source: PythonSelfTest.script)
+            var text = result.output
+            if !result.diagnostics.isEmpty {
+                text += (text.isEmpty ? "" : "\n") + result.diagnostics.joined(separator: "\n")
+            }
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                text = result.succeeded ? "Ran, but produced no output." : "Did not run."
+            }
+            pythonSelfTestOutput = text
+            isRunningSelfTest = false
+        }
     }
 
     private func exportHelper() {
