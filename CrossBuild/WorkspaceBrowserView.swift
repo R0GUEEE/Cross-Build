@@ -43,7 +43,7 @@ struct WorkspaceBrowserView: View {
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result {
-                for url in urls { files.createFile(named: url.lastPathComponent) }
+                files.importFiles(urls)
             }
         }
         .alert("New File", isPresented: $showNewFile) {
@@ -80,7 +80,6 @@ struct WorkspaceBrowserView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button(file.isFavorite ? "Remove Favorite" : "Favorite", systemImage: "star") { files.toggleFavorite(file) }
             Button("Duplicate", systemImage: "plus.square.on.square") { files.duplicate(file) }
             Button("Delete", systemImage: "trash", role: .destructive) { files.delete(file) }
         }
