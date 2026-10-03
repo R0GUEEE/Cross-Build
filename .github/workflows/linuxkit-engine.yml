@@ -59,24 +59,41 @@ jobs:
             --buildtype=release
           meson compile -C build-ios
 
+      - name: Cross-compile AOT candidate engine for iOS arm64
+        run: |
+          set -euo pipefail
+          cd Vendor/linuxkit
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          sed "s|@IOS_SDK@|$SDK|" "$GITHUB_WORKSPACE/Tools/linuxkit-cross-ios.txt" > cross-ios-aot.txt
+
+          # This is the isolated Apple AOT backend configuration described by
+          # ios-linuxkit. Runtime native-code emission is compile-time disabled.
+          # AOT images are intentionally linked in a later stage because their
+          # Mach-O assembly is ABI/hash-bound to the exact bootstrap app.
+          meson setup build-ios-aot --cross-file cross-ios-aot.txt             -Dguest_arch=arm64 -Djit=true -Djit_emit=false -Dcli_aot=             --buildtype=release
+          meson compile -C build-ios-aot
+
       - name: Inspect produced libraries
         run: |
           set -euo pipefail
-          cd Vendor/linuxkit/build-ios
-          echo "=== static libraries ==="
-          find . -name '*.a' -exec ls -la {} \;
-          echo
-          echo "=== arch check (must be arm64 iOS, not macOS) ==="
-          for lib in $(find . -name '*.a'); do
-            echo "--- $lib"
-            lipo -info "$lib" || true
-            file "$lib" | head -1
-            otool -l "$lib" 2>/dev/null | grep -A3 LC_BUILD_VERSION | head -8 || true
+          cd Vendor/linuxkit
+          for build in build-ios build-ios-aot; do
+            echo "=== $build static libraries ==="
+            find "$build" -name '*.a' -exec ls -la {} \;
+            echo "=== $build arch check (must be arm64 iOS, not macOS) ==="
+            for lib in $(find "$build" -name '*.a'); do
+              echo "--- $lib"
+              lipo -info "$lib" || true
+              file "$lib" | head -1
+              otool -l "$lib" 2>/dev/null | grep -A3 LC_BUILD_VERSION | head -8 || true
+            done
           done
 
       - name: Upload engine libraries
         uses: actions/upload-artifact@v4
         with:
           name: linuxkit-engine-ios
-          path: Vendor/linuxkit/build-ios/**/*.a
+          path: |
+            Vendor/linuxkit/build-ios/**/*.a
+            Vendor/linuxkit/build-ios-aot/**/*.a
           if-no-files-found: error
