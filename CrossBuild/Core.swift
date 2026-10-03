@@ -347,44 +347,58 @@ final class WorkspaceModel: ObservableObject {
     func updateEditorText(_ text: String) {
         editorText = text
         editor.updateText(text)
-        guard appSettings?.autosave == true || configuration.autosave else { return }
+        guard appSettings?.autosave == true || configuration.autosave,
+              let documentID = editor.selectedID else { return }
+
         autosaveTask?.cancel()
+        let snapshot = text
         autosaveTask = Task {
             try? await Task.sleep(nanoseconds: 700_000_000)
             guard !Task.isCancelled else { return }
-            saveEditor()
+            saveDocument(id: documentID, text: snapshot, report: false)
         }
     }
 
     func closeDocument(_ id: UUID) {
+        autosaveTask?.cancel()
         editor.close(id)
         editorText = editor.selected?.text ?? ""
+        persistOpenDocuments()
     }
 
     func saveEditor() {
-        guard let doc = editor.selected else { return }
-        var textToSave = editorText
+        autosaveTask?.cancel()
+        guard let id = editor.selectedID else { return }
+        saveDocument(id: id, text: editorText, report: true)
+    }
+
+    private func saveDocument(id: UUID, text: String, report: Bool) {
+        guard let doc = editor.document(id) else { return }
+        let textToSave = normalizedEditorText(text)
+        let file = WorkspaceFile(name: doc.name, path: doc.path)
+
+        do {
+            try files.save(textToSave, to: file)
+            editor.markSaved(id, text: textToSave)
+            if editor.selectedID == id { editorText = textToSave }
+            if report { console += "Saved \(doc.name)\n" }
+        } catch {
+            console += "Save failed: \(error.localizedDescription)\n"
+        }
+    }
+
+    private func normalizedEditorText(_ text: String) -> String {
+        var result = text.replacingOccurrences(of: "\r\n", with: "\n")
         if appSettings?.trimWhitespace == true {
-            textToSave = textToSave
+            result = result
                 .components(separatedBy: "\n")
                 .map { $0.replacingOccurrences(of: #"[ \t]+$"#, with: "", options: .regularExpression) }
                 .joined(separator: "\n")
         }
         if configuration.lineEndings == "CRLF" {
-            textToSave = textToSave.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "\r\n")
+            result = result.replacingOccurrences(of: "\n", with: "\r\n")
         }
-        let file = WorkspaceFile(name: doc.name, path: doc.path)
-        do {
-            try files.save(textToSave, to: file)
-            if textToSave != editorText {
-                editorText = textToSave
-                editor.updateText(textToSave)
-            }
-            editor.markSaved()
-            console += "Saved \(doc.name)\n"
-        } catch {
-            console += "Save failed: \(error.localizedDescription)\n"
-        }
+        return result
     }
 
     func addCompiler(_ compiler: CustomCompiler) {
