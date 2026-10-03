@@ -132,21 +132,21 @@ jobs:
 
           # The guest's emulated network stack does not resolve DNS, so apk fails
           # with "DNS: transient error" even though the host has working egress.
-          # Resolve on the host and point apk at the IP directly. The Host header
-          # still carries the original name, so the CDN serves the right content.
-          MIRROR="https://dl-cdn.alpinelinux.org"
-          HOSTNAME_ONLY="${MIRROR#https://}"
-          IP="$(python3 -c "import socket,sys; print(socket.gethostbyname(sys.argv[1]))" "$HOSTNAME_ONLY")"
-          echo "mirror $HOSTNAME_ONLY -> $IP"
+          # Resolve on the host and give the guest the address directly; TLS still
+          # carries the original hostname, so the CDN serves the right content.
+          #
+          # Only /etc/hosts is touched. The image's own /etc/apk/repositories
+          # already lists the correct URLs (they are used to fetch 28k package
+          # entries), and appending to it just adds 404-ing duplicates.
+          MIRROR_HOST="dl-cdn.alpinelinux.org"
+          IP="$(python3 -c "import socket,sys; print(socket.gethostbyname(sys.argv[1]))" "$MIRROR_HOST")"
+          echo "mirror $MIRROR_HOST -> $IP"
           test -n "$IP" || { echo "::error::could not resolve the Alpine mirror"; exit 1; }
-          for repo in main community; do
-            ./build-host/ish -f "$ROOT" /bin/sh -c "printf '%s\n' '$MIRROR/$repo' >> /etc/apk/repositories" >/dev/null 2>&1 || true
-          done
-          ./build-host/ish -f "$ROOT" /bin/sh -c "echo '$IP $HOSTNAME_ONLY' >> /etc/hosts" >/dev/null 2>&1 || true
+          ./build-host/ish -f "$ROOT" /bin/sh -c "echo '$IP $MIRROR_HOST' >> /etc/hosts" >/dev/null 2>&1 || true
           # Kept non-fatal on purpose: if the emulated apk run fails or is slow, the
           # app should still build and the root still boots -- just without the
           # extras. The verification below reports what actually landed.
-          ./build-host/ish -f "$ROOT" /bin/sh -c "apk update && apk add --no-cache $PACKAGES" \
+          ./build-host/ish -f "$ROOT" /bin/sh -c "apk update >/dev/null && apk add --no-cache $PACKAGES" \
             || echo "::warning::apk provisioning did not complete; see the output above"
 
           echo "=== what landed in the root ==="
