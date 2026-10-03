@@ -27,7 +27,7 @@ struct GitHubCloneView: View {
                     Toggle("Shallow clone", isOn: $shallow)
                 }
                 Section("Storage") {
-                    LabeledContent("Location", value: "Documents/Projects")
+                    LabeledContent("Location", value: "Documents/Workspace")
                     Text(github.projectsDirectory.path).font(.system(.caption2, design: .monospaced))
                         .foregroundStyle(.secondary).textSelection(.enabled)
                 }
@@ -80,12 +80,8 @@ struct GitHubCloneView: View {
             case .archive, .automatic:
                 await github.cloneArchive(url: repositoryURL, branch: branch)
             case .git:
-                do {
-                    let repo = try github.registerImportedRepository(url: repositoryURL, branch: branch)
-                    github.errorMessage = "Local git execution is not available through the sideload backend yet. Use Archive Import; destination: \(repo.localPath)"
-                } catch {
-                    github.errorMessage = error.localizedDescription
-                }
+                github.status = "Local Git is unavailable in the sideload backend; falling back to Archive Import."
+                await github.cloneArchive(url: repositoryURL, branch: branch)
             }
         }
     }
