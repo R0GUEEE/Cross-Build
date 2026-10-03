@@ -180,7 +180,59 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func runBuild(settings: AppSettings? = nil) {
-        runCommand(buildCommand(), settings: settings)
+        let resolved = settings ?? appSettings
+        Task {
+            if resolved?.clearDiagnosticsOnBuild == true {
+                console = "Build started.\n"
+            }
+
+            if resolved?.cleanBeforeBuild == true {
+                let cleaned = await executeCommand(cleanCommand(), settings: resolved)
+                guard cleaned.succeeded else { return }
+            }
+
+            let command = configuredBuildCommand(settings: resolved)
+            _ = await executeCommand(command, settings: resolved)
+        }
+    }
+
+    private func configuredBuildCommand(settings: AppSettings?) -> String {
+        var command = buildCommand()
+        guard let settings else { return command }
+
+        if settings.parallelBuilds {
+            let jobs = max(1, settings.buildJobs)
+            if command.hasPrefix("make") {
+                command += " -j\(jobs)"
+            } else if command.hasPrefix("swift build") {
+                command += " -j \(jobs)"
+            } else if command.hasPrefix("cargo build") {
+                command += " -j \(jobs)"
+            } else if command.hasPrefix("go build") {
+                command += " -p \(jobs)"
+            } else if command.hasPrefix("zig build") {
+                command += " -j\(jobs)"
+            }
+        }
+
+        if settings.verboseBuild {
+            if command.hasPrefix("make") {
+                command += " messages=yes"
+            } else if command.hasPrefix("swift build") || command.hasPrefix("cargo build") {
+                command += " -v"
+            } else if command.hasPrefix("go build") {
+                command += " -x"
+            }
+        }
+
+        if settings.warningsAsErrors {
+            if command.hasPrefix("swift build") {
+                command += " -Xswiftc -warnings-as-errors"
+            } else if command.hasPrefix("cargo build") {
+                command = "RUSTFLAGS=\"-D warnings\" " + command
+            }
+        }
+        return command
     }
 
     func buildCommand() -> String {
