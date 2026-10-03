@@ -73,18 +73,13 @@ final class WorkspaceModel: ObservableObject {
     ]
 
     func detectSampleProject() {
-        let makefile = """
-        ARCHS = arm64 arm64e
-        THEOS_PACKAGE_SCHEME = rootless
-        include $(THEOS)/makefiles/common.mk
-        TWEAK_NAME = CrossBuildDemo
-        include $(THEOS_MAKE_PATH)/tweak.mk
-        """
-        let projectPaths = files.flattened.map(\.path) + ["CrossBuildDemo.xm"]
-        let result = ProjectDetector.analyze(
-            paths: projectPaths,
-            fileContents: ["Makefile": makefile, "control": "Architecture: iphoneos-arm64"]
-        )
+        let projectPaths = files.flattened.map(\.path)
+        var contents: [String:String] = [:]
+        for file in files.flattened where !file.isDirectory {
+            if ["Makefile","control","Package.swift","Cargo.toml","go.mod","build.zig","CMakeLists.txt","meson.build","package.json","pyproject.toml"].contains(file.name),
+               let text = files.contents(of: file) { contents[file.name] = text }
+        }
+        let result = ProjectDetector.analyze(paths: projectPaths, fileContents: contents)
         analysis = result
         selectedToolchain = result.primaryToolchain
         console += "Auto-detect: \(result.primaryToolchain.rawValue) [\(Int(result.confidence * 100))%]\n"
@@ -99,8 +94,20 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func runBuild() {
-        let provider = ToolchainRegistry.providers.first { $0.kind == selectedToolchain }
-        console += "$ \(provider?.buildCommands.first ?? "build")\nBuild queued through \(selectedToolchain.rawValue).\n"
+        let command = activeCompiler?.buildCommand ?? ToolchainRegistry.providers.first { $0.kind == selectedToolchain }?.buildCommands.first ?? "build"
+        console += "$ \(command)\n"
+        console += "Execution backend is not configured for this runtime; command was not executed.\n"
+    }
+
+    func openSelectedFile() {
+        guard let file = files.selected, let text = files.contents(of: file) else { return }
+        editorText = text
+    }
+
+    func saveEditor() {
+        guard let file = files.selected else { return }
+        do { try files.save(editorText, to: file); console += "Saved \(file.name)\n" }
+        catch { console += "Save failed: \(error.localizedDescription)\n" }
     }
 
     func addCompiler(_ compiler: CustomCompiler) {
