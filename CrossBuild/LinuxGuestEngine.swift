@@ -67,12 +67,44 @@ enum LinuxGuestEngine {
         #endif
     }
 
-    /// Where the fakefs root would live. The image itself still has to be built
-    /// from the Alpine minirootfs before the guest has anything to boot from.
-    static var defaultRootPath: String? {
-        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
-            return nil
+    enum GuestError: LocalizedError {
+        case rootNotBundled
+        var errorDescription: String? {
+            switch self {
+            case .rootNotBundled:
+                return "The Linux rootfs image is not present in this build."
+            }
         }
-        return documents.appendingPathComponent("CrossBuild/linux-fakefs", isDirectory: true).path
+    }
+
+    /// Path of the rootfs image shipped inside the app bundle.
+    static var bundledRootPath: String? {
+        guard let url = Bundle.main.resourceURL?
+            .appendingPathComponent("fakefs-root", isDirectory: true) else { return nil }
+        return FileManager.default.fileExists(atPath: url.path) ? url.path : nil
+    }
+
+    static var isRootBundled: Bool { bundledRootPath != nil }
+
+    /// The guest needs a *writable* root — `apk add` and ordinary file writes are
+    /// the point — but the copy inside the app bundle is read-only. So the
+    /// bundled image is copied into the app's Documents the first time the guest
+    /// is used, and the guest boots from that copy.
+    static func prepareWritableRoot() throws -> String {
+        guard let bundled = bundledRootPath else { throw GuestError.rootNotBundled }
+        let fm = FileManager.default
+        guard let documents = fm.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            throw GuestError.rootNotBundled
+        }
+        let destination = documents.appendingPathComponent("CrossBuild/linux-root", isDirectory: true)
+        if fm.fileExists(atPath: destination.path) { return destination.path }
+        try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.copyItem(atPath: bundled, toPath: destination.path)
+        return destination.path
+    }
+
+    /// Where the guest should boot from: the writable copy, created on first use.
+    static var defaultRootPath: String? {
+        try? prepareWritableRoot()
     }
 }

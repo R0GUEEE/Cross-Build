@@ -46,6 +46,12 @@ targets:
       - path: Vendor/Python/stdlib/app
         type: folder
         buildPhase: resources
+      # The Alpine minirootfs, converted to the SQLite-backed fakefs image the
+      # Linux guest boots from (see the "Build Linux rootfs" CI step). The guest
+      # needs no host filesystem access because the whole root is in this image.
+      - path: Vendor/linuxkit/fakefs-root
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: ZIPFoundation
       - target: CrossBuildClang

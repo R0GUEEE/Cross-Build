@@ -74,6 +74,29 @@ jobs:
           meson compile -C build-ios
           ls -la build-ios/*.a
 
+      - name: Build Linux rootfs (fakefs image)
+        run: |
+          set -euo pipefail
+          brew install libarchive
+          cd Vendor/linuxkit
+          # fakefsify turns the Alpine minirootfs into the SQLite-backed fakefs
+          # image the guest boots from. It is a HOST tool: a cross-built copy would
+          # be an iOS binary the runner cannot execute, so it is built natively.
+          meson setup build-host --buildtype=release -Dguest_arch=arm64
+          meson compile -C build-host fakefsify
+          ./build-host/tools/fakefsify --help >/dev/null 2>&1 || true
+          test -x ./build-host/tools/fakefsify || { echo "::error::fakefsify was not built"; exit 1; }
+
+          ROOTFS=alpine-minirootfs-3.24.2-aarch64.tar.gz
+          curl -fsSL -o "$ROOTFS" "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/aarch64/${ROOTFS}"
+          echo "9bf70a7f18ea44094cbb5f70c58f9af129c8214745743db0e68e5502cc2ce773  ${ROOTFS}" | shasum -a 256 -c -
+
+          rm -rf "$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root"
+          ./build-host/tools/fakefsify "$ROOTFS" "$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root"
+          test -d "$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root" || { echo "::error::fakefs image was not produced"; exit 1; }
+          du -sh "$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root"
+          find "$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root" -maxdepth 1 | head
+
       - name: Generate project
         env:
           CROSSBUILD_BUILD_NUMBER: ${{ github.run_number }}
@@ -94,6 +117,7 @@ jobs:
           test -f "$APP/Toolchains/LLVM/manifest.json" || fail "Toolchains/LLVM/manifest.json is missing from the app bundle"
           test -f "$APP/Info.plist" || fail "Info.plist is missing from the app bundle"
           test -f "$APP/python/lib/python3.13/os.py" || fail "Python standard library is missing from the app bundle"
+          test -d "$APP/fakefs-root" || fail "Linux rootfs (fakefs-root) is missing from the app bundle"
           test -d "$APP/app" || fail "Python PYTHONPATH 'app' folder is missing from the app bundle"
           test -d "$APP/Frameworks/Python.framework" || fail "Python.framework was not embedded"
           test -f "$APP/Frameworks/Python.framework/Info.plist" || fail "embedded Python.framework has no Info.plist"
