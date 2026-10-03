@@ -68,6 +68,7 @@ final class WorkspaceModel: ObservableObject {
     @Published var executionStatus = "Idle"
     @Published var generatedConfigurationSummary: [String] = []
     weak var appSettings: AppSettings?
+    private var autosaveTask: Task<Void, Never>?
     let files = FileManagerService()
     let github = GitHubWorkspaceService()
     let configuration = WorkspaceConfiguration()
@@ -251,13 +252,44 @@ final class WorkspaceModel: ObservableObject {
     func updateEditorText(_ text: String) {
         editorText = text
         editor.updateText(text)
+        guard appSettings?.autosave == true || configuration.autosave else { return }
+        autosaveTask?.cancel()
+        autosaveTask = Task {
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard !Task.isCancelled else { return }
+            saveEditor()
+        }
+    }
+
+    func closeDocument(_ id: UUID) {
+        editor.close(id)
+        editorText = editor.selected?.text ?? ""
     }
 
     func saveEditor() {
         guard let doc = editor.selected else { return }
+        var textToSave = editorText
+        if appSettings?.trimWhitespace == true {
+            textToSave = textToSave
+                .components(separatedBy: "\n")
+                .map { $0.replacingOccurrences(of: #"[ \t]+$"#, with: "", options: .regularExpression) }
+                .joined(separator: "\n")
+        }
+        if configuration.lineEndings == "CRLF" {
+            textToSave = textToSave.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "\r\n")
+        }
         let file = WorkspaceFile(name: doc.name, path: doc.path)
-        do { try files.save(editorText, to: file); editor.markSaved(); console += "Saved \(doc.name)\n" }
-        catch { console += "Save failed: \(error.localizedDescription)\n" }
+        do {
+            try files.save(textToSave, to: file)
+            if textToSave != editorText {
+                editorText = textToSave
+                editor.updateText(textToSave)
+            }
+            editor.markSaved()
+            console += "Saved \(doc.name)\n"
+        } catch {
+            console += "Save failed: \(error.localizedDescription)\n"
+        }
     }
 
     func addCompiler(_ compiler: CustomCompiler) {
