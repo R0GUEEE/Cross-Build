@@ -82,7 +82,12 @@ jobs:
           # fakefsify turns the Alpine minirootfs into the SQLite-backed fakefs
           # image the guest boots from. It is a HOST tool: a cross-built copy would
           # be an iOS binary the runner cannot execute, so it is built natively.
-          meson setup build-host --buildtype=release -Dguest_arch=arm64
+          # The native host build hits the same macOS SDK ucontext.h requirement
+          # the iOS cross build does, so the same paired defines are needed. They
+          # are passed here rather than in the cross-file because this setup does
+          # not use one.
+          meson setup build-host --buildtype=release -Dguest_arch=arm64 \
+            -Dc_args='-D_XOPEN_SOURCE=600 -D_DARWIN_C_SOURCE'
           meson compile -C build-host fakefsify
           ./build-host/tools/fakefsify --help >/dev/null 2>&1 || true
           test -x ./build-host/tools/fakefsify || { echo "::error::fakefsify was not built"; exit 1; }
