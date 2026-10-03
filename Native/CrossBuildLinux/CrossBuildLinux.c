@@ -60,6 +60,7 @@ static char *cblk_strdup(const char *text) {
 
 static int g_saved_stdout = -1;
 static int g_saved_stderr = -1;
+static int g_saved_stdin = -1;
 
 static int redirect_stdio_to_pipes(int pipe_fds[2]) {
     if (pipe(pipe_fds) != 0) { return -1; }
@@ -75,6 +76,7 @@ static int redirect_stdio_to_pipes(int pipe_fds[2]) {
 }
 
 static void restore_stdio(void) {
+    if (g_saved_stdin >= 0) { dup2(g_saved_stdin, STDIN_FILENO); close(g_saved_stdin); g_saved_stdin = -1; }
     if (g_saved_stdout >= 0) { dup2(g_saved_stdout, STDOUT_FILENO); close(g_saved_stdout); g_saved_stdout = -1; }
     if (g_saved_stderr >= 0) { dup2(g_saved_stderr, STDERR_FILENO); close(g_saved_stderr); g_saved_stderr = -1; }
 }
@@ -373,7 +375,7 @@ int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory)
     // host holds the opposite ends.
     g_saved_stdout = dup(STDOUT_FILENO);
     g_saved_stderr = dup(STDERR_FILENO);
-    int saved_stdin = dup(STDIN_FILENO);
+    g_saved_stdin = dup(STDIN_FILENO);
     dup2(toGuest[0], STDIN_FILENO);
     dup2(fromGuest[1], STDOUT_FILENO);
     dup2(fromGuest[1], STDERR_FILENO);
@@ -415,14 +417,13 @@ int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory)
         if (g_session_in >= 0) { close(g_session_in); g_session_in = -1; }
         if (g_session_out >= 0) { close(g_session_out); g_session_out = -1; }
         restore_stdio();
-        if (saved_stdin >= 0) { dup2(saved_stdin, STDIN_FILENO); close(saved_stdin); }
         return -2;
     }
 
     // Keep the redirected descriptors active while the emulator owns them.
     // ios-linuxkit's guest stdio is backed by these host descriptor numbers.
     // They are restored by cblk_session_stop() or startup failure.
-    (void)saved_stdin;
+    // stdin is restored together with stdout/stderr when the session stops.
 
     // Wait for the shell to come up by round-tripping a marker.
     char *ready = NULL;
