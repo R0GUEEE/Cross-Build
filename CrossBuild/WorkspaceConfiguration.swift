@@ -9,15 +9,14 @@ final class WorkspaceConfiguration: ObservableObject {
     @AppStorage("workspace.architecture") var architecture = "arm64"
     @AppStorage("workspace.workingDirectory") var workingDirectory = ""
     @AppStorage("workspace.buildArguments") var buildArguments = ""
+    @AppStorage("workspace.cleanArguments") var cleanArguments = ""
+    @AppStorage("workspace.testArguments") var testArguments = ""
+    @AppStorage("workspace.packageArguments") var packageArguments = ""
     @AppStorage("workspace.environmentVariables") var environmentVariables = ""
-    @AppStorage("workspace.compilerOverride") var compilerOverride = ""
     @AppStorage("workspace.sdkPath") var sdkPath = ""
     @AppStorage("workspace.autoDetect") var autoDetectToolchain = true
     @AppStorage("workspace.indexSources") var indexSources = true
     @AppStorage("workspace.autosave") var autosave = true
-    @AppStorage("workspace.gitShallow") var gitShallowClone = true
-    @AppStorage("workspace.gitBranch") var gitDefaultBranch = ""
-    @AppStorage("workspace.gitSubmodules") var gitSubmodules = false
     @AppStorage("workspace.restoreTabs") var restoreOpenTabs = true
     @AppStorage("workspace.confirmCloseDirty") var confirmCloseDirty = true
     @AppStorage("workspace.searchCase") var searchCaseSensitive = false
@@ -26,9 +25,17 @@ final class WorkspaceConfiguration: ObservableObject {
     @AppStorage("workspace.defaultEncoding") var defaultEncoding = "UTF-8"
     @AppStorage("workspace.lineEndings") var lineEndings = "LF"
     @AppStorage("workspace.followSymlinks") var followSymlinks = false
-    @AppStorage("workspace.gitDestination") var gitDestination = "Workspace"
     @AppStorage("workspace.showAppDirectories") var showAppDirectories = true
     @AppStorage("workspace.showBundle") var showAppBundle = true
     @AppStorage("workspace.showContainerLibrary") var showContainerLibrary = true
     @AppStorage("workspace.showTemporary") var showTemporaryFiles = true
+    @AppStorage("workspace.maxRecentFiles") var maxRecentFiles = 20
+    @AppStorage("workspace.defaultNewFileExtension") var defaultNewFileExtension = "swift"
+    @AppStorage("workspace.searchFileContents") var searchFileContents = false
+    @AppStorage("workspace.detectNestedProjects") var detectNestedProjects = true
+    @AppStorage("workspace.preferNearestManifest") var preferNearestManifest = true
+    @AppStorage("workspace.customManifestNames") var customManifestNames = ""
+    @AppStorage("workspace.artifactDirectory") var artifactDirectory = ""
+    @AppStorage("workspace.keepBuildArtifacts") var keepBuildArtifacts = true
+    @AppStorage("workspace.cleanArtifactDirectory") var cleanArtifactDirectory = false
 }
