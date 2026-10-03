@@ -40,10 +40,6 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
         ENABLE_USER_SCRIPT_SANDBOXING: NO
-        # Where the Swift compiler looks for the CrossBuildClang module map, and
-        # where clang finds the umbrella header it references.
-        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/Native/CrossBuildClang"
-        HEADER_SEARCH_PATHS: "$(SRCROOT)/Native/CrossBuildClang"
     scheme:
       testTargets: []
 
@@ -52,6 +48,14 @@ targets:
     # into the app, so there is nothing to embed -- which matters because iOS
     # installd rejects an embedded .framework that lacks an Info.plist, and a
     # bundle that exists only to hold a stub was not worth that failure mode.
+    #
+    # Shape intentionally mirrors XcodeGen's own tested static-library fixture
+    # (Tests/Fixtures/TestProject/StaticLibrary_ObjC): type library.static, a
+    # plain sources path, and a Module/module.modulemap beside the header.
+    # Deliberately NOT set: DEFINES_MODULE and MODULEMAP_FILE. Either one makes
+    # clang see both the source module map and XcodeGen's copy of it in
+    # include/$(PRODUCT_NAME), producing
+    # "redefinition of module 'CrossBuildClang'".
     type: library.static
     platform: iOS
     deploymentTarget: "16.0"
@@ -61,15 +65,8 @@ targets:
       base:
         PRODUCT_NAME: CrossBuildClang
         PRODUCT_BUNDLE_IDENTIFIER: dev.rogueee.crossbuild.clang
-        DEFINES_MODULE: YES
         SKIP_INSTALL: YES
         CODE_SIGNING_ALLOWED: NO
         CLANG_CXX_LANGUAGE_STANDARD: "c++17"
-        BUILD_LIBRARY_FOR_DISTRIBUTION: NO
         GENERATE_INFOPLIST_FILE: NO
         MACH_O_TYPE: staticlib
-        # Static libraries do NOT get an auto-generated module map the way
-        # framework targets do (yonaskolb/XcodeGen#350), so point the build at
-        # the module.modulemap checked in next to the header. Also tell the
-        # consuming Swift target where to find it.
-        MODULEMAP_FILE: "$(SRCROOT)/Native/CrossBuildClang/module.modulemap"

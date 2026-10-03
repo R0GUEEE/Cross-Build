@@ -1,0 +1,18 @@
+// Layout and syntax match XcodeGen's own tested static-library fixture
+// (Tests/Fixtures/TestProject/StaticLibrary_ObjC/Module/module.modulemap),
+// which is the supported shape for a C/ObjC static library consumed from Swift
+// or Objective-C.
+//
+// Notes that cost real debugging time:
+// - This file lives in a `Module/` subdirectory, next to the header. XcodeGen
+//   auto-copies a module.modulemap found in Sources to include/$(PRODUCT_NAME)
+//   in the products directory, which is what Swift resolves `import
+//   CrossBuildClang` against. Do NOT also set MODULEMAP_FILE or DEFINES_MODULE
+//   on the target: pointing at the source copy while the copied one is on the
+//   include path makes clang load the module twice and fail with
+//   "redefinition of module 'CrossBuildClang'".
+// - Use `header`, not `umbrella header`, matching the XcodeGen fixture.
+module CrossBuildClang {
+    header "CrossBuildClang.h"
+    export *
+}
