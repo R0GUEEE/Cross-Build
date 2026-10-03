@@ -1,15 +1,28 @@
 # Meson cross-file for building the ios-linuxkit engine for iOS/arm64.
 #
-# Derived from the recipe ios-linuxkit itself uses from Xcode
-# (app/xcode-meson.sh), with one deliberate difference: inside an Xcode build
-# SDKROOT is already set to the iPhoneOS SDK, so a bare `-arch arm64` targets
-# iOS. In a plain CI shell SDKROOT is unset and the same flags would silently
-# target macOS, so the sysroot is passed explicitly here. @IOS_SDK@ is replaced
-# by the workflow with `xcrun --sdk iphoneos --show-sdk-path`.
+# Derived from the recipe ios-linuxkit uses itself (app/xcode-meson.sh), with one
+# deliberate difference: inside an Xcode build SDKROOT is already the iPhoneOS SDK,
+# so a bare `-arch arm64` targets iOS. In a plain CI shell SDKROOT is unset and the
+# same flags would silently target macOS, so the sysroot is passed explicitly.
+# @IOS_SDK@ is replaced by the workflow with `xcrun --sdk iphoneos --show-sdk-path`.
 #
-# jit is left off: the native/AOT backend needs a JIT entitlement a sideloaded
-# app does not have, and the threaded-code interpreter is the whole reason this
-# works on a stock device.
+# jit stays off: the native/AOT backend needs an entitlement a sideload lacks, and
+# the threaded-code interpreter is the whole reason this works on a stock device.
+#
+# The three extra flags are not optional, and each was arrived at from a real
+# compile failure rather than guessed:
+#
+#   _XOPEN_SOURCE      the iPhoneOS SDK's ucontext.h refuses to declare the
+#                      deprecated ucontext routines without it, and
+#                      platform/native_fault.c pulls ucontext in.
+#   _DARWIN_C_SOURCE   defining _XOPEN_SOURCE alone stops Darwin's cdefs.h from
+#                      auto-enabling the full C level, which hides DT_REG/DT_DIR,
+#                      fstatat/unlinkat/linkat and makedev/major/minor. Passing
+#                      both keeps those visible while satisfying ucontext.h.
+#   dispatch.h         platform/darwin.c uses dispatch_once, and the strict C level
+#                      above stops a system header from pulling libdispatch in
+#                      transitively, so it is force-included. The symbol itself
+#                      resolves at link time against the SDK's libdispatch.
 
 [binaries]
 c = 'clang'
@@ -22,18 +35,9 @@ cpu = 'aarch64'
 endian = 'little'
 
 [built-in options]
-# Two defines that must be set together on Darwin:
-#
-#   _XOPEN_SOURCE      the iPhoneOS SDK's ucontext.h refuses to declare the
-#                      deprecated ucontext routines without it, and
-#                      platform/native_fault.c pulls ucontext in. Without it that
-#                      file fails to compile.
-#   _DARWIN_C_SOURCE   defining _XOPEN_SOURCE alone stops Darwin's cdefs.h from
-#                      auto-enabling the full C level, which hides DT_REG/DT_DIR,
-#                      fstatat/unlinkat/linkat and makedev/major/minor. Passing
-#                      both keeps those visible while satisfying ucontext.h.
 c_args = ['-arch', 'arm64', '-isysroot', '@IOS_SDK@', '-miphoneos-version-min=16.0',
-          '-D_XOPEN_SOURCE=600', '-D_DARWIN_C_SOURCE']
+          '-D_XOPEN_SOURCE=600', '-D_DARWIN_C_SOURCE',
+          '-include', 'dispatch/dispatch.h']
 
 [properties]
 needs_exe_wrapper = true
