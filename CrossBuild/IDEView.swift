@@ -24,7 +24,9 @@ struct IDEView: View {
         }
         .sheet(isPresented: $showGitHub, onDismiss: {
             workspace.files.reload()
-            workspace.detectSampleProject()
+            if let importedPath = workspace.github.lastImportedPath {
+                workspace.detectProject(at: importedPath)
+            }
         }) {
             GitHubCloneView(github: workspace.github)
         }
@@ -49,7 +51,7 @@ struct IDEView: View {
                     Text("\(workspace.projectFiles.count) files").font(.caption2).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button { showGitHub=true } label: { Image(systemName:"arrow.down.circle") }.buttonStyle(.plain)
+                Button { openGitHubImporter() } label: { Image(systemName:"arrow.down.circle") }.buttonStyle(.plain)
                 Button { workspace.files.reload() } label: { Image(systemName:"arrow.clockwise") }.buttonStyle(.plain)
                 Menu {
                     Section("Project") {
@@ -60,7 +62,7 @@ struct IDEView: View {
                         Button("Detect Project & Compiler", systemImage: "waveform.badge.magnifyingglass", action: workspace.detectSampleProject)
                     }
                     Section("Source Control") {
-                        Button("Clone from GitHub", systemImage: "arrow.down.circle") { showGitHub = true }
+                        Button("Clone from GitHub", systemImage: "arrow.down.circle") { openGitHubImporter() }
                     }
                     Section("File Operations") {
                         Button("New File", systemImage: "doc.badge.plus") { workspace.files.createFile(named: "Untitled.swift") }
@@ -95,12 +97,12 @@ struct IDEView: View {
                 HStack {
                     TextField("Find", text: Binding(get: { workspace.editor.findText }, set: { workspace.editor.findText = $0 })).textFieldStyle(.roundedBorder)
                     TextField("Replace", text: Binding(get: { workspace.editor.replaceText }, set: { workspace.editor.replaceText = $0 })).textFieldStyle(.roundedBorder)
-                    Button("Replace All") { workspace.editor.replaceAll(); if let doc = workspace.editor.selected { workspace.editorText = doc.text } }
+                    Button("Replace All") { workspace.editor.replaceAll(); if let doc = workspace.editor.selected { workspace.updateEditorText(doc.text) } }
                     Button { workspace.editor.showFind = false } label: { Image(systemName: "xmark") }
                 }.padding(8).background(.secondary.opacity(0.04))
             }
             if workspace.editor.documents.isEmpty {
-                WorkspaceHomeView(clone: { showGitHub = true }, configure: { showWorkspaceConfiguration = true }).environmentObject(workspace)
+                WorkspaceHomeView(clone: { openGitHubImporter() }, configure: { showWorkspaceConfiguration = true }).environmentObject(workspace)
             } else {
                 editor
             }
@@ -134,12 +136,21 @@ struct IDEView: View {
             } label: {
                 IDEStatusPill(icon: "cpu", text: workspace.activeCompiler?.name ?? workspace.selectedToolchain.rawValue)
             }
-            Button { workspace.editor.showFind.toggle() } label: { Image(systemName: "magnifyingglass") }.buttonStyle(.bordered)
-            Button(action: workspace.saveEditor) { Image(systemName: "square.and.arrow.down") }
-                .buttonStyle(.bordered)
+            if workspace.editor.selected != nil {
+                Button { workspace.editor.showFind.toggle() } label: { Image(systemName: "magnifyingglass") }
+                    .buttonStyle(.bordered)
+                Button(action: workspace.saveEditor) { Image(systemName: "square.and.arrow.down") }
+                    .buttonStyle(.bordered)
+            }
             Button(action: { workspace.runBuild(settings: settings) }) {
-                Label("Build", systemImage: "play.fill").font(.subheadline.weight(.semibold))
-            }.buttonStyle(.borderedProminent)
+                if workspace.isExecuting {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Label("Build", systemImage: "play.fill").font(.subheadline.weight(.semibold))
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(workspace.isExecuting)
         }.padding(.horizontal, 12).padding(.vertical, 9)
     }
 
@@ -227,18 +238,16 @@ struct IDEView: View {
     }
 
     private var editor: some View {
-        ZStack(alignment: .topLeading) {
-            TextEditor(text: Binding(get: { workspace.editorText }, set: { workspace.updateEditorText($0) }))
-                .font(.system(size: settings.editorFontSize, design: .monospaced))
-                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                .padding(.leading, sizeClass == .compact ? 2 : 36)
-            if settings.showLineNumbers && sizeClass != .compact {
-                Text("1\n2\n3\n4\n5\n6\n7\n8\n9\n10")
-                    .font(.system(size: 15, design: .monospaced))
-                    .foregroundStyle(.tertiary).padding(.top, 8).padding(.leading, 8)
-                    .allowsHitTesting(false)
-            }
-        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        TextEditor(text: Binding(get: { workspace.editorText }, set: { workspace.updateEditorText($0) }))
+            .font(.system(size: settings.editorFontSize, design: .monospaced))
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func openGitHubImporter() {
+        workspace.github.lastImportedPath = nil
+        showGitHub = true
     }
 
     private var collapsedPanelBar: some View {
