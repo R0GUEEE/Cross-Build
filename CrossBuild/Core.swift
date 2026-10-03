@@ -74,6 +74,9 @@ final class WorkspaceModel: ObservableObject {
     let embeddedToolchains = EmbeddedToolchainManager()
 
     var activeCompiler: CustomCompiler? { customCompilers.first { $0.id == selectedCustomCompilerID } }
+    var projectFiles: [WorkspaceFile] {
+        files.flattened.filter { !$0.isDirectory && ($0.path == files.workspaceRoot.path || $0.path.hasPrefix(files.workspaceRoot.path + "/")) }
+    }
 
     init() {
         if let data = UserDefaults.standard.data(forKey: compilersKey),
@@ -93,9 +96,10 @@ final class WorkspaceModel: ObservableObject {
     ]
 
     func detectSampleProject() {
-        let projectPaths = files.flattened.map(\.path)
+        let scopedFiles = projectFiles
+        let projectPaths = scopedFiles.map(\.path)
         var contents: [String:String] = [:]
-        for file in files.flattened where !file.isDirectory {
+        for file in scopedFiles {
             if ["Makefile","control","Package.swift","Cargo.toml","go.mod","build.zig","CMakeLists.txt","meson.build","package.json","pyproject.toml"].contains(file.name),
                let text = files.contents(of: file) { contents[file.name] = text }
         }
