@@ -12,6 +12,14 @@ struct WorkspaceFile: Identifiable, Hashable {
 
     var id: String { path }
 
+    static func == (lhs: WorkspaceFile, rhs: WorkspaceFile) -> Bool {
+        lhs.path == rhs.path
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(path)
+    }
+
     init(name: String, path: String, isDirectory: Bool = false, size: Int64 = 0,
          modified: Date = .now, isFavorite: Bool = false, children: [WorkspaceFile]? = nil) {
         self.name = name
