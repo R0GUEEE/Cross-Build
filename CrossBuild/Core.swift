@@ -66,6 +66,7 @@ final class WorkspaceModel: ObservableObject {
     let files = FileManagerService()
     let github = GitHubWorkspaceService()
     let configuration = WorkspaceConfiguration()
+    let compilerConfiguration = CompilerConfiguration()
 
     var activeCompiler: CustomCompiler? { customCompilers.first { $0.id == selectedCustomCompilerID } }
 
