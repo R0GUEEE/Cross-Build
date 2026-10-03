@@ -14,7 +14,7 @@ struct ProjectContext: Sendable {
     var artifacts: [String]
     var diagnostics: [BuildDiagnostic]
 
-    static func detected(root:String, analysis:ProjectAnalysis, compiler:CompilerConfiguration) -> ProjectContext {
+    @MainActor\n    static func detected(root:String, analysis:ProjectAnalysis, compiler:CompilerConfiguration) -> ProjectContext {
         .init(root:root, toolchain:analysis.primaryToolchain,
               buildSystem:analysis.candidates.first?.system.rawValue ?? "Unknown",
               target:"iOS", sdk:compiler.sdk, architecture:compiler.architectures,
