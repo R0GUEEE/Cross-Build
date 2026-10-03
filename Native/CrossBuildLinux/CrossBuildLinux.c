@@ -419,11 +419,10 @@ int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory)
         return -2;
     }
 
-    // The guest inherited the redirected descriptors. Restore the app process's
-    // standard descriptors immediately; leaving stdin/stdout/stderr redirected
-    // for the lifetime of the session destabilizes host logging and frameworks.
-    restore_stdio();
-    if (saved_stdin >= 0) { dup2(saved_stdin, STDIN_FILENO); close(saved_stdin); }
+    // Keep the redirected descriptors active while the emulator owns them.
+    // ios-linuxkit's guest stdio is backed by these host descriptor numbers.
+    // They are restored by cblk_session_stop() or startup failure.
+    (void)saved_stdin;
 
     // Wait for the shell to come up by round-tripping a marker.
     char *ready = NULL;
