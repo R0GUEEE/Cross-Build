@@ -49,8 +49,11 @@ struct AgentDashboardView: View {
 
                         GroupBox("Activity") {
                             if workspace.agentActivity.isEmpty {
-                                ContentUnavailableView("No Agent Activity", systemImage: "sparkles",
-                                                       description: Text("Run a task to see each agent operation here."))
+                                VStack(spacing: 8) {
+                                    Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(.secondary)
+                                    Text("No Agent Activity").font(.headline)
+                                    Text("Run a task to see each agent operation here.").font(.caption).foregroundStyle(.secondary)
+                                }.frame(maxWidth: .infinity).padding(.vertical, 24)
                             } else {
                                 VStack(alignment: .leading, spacing: 8) {
                                     ForEach(Array(workspace.agentActivity.enumerated()), id: \.offset) { index, activity in
