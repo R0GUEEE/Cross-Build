@@ -4,10 +4,12 @@ import UIKit
 
 struct WorkspaceBrowserView: View {
     @ObservedObject var files: FileManagerService
+    var onDelete: ((WorkspaceFile) -> Void)? = nil
     @State private var showImporter = false
     @State private var newItemName = ""
     @State private var showNewFile = false
     @State private var showNewFolder = false
+    @State private var pendingDelete: WorkspaceFile?
 
     var body: some View {
         List {
@@ -78,6 +80,24 @@ struct WorkspaceBrowserView: View {
             }
             Button("Cancel", role: .cancel) { newItemName = "" }
         }
+        .confirmationDialog(
+            "Delete \(pendingDelete?.name ?? "item")?",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let file = pendingDelete {
+                    if let onDelete { onDelete(file) } else { files.delete(file) }
+                }
+                pendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+        } message: {
+            Text("This removes the item from the app container. Any open tabs for it will be closed.")
+        }
         .alert("File Operation Failed", isPresented: Binding(
             get: { files.errorMessage != nil },
             set: { if !$0 { files.errorMessage = nil } }
@@ -109,7 +129,7 @@ struct WorkspaceBrowserView: View {
                    systemImage: file.isFavorite ? "star.slash" : "star") { files.toggleFavorite(file) }
             if !files.isReadOnly(file) {
                 Button("Duplicate", systemImage: "plus.square.on.square") { files.duplicate(file) }
-                Button("Delete", systemImage: "trash", role: .destructive) { files.delete(file) }
+                Button("Delete", systemImage: "trash", role: .destructive) { pendingDelete = file }
             } else {
                 Label("Read-only App Bundle", systemImage: "lock.fill")
             }
