@@ -82,25 +82,20 @@ jobs:
           # fakefsify turns the Alpine minirootfs into the SQLite-backed fakefs
           # image the guest boots from. It is a HOST tool: a cross-built copy would
           # be an iOS binary the runner cannot execute, so it is built natively.
-          # The native host build hits the same macOS SDK ucontext.h requirement
-          # the iOS cross build does, so the same paired defines are needed. They
-          # are passed here rather than in the cross-file because this setup does
-          # not use one.
-          # Both defines, exactly as the iOS cross build needs them, and for the
-          # same reason. Apple's <sys/cdefs.h> pins __DARWIN_C_LEVEL to a lower
+          #
+          # The native build needs the same two defines as the iOS cross build, for
+          # the same reason: Apple's <sys/cdefs.h> pins __DARWIN_C_LEVEL to a lower
           # POSIX level as soon as _XOPEN_SOURCE is defined, which hides
-          # fstatat/fstatat/makedev/DT_*; _DARWIN_C_SOURCE forces the level back to
-          # __DARWIN_C_FULL (900000L) while still satisfying ucontext.h. Omitting
-          # the second one is what broke this step twice.
-          # kernel/native_offload.c only compiles its posix_spawn path when
-          # TARGET_OS_OSX is true, and that path uses
-          # posix_spawn_file_actions_addchdir (macOS 13+). It is a host-side
-          # optimisation for running guest binaries that match the host ABI --
-          # irrelevant to the CLI used here purely as a build-time driver -- and
-          # it is the only thing still failing to build natively. Forcing its
-          # test macro off keeps the translation unit on the fallback path.
+          # fstatat/makedev/DT_*; _DARWIN_C_SOURCE forces the level back to
+          # __DARWIN_C_FULL while still satisfying ucontext.h.
+          #
+          # The -include shim declares posix_spawn_file_actions_addchdir, whose
+          # prototype the runner's SDK headers hide behind an availability macro.
+          # It applies to the native build only; see Tools/native-offload-shim.h.
+          shim="$GITHUB_WORKSPACE/Tools/native-offload-shim.h"
+          test -f "$shim" || { echo "::error::native-offload-shim.h is missing"; exit 1; }
           meson setup build-host --buildtype=release -Dguest_arch=arm64 \
-            -Dc_args='-D_XOPEN_SOURCE=600 -D_DARWIN_C_SOURCE -DISH_NATIVE_OFFLOAD_TEST_HANDLERS'
+            -Dc_args="-D_XOPEN_SOURCE=600 -D_DARWIN_C_SOURCE -include$shim"
           meson compile -C build-host fakefsify
           ./build-host/tools/fakefsify --help >/dev/null 2>&1 || true
           test -x ./build-host/tools/fakefsify || { echo "::error::fakefsify was not built"; exit 1; }
