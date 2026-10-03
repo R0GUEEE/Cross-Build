@@ -188,8 +188,16 @@ final class WorkspaceModel: ObservableObject {
     ]
 
     func detectSampleProject() {
+        detectProject(rootOverride: nil)
+    }
+
+    func detectProject(at root: String) {
+        detectProject(rootOverride: root)
+    }
+
+    private func detectProject(rootOverride: String?) {
         let allFiles = projectFiles
-        let root = inferProjectRoot(from: allFiles)
+        let root = rootOverride ?? inferProjectRoot(from: allFiles)
         activeProjectRoot = root
         configuration.workingDirectory = root
         let scopedFiles = allFiles.filter { $0.path == root || $0.path.hasPrefix(root + "/") }
