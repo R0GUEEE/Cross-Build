@@ -65,8 +65,8 @@ struct IDEView: View {
             detectionBar
             if workspace.editor.showFind {
                 HStack {
-                    TextField("Find", text: $workspace.editor.findText).textFieldStyle(.roundedBorder)
-                    TextField("Replace", text: $workspace.editor.replaceText).textFieldStyle(.roundedBorder)
+                    TextField("Find", text: Binding(get: { workspace.editor.findText }, set: { workspace.editor.findText = $0 })).textFieldStyle(.roundedBorder)
+                    TextField("Replace", text: Binding(get: { workspace.editor.replaceText }, set: { workspace.editor.replaceText = $0 })).textFieldStyle(.roundedBorder)
                     Button("Replace All", action: workspace.editor.replaceAll)
                     Button { workspace.editor.showFind = false } label: { Image(systemName: "xmark") }
                 }.padding(8).background(.secondary.opacity(0.04))
