@@ -1,101 +1,84 @@
 import SwiftUI
 
 struct AgentDashboardView: View {
-    @EnvironmentObject private var workspace: WorkspaceModel
-    @ObservedObject var settings: AppSettings
-    @State private var instruction = ""
+    @EnvironmentObject private var workspace:WorkspaceModel
+    @ObservedObject var settings:AppSettings
+    @State private var instruction=""
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                ScrollView {
-                    LazyVStack(spacing: 14) {
-                        GroupBox {
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack {
-                                    Image(systemName: "sparkles").font(.largeTitle)
-                                    VStack(alignment: .leading) {
-                                        Text("Build Agent").font(.title2.bold())
-                                        Text("Code, compiler, diagnostics and workspace automation").foregroundStyle(.secondary)
-                                    }
-                                }
-                                TextEditor(text: $instruction)
-                                    .frame(minHeight: 100).padding(6)
-                                    .background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
-                                HStack {
-                                    Button("Run Task", systemImage: "play.fill") {
-                                        workspace.agentPrompt = instruction
-                                        workspace.runAgent()
-                                        instruction = ""
-                                    }.buttonStyle(.borderedProminent)
-                                    Menu("Quick Tasks", systemImage: "bolt.fill") {
-                                        Button("Detect and Build") { instruction = "Detect the compiler and build the project" }
-                                        Button("Fix Build Errors") { instruction = "Inspect diagnostics, fix build errors, and rebuild" }
-                                        Button("Clean & Package") { instruction = "Clean, build, and package the project" }
-                                        Button("Theos Package") { instruction = "Use Theos to build and package this project" }
-                                    }
-                                }
+            ScrollView {
+                VStack(alignment:.leading,spacing:16) {
+                    VStack(alignment:.leading,spacing:4) {
+                        HStack {
+                            Image(systemName:"sparkles").font(.largeTitle)
+                            VStack(alignment:.leading) {
+                                Text("Cross Build Agent").font(.largeTitle.bold())
+                                Text("Project-aware build and code automation").foregroundStyle(.secondary)
                             }
                         }
+                    }
 
-                        GroupBox("Provider & Model") {
-                            VStack {
-                                Picker("Provider", selection: $settings.agentProvider) {
-                                    Text("OpenAI Compatible").tag("OpenAI Compatible")
-                                    Text("Local / Custom").tag("Local / Custom")
-                                    Text("Remote Agent").tag("Remote Agent")
-                                }
-                                TextField("Model", text: $settings.agentModel)
-                                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                                TextField("Endpoint (optional)", text: $settings.agentEndpoint)
-                                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                                Stepper("Maximum task steps: \(settings.agentMaxSteps)", value: $settings.agentMaxSteps, in: 1...50)
+                    ForgeCard("Ask the Agent",subtitle:"Describe the result you want. Cross Build will detect the project and plan the actions.") {
+                        TextEditor(text:$instruction)
+                            .frame(minHeight:110).padding(8)
+                            .background(.background,in:RoundedRectangle(cornerRadius:10))
+                        HStack {
+                            Button("Run Task",systemImage:"arrow.up.circle.fill",action:run).buttonStyle(.borderedProminent)
+                                .disabled(instruction.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || workspace.isExecuting)
+                            Menu("Quick Actions",systemImage:"bolt.fill") {
+                                Button("Detect, Configure & Build") { instruction="Detect this project, configure it automatically, and build it" }
+                                Button("Fix Build") { instruction="Inspect build errors, fix what can be fixed, and rebuild" }
+                                Button("Clean & Package") { instruction="Clean the project and package the final artifact" }
+                                Button("Run Tests") { instruction="Run the project tests" }
                             }
+                            Spacer()
+                            if workspace.isExecuting { ProgressView(); Text(workspace.executionStatus).font(.caption).foregroundStyle(.secondary) }
                         }
+                    }
 
-                        GroupBox("Context") {
-                            VStack {
-                                Toggle("Include workspace files", isOn: $settings.agentContextFiles)
-                                Toggle("Include diagnostics", isOn: $settings.agentContextDiagnostics)
-                                Toggle("Include Git diff", isOn: $settings.agentContextGitDiff)
-                                Toggle("Retry recoverable failures", isOn: $settings.agentAutoRetry)
-                            }
+                    ForgeCard("Automatic Project Context",subtitle:"Configuration is generated from the current workspace") {
+                        LazyVGrid(columns:[GridItem(.adaptive(minimum:140),spacing:12)],spacing:12) {
+                            ForgeMetric(title:"Toolchain",value:workspace.analysis?.primaryToolchain.rawValue ?? "Not detected",icon:"cpu")
+                            ForgeMetric(title:"Files",value:"\(workspace.projectFiles.count)",icon:"doc.on.doc")
+                            ForgeMetric(title:"Backend",value:settings.executionBackend,icon:"terminal")
+                            ForgeMetric(title:"Status",value:workspace.executionStatus,icon:"waveform")
                         }
+                        if !workspace.generatedConfigurationSummary.isEmpty {
+                            Divider()
+                            ForEach(workspace.generatedConfigurationSummary,id:\.self) { item in Label(item,systemImage:"checkmark.circle").font(.caption) }
+                        }
+                        Button("Refresh Project Detection",systemImage:"arrow.clockwise",action:workspace.detectSampleProject)
+                    }
 
-                        GroupBox("Permissions") {
-                            VStack {
-                                Toggle("Edit source code", isOn: $settings.allowAgentEdits)
-                                Toggle("Control compilers and builds", isOn: $settings.allowAgentBuilds)
-                                Toggle("Install/update dependencies", isOn: $settings.allowAgentDependencies)
-                                Toggle("Confirm command execution", isOn: $settings.confirmAgentCommands)
-                            }
-                        }
+                    ForgeCard("Agent Access",subtitle:"Simple defaults; expand control only when needed") {
+                        Toggle("Allow code edits",isOn:$settings.allowAgentEdits)
+                        Toggle("Allow builds and compiler actions",isOn:$settings.allowAgentBuilds)
+                        Toggle("Allow dependency changes",isOn:$settings.allowAgentDependencies)
+                    }
 
-                        GroupBox("Activity") {
-                            if workspace.agentActivity.isEmpty {
-                                VStack(spacing: 8) {
-                                    Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(.secondary)
-                                    Text("No Agent Activity").font(.headline)
-                                    Text("Run a task to see each agent operation here.").font(.caption).foregroundStyle(.secondary)
-                                }.frame(maxWidth: .infinity).padding(.vertical, 24)
-                            } else {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    ForEach(Array(workspace.agentActivity.enumerated()), id: \.offset) { index, activity in
-                                        HStack(alignment: .top) {
-                                            Image(systemName: "checkmark.circle.fill")
-                                            VStack(alignment: .leading) {
-                                                Text(activity)
-                                                Text("Step \(index + 1)").font(.caption2).foregroundStyle(.secondary)
-                                            }
-                                            Spacer()
-                                        }.padding(8).background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-                                    }
-                                }
+                    ForgeCard("Activity",subtitle:"Actions performed in this session") {
+                        if workspace.agentActivity.isEmpty {
+                            ContentUnavailableView("No Activity",systemImage:"sparkles",description:Text("Run a task to see the agent plan and actions."))
+                        } else {
+                            ForEach(Array(workspace.agentActivity.enumerated()),id:\.offset) { index,item in
+                                HStack(alignment:.top) {
+                                    Image(systemName:"checkmark.circle.fill")
+                                    VStack(alignment:.leading) { Text(item); Text("Step \(index+1)").font(.caption2).foregroundStyle(.secondary) }
+                                    Spacer()
+                                }.padding(.vertical,5)
                             }
                         }
-                    }.padding()
-                }
-            }.navigationTitle("AI Agent")
+                    }
+                }.padding().frame(maxWidth:900).frame(maxWidth:.infinity)
+            }.navigationTitle("Agent")
         }
+    }
+
+    private func run() {
+        if workspace.analysis == nil { workspace.detectSampleProject() }
+        workspace.agentPrompt=instruction
+        workspace.runAgent()
+        instruction=""
     }
 }
