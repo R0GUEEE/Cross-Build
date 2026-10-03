@@ -666,7 +666,7 @@ final class WorkspaceModel: ObservableObject {
         case .inspectDiagnostics:
             let lines = console.split(separator: "\n")
                 .filter { $0.localizedCaseInsensitiveContains("error") || $0.localizedCaseInsensitiveContains("warning") }
-                .suffix(20)
+                .suffix(max(10, settings?.agentDiagnosticsLimit ?? 40))
             if lines.isEmpty { console += "Diagnostics: no errors or warnings captured.\n" }
             else { console += "Diagnostics snapshot:\n" + lines.joined(separator: "\n") + "\n" }
         }
@@ -680,15 +680,23 @@ final class WorkspaceModel: ObservableObject {
             return
         }
 
+        let settings = appSettings
+        if settings?.agentClearActivityBeforeRun == true { agentActivity.removeAll() }
         console += "Agent task: \(request)\n"
         let lower = request.lowercased()
-        if analysis == nil || lower.contains("detect") || lower.contains("configure") {
+        if settings?.agentAutoDetectProject != false &&
+            (analysis == nil || lower.contains("detect") || lower.contains("configure")) {
             detectSampleProject()
         }
-        let plan = AgentController.plan(request, workspace: self)
+        var plan = AgentController.plan(request, workspace: self)
+        let limit = max(1, settings?.agentMaxSteps ?? 12)
+        if plan.count > limit {
+            plan = Array(plan.prefix(limit))
+            console += "Agent plan limited to \(limit) steps by configuration.\n"
+        }
         agentPrompt = ""
 
-        if appSettings?.confirmAgentCommands == true && plan.contains(where: agentActionRunsCommand) {
+        if settings?.confirmAgentCommands == true && plan.contains(where: agentActionRunsCommand) {
             pendingAgentPlan = plan
             pendingAgentConfirmation = plan.map(\.summary).joined(separator: "\n")
             return
@@ -714,8 +722,28 @@ final class WorkspaceModel: ObservableObject {
         guard !plan.isEmpty else { return }
         Task {
             for execution in plan {
-                await executeAgentAction(execution)
+                var attempt = 0
+                let maxRetries = appSettings?.agentAutoRetry == true ? max(0, appSettings?.agentMaxRetries ?? 0) : 0
+                repeat {
+                    await executeAgentAction(execution)
+                    if lastExitCode == 0 || !agentActionRunsCommand(execution) { break }
+                    attempt += 1
+                    if attempt <= maxRetries {
+                        agentActivity.append("Retry \(attempt): \(execution.summary)")
+                        console += "Agent retry \(attempt)/\(maxRetries): \(execution.summary)\n"
+                    }
+                } while attempt <= maxRetries
+
+                if agentActionRunsCommand(execution),
+                   lastExitCode != nil, lastExitCode != 0,
+                   appSettings?.agentStopOnBuildFailure == true {
+                    agentActivity.append("Stopped after failure: \(execution.summary)")
+                    console += "Agent stopped because the command failed.\n"
+                    break
+                }
             }
+            let limit = max(25, appSettings?.activityHistoryLimit ?? 100)
+            if agentActivity.count > limit { agentActivity = Array(agentActivity.suffix(limit)) }
         }
     }
 
