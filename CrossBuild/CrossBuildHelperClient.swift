@@ -4,6 +4,11 @@ private struct HelperExecuteRequest: Codable {
     var command: String
     var workingDirectory: String?
     var environment: [String:String]
+    var shell: String?
+    var loginShell: Bool
+    var interactiveShell: Bool
+    var initCommand: String?
+    var timeout: Int
 }
 
 private struct HelperExecuteResponse: Codable {
