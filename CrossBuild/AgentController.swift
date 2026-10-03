@@ -29,7 +29,11 @@ enum AgentController {
         else if q.contains("rust") { plan.append(.init(action: .selectToolchain(.rust), summary: "Select Rust / Cargo")) }
         else if q.contains("clang") || q.contains("c++") { plan.append(.init(action: .selectToolchain(.clang), summary: "Select LLVM / Clang")) }
 
-        if q.contains("clean") { plan.append(.init(action: .clean, summary: "Clean build products")) }
+        if q.contains("clean") {
+            if workspace.appSettings?.allowAgentDestructiveActions == true {
+                plan.append(.init(action: .clean, summary: "Clean build products"))
+            }
+        }
         if q.contains("test") { plan.append(.init(action: .test, summary: "Run tests")) }
         if q.contains("package") || q.contains("ipa") || q.contains("deb") { plan.append(.init(action: .package, summary: "Package artifact")) }
         if q.contains("diagnostic") || q.contains("error") || q.contains("fix") { plan.append(.init(action: .inspectDiagnostics, summary: "Inspect compiler diagnostics")) }
