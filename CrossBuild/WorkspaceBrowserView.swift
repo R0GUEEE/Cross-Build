@@ -18,8 +18,19 @@ struct WorkspaceBrowserView: View {
                 }
             }
             if files.query.isEmpty {
-                Section("Loaded Directories") {
-                    OutlineGroup(files.roots, children: \.children) { file in row(file) }
+                if let projectRoot = files.roots.first {
+                    Section("Project") {
+                        OutlineGroup([projectRoot], children: \.children) { file in row(file) }
+                    }
+                }
+                if files.roots.count > 1 {
+                    Section("App Files") {
+                        DisclosureGroup("Container & Bundle") {
+                            ForEach(Array(files.roots.dropFirst())) { root in
+                                OutlineGroup([root], children: \.children) { file in row(file) }
+                            }
+                        }
+                    }
                 }
                 let favorites = files.flattened.filter(\.isFavorite)
                 if !favorites.isEmpty {
@@ -43,7 +54,7 @@ struct WorkspaceBrowserView: View {
                     Button("Refresh", systemImage: "arrow.clockwise") { files.reload() }
                 } label: { Label("Add", systemImage: "plus") }
                 Spacer()
-                Text("\(files.flattened.filter { !$0.isDirectory }.count) files").font(.caption).foregroundStyle(.secondary)
+                Text("\(files.flattened.filter { !$0.isDirectory && ($0.path == files.workspaceRoot.path || $0.path.hasPrefix(files.workspaceRoot.path + "/")) }.count) project files").font(.caption).foregroundStyle(.secondary)
             }.padding().background(.thinMaterial)
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
