@@ -68,6 +68,7 @@ final class WorkspaceModel: ObservableObject {
     @Published var executionStatus = "Idle"
     @Published var generatedConfigurationSummary: [String] = []
     @Published var activeProjectRoot: String?
+    @Published var recommendedBuildCommand: String?
     weak var appSettings: AppSettings?
     private var autosaveTask: Task<Void, Never>?
     let files = FileManagerService()
@@ -160,7 +161,7 @@ final class WorkspaceModel: ObservableObject {
         let result = ProjectDetector.analyze(paths: projectPaths, fileContents: contents)
         analysis = result
         selectedToolchain = result.primaryToolchain
-        let generated = ConfigurationGenerator.generate(from: result, files: scopedFiles)
+        let generated = ConfigurationGenerator.generate(from: result, files: scopedFiles, fileContents: contents)
         ConfigurationGenerator.apply(generated, workspace: self)
         generatedConfigurationSummary = generated.summary
         console += "Configuration: " + generated.summary.joined(separator: " • ") + "\n"
@@ -181,6 +182,7 @@ final class WorkspaceModel: ObservableObject {
 
     func buildCommand() -> String {
         if let custom = activeCompiler, !custom.buildCommand.isEmpty { return custom.buildCommand }
+        if let recommendedBuildCommand, !recommendedBuildCommand.isEmpty { return recommendedBuildCommand }
         return ToolchainRegistry.providers.first { $0.kind == selectedToolchain }?.buildCommands.first ?? "make"
     }
 
