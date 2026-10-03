@@ -41,5 +41,14 @@ struct RootView: View {
                 .tabItem { Label("Settings", systemImage: AppSection.settings.icon) }
                 .tag(AppSection.settings)
         }
+        .alert("Allow Agent Commands?", isPresented: Binding(
+            get: { workspace.pendingAgentConfirmation != nil },
+            set: { if !$0 { workspace.cancelPendingAgentPlan() } }
+        )) {
+            Button("Run Commands") { workspace.confirmPendingAgentPlan() }
+            Button("Cancel", role: .cancel) { workspace.cancelPendingAgentPlan() }
+        } message: {
+            Text(workspace.pendingAgentConfirmation ?? "")
+        }
     }
 }
