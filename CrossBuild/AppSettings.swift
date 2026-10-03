@@ -78,6 +78,10 @@ final class AppSettings: ObservableObject {
     @AppStorage("runtime.helperPort") var helperPort = 8765
     @AppStorage("runtime.jailbreakHost") var jailbreakHelperHost = "127.0.0.1"
     @AppStorage("runtime.jailbreakPort") var jailbreakHelperPort = 8765
+    @AppStorage("runtime.shell") var shellPath = "Auto"
+    @AppStorage("runtime.shellLogin") var shellLogin = false
+    @AppStorage("runtime.shellInteractive") var shellInteractive = false
+    @AppStorage("runtime.shellInit") var shellInitCommand = ""
 }
 
 enum AppSection: String, CaseIterable, Identifiable {
