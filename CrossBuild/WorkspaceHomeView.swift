@@ -2,56 +2,85 @@ import SwiftUI
 
 struct WorkspaceHomeView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
-    let clone: () -> Void
-    let configure: () -> Void
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    let clone:()->Void
+    let configure:()->Void
 
     var body: some View {
         ScrollView {
-            VStack(alignment:.leading,spacing:16) {
-                VStack(alignment:.leading,spacing:4) {
-                    Text("Workspace").font(.largeTitle.bold())
-                    Text("Open a file or import a project to start editing.").foregroundStyle(.secondary)
+            VStack(alignment:.leading,spacing:18) {
+                VStack(alignment:.leading,spacing:5) {
+                    Text("Ready to build").font(.largeTitle.bold())
+                    Text("Open a project file, clone a repository, or create something new.")
+                        .foregroundStyle(.secondary)
                 }
-                HStack {
-                    action("Clone Repository","arrow.down.circle",clone)
-                    action("New Swift File","doc.badge.plus") {
-                        workspace.files.createFile(named:"Untitled.swift")
-                        workspace.files.reload()
-                        if let file=workspace.files.flattened.first(where:{$0.name=="Untitled.swift"}) {
-                            workspace.files.open(file); workspace.openSelectedFile()
+
+                LazyVGrid(columns:[GridItem(.adaptive(minimum:150),spacing:10)],spacing:10) {
+                    ForgeActionButton(title:"Clone Repository",icon:"arrow.down.circle",prominent:true,action:clone)
+                    ForgeActionButton(title:"New File",icon:"doc.badge.plus",action:newFile)
+                    ForgeActionButton(title:"Detect Project",icon:"waveform.badge.magnifyingglass",action:workspace.detectSampleProject)
+                    ForgeActionButton(title:"Configure",icon:"slider.horizontal.3",action:configure)
+                }
+
+                ForgeCard("Project Overview",subtitle:"Current workspace at a glance") {
+                    LazyVGrid(columns:[GridItem(.adaptive(minimum:130),spacing:12)],spacing:12) {
+                        ForgeMetric(title:"Project Files",value:"\(workspace.projectFiles.count)",icon:"doc.on.doc")
+                        ForgeMetric(title:"Toolchain",value:shortToolchain,icon:"cpu")
+                        ForgeMetric(title:"Open Editors",value:"\(workspace.editor.documents.count)",icon:"rectangle.stack")
+                        ForgeMetric(title:"Execution",value:workspace.executionStatus,icon:"play.circle")
+                    }
+                }
+
+                if let analysis=workspace.analysis {
+                    ForgeCard("Detected Project",subtitle:"Cross Build analyzed the active workspace") {
+                        HStack {
+                            IDEStatusPill(icon:"cpu",text:analysis.primaryToolchain.rawValue)
+                            IDEStatusPill(icon:"chart.bar",text:"\(Int(analysis.confidence*100))%")
+                            Spacer()
+                        }
+                        if let candidate=analysis.candidates.first {
+                            Text(candidate.command).font(.system(.caption,design:.monospaced)).foregroundStyle(.secondary)
                         }
                     }
-                    action("Detect Project","waveform.badge.magnifyingglass",workspace.detectSampleProject)
-                    action("Configure","slider.horizontal.3",configure)
                 }
-                .buttonStyle(.bordered)
 
-                GroupBox("Project Overview") {
-                    VStack(alignment:.leading,spacing:8) {
-                        LabeledContent("Project files",value:"\(workspace.projectFiles.count)")
-                        LabeledContent("Toolchain",value:workspace.analysis?.primaryToolchain.rawValue ?? workspace.selectedToolchain.rawValue)
-                        LabeledContent("Open editors",value:"\(workspace.editor.documents.count)")
-                        LabeledContent("Execution",value:workspace.executionStatus)
-                    }.frame(maxWidth:.infinity,alignment:.leading)
-                }
                 if !workspace.files.recent.isEmpty {
-                    GroupBox("Recent Files") {
-                        VStack(alignment:.leading,spacing:4) {
+                    ForgeCard("Recent Files",subtitle:"Continue where you left off") {
+                        VStack(spacing:0) {
                             ForEach(workspace.files.recent.prefix(6)) { file in
                                 Button {
                                     workspace.files.open(file); workspace.openSelectedFile()
                                 } label: {
-                                    Label(file.name,systemImage:"doc.text").frame(maxWidth:.infinity,alignment:.leading)
-                                }.buttonStyle(.plain).padding(.vertical,4)
+                                    HStack {
+                                        Image(systemName:"doc.text")
+                                        VStack(alignment:.leading) {
+                                            Text(file.name)
+                                            Text(URL(fileURLWithPath:file.path).deletingLastPathComponent().lastPathComponent)
+                                                .font(.caption2).foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        Image(systemName:"chevron.right").font(.caption).foregroundStyle(.tertiary)
+                                    }.padding(.vertical,9)
+                                }.buttonStyle(.plain)
+                                if file.id != workspace.files.recent.prefix(6).last?.id { Divider() }
                             }
                         }
                     }
                 }
-            }.padding(20)
+            }
+            .padding(sizeClass == .compact ? 16 : 24)
+            .frame(maxWidth:900)
+            .frame(maxWidth:.infinity)
         }
     }
 
-    private func action(_ title:String,_ icon:String,_ action:@escaping()->Void)->some View {
-        Button(action:action) { Label(title,systemImage:icon) }
+    private var shortToolchain:String {
+        workspace.analysis?.primaryToolchain.rawValue ?? workspace.selectedToolchain.rawValue
+    }
+    private func newFile() {
+        workspace.files.createFile(named:"Untitled.swift"); workspace.files.reload()
+        if let file=workspace.projectFiles.first(where:{$0.name=="Untitled.swift"}) {
+            workspace.files.open(file); workspace.openSelectedFile()
+        }
     }
 }
