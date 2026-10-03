@@ -39,7 +39,6 @@ struct ClangEmbeddedBridge: NativeCompilerBridge {
     // The stable Swift boundary for a vendored libclang/clangDriver implementation.
     // Cross Build only reports the engine ready when the native module marker exists.
     var isLinked:Bool {
-        Bundle.main.url(forResource:"libclang",withExtension:"dylib",subdirectory:"Toolchains/LLVM/lib") != nil ||
         Bundle.main.url(forResource:"CrossBuildClang",withExtension:"framework",subdirectory:"Frameworks") != nil
     }
     var version:String { isLinked ? "Embedded LLVM" : "Bridge ready • LLVM payload missing" }
