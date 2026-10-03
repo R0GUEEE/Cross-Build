@@ -24,10 +24,19 @@ final class FileManagerService: ObservableObject {
     @Published var recent: [WorkspaceFile] = []
     @Published var query = ""
     @Published var errorMessage: String?
+    @Published var includeAppDirectories = true
     let workspaceRoot: URL
+    let documentsRoot: URL
+    let libraryRoot: URL
+    let temporaryRoot: URL
+    let appBundleRoot: URL
 
     init() {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        documentsRoot = docs
+        libraryRoot = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
+        temporaryRoot = FileManager.default.temporaryDirectory
+        appBundleRoot = Bundle.main.bundleURL
         workspaceRoot = docs.appendingPathComponent("Workspace", isDirectory: true)
         try? FileManager.default.createDirectory(at: workspaceRoot, withIntermediateDirectories: true)
         reload()
@@ -43,9 +52,20 @@ final class FileManagerService: ObservableObject {
     }
 
     func reload(from root: URL? = nil) {
-        let base = root ?? workspaceRoot
-        roots = [node(for: base)]
+        if let root { roots = [node(for: root)]; return }
+        var loaded = [node(for: workspaceRoot, displayName: "Workspace")]
+        if includeAppDirectories {
+            loaded.append(node(for: documentsRoot, displayName: "App Documents"))
+            loaded.append(node(for: libraryRoot, displayName: "App Library"))
+            loaded.append(node(for: temporaryRoot, displayName: "Temporary Files"))
+            loaded.append(node(for: appBundleRoot, displayName: "App Bundle"))
+        }
+        roots = loaded
     }
+
+    func isReadOnly(_ file: WorkspaceFile) -> Bool { file.path == appBundleRoot.path || file.path.hasPrefix(appBundleRoot.path + "/") }
+    func revealWorkspaceOnly() { roots = [node(for: workspaceRoot, displayName: "Workspace")] }
+    func revealAllAppDirectories() { includeAppDirectories = true; reload() }
 
     func open(_ file: WorkspaceFile) { selected=file; guard !file.isDirectory else { return }; recent.removeAll{$0.path==file.path}; recent.insert(file,at:0); if recent.count>20{recent=Array(recent.prefix(20))} }
     func contents(of file: WorkspaceFile) -> String? { guard !file.isDirectory else { return nil }; return try? String(contentsOfFile:file.path,encoding:.utf8) }
@@ -75,24 +95,25 @@ final class FileManagerService: ObservableObject {
         reload()
     }
     func duplicate(_ file:WorkspaceFile) {
+        guard !isReadOnly(file) else { errorMessage="The app bundle is read-only."; return }
         let src=URL(fileURLWithPath:file.path); let ext=src.pathExtension
         let base=src.deletingPathExtension().lastPathComponent+" copy"+(ext.isEmpty ? "" : "."+ext)
         do { try FileManager.default.copyItem(at:src,to:uniqueURL(src.deletingLastPathComponent().appendingPathComponent(base))); reload() }
         catch { errorMessage=error.localizedDescription }
     }
-    func delete(_ file:WorkspaceFile) { do { try FileManager.default.removeItem(atPath:file.path); if selected?.path==file.path{selected=nil}; reload() } catch { errorMessage=error.localizedDescription } }
-    func rename(_ file:WorkspaceFile,to newName:String) { guard valid(newName) else{return}; do { let src=URL(fileURLWithPath:file.path); try FileManager.default.moveItem(at:src,to:src.deletingLastPathComponent().appendingPathComponent(newName)); reload() } catch { errorMessage=error.localizedDescription } }
+    func delete(_ file:WorkspaceFile) { guard !isReadOnly(file) else { errorMessage="The app bundle is read-only."; return }; do { try FileManager.default.removeItem(atPath:file.path); if selected?.path==file.path{selected=nil}; reload() } catch { errorMessage=error.localizedDescription } }
+    func rename(_ file:WorkspaceFile,to newName:String) { guard !isReadOnly(file) else { errorMessage="The app bundle is read-only."; return }; guard valid(newName) else{return}; do { let src=URL(fileURLWithPath:file.path); try FileManager.default.moveItem(at:src,to:src.deletingLastPathComponent().appendingPathComponent(newName)); reload() } catch { errorMessage=error.localizedDescription } }
     func toggleFavorite(_ file:WorkspaceFile) { /* favorites are session metadata until project metadata persistence lands */ }
 
-    private func node(for url:URL)->WorkspaceFile {
+    private func node(for url:URL, displayName:String?=nil)->WorkspaceFile {
         var isDir:ObjCBool=false; FileManager.default.fileExists(atPath:url.path,isDirectory:&isDir)
         let attrs=try? FileManager.default.attributesOfItem(atPath:url.path)
         var children:[WorkspaceFile]?=nil
         if isDir.boolValue {
             let urls=(try? FileManager.default.contentsOfDirectory(at:url,includingPropertiesForKeys:nil,options:[.skipsHiddenFiles])) ?? []
-            children=urls.sorted{$0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending}.map(node)
+            children=urls.sorted{$0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending}.map { node(for:$0) }
         }
-        return .init(name:url.lastPathComponent,path:url.path,isDirectory:isDir.boolValue,size:(attrs?[.size] as? NSNumber)?.int64Value ?? 0,modified:(attrs?[.modificationDate] as? Date) ?? .now,children:children)
+        return .init(name:displayName ?? url.lastPathComponent,path:url.path,isDirectory:isDir.boolValue,size:(attrs?[.size] as? NSNumber)?.int64Value ?? 0,modified:(attrs?[.modificationDate] as? Date) ?? .now,children:children)
     }
     private func valid(_ name:String)->Bool { !name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && !name.contains("/") }
     private func uniqueURL(_ url:URL)->URL { var u=url; var n=2; while FileManager.default.fileExists(atPath:u.path){ let ext=url.pathExtension; let stem=url.deletingPathExtension().lastPathComponent; u=url.deletingLastPathComponent().appendingPathComponent("\(stem) \(n)"+(ext.isEmpty ? "" : "."+ext)); n+=1 }; return u }
