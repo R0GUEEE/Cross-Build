@@ -82,6 +82,8 @@ final class AppSettings: ObservableObject {
     @AppStorage("runtime.shellLogin") var shellLogin = false
     @AppStorage("runtime.shellInteractive") var shellInteractive = false
     @AppStorage("runtime.shellInit") var shellInitCommand = ""
+    @AppStorage("runtime.terminalPersistent") var terminalPersistentSession = true
+    @AppStorage("runtime.terminalCwd") var terminalWorkingDirectory = ""
 }
 
 enum AppSection: String, CaseIterable, Identifiable {
