@@ -34,6 +34,10 @@ struct IDEView: View {
         .sheet(isPresented: $showWorkspaceConfiguration) {
             WorkspaceConfigurationView(config: workspace.configuration).environmentObject(workspace)
         }
+        .onAppear {
+            if let configured = ForgePanel(rawValue: settings.defaultBottomPanel) { bottomPanel = configured }
+            bottomExpanded = settings.defaultBottomPanelExpanded
+        }
         .alert(item: $pendingCloseDocument) { doc in
             Alert(
                 title: Text("Discard unsaved changes?"),
@@ -102,8 +106,14 @@ struct IDEView: View {
                     Button { workspace.editor.showFind = false } label: { Image(systemName: "xmark") }
                 }.padding(8).background(.secondary.opacity(0.04))
             }
-            if workspace.editor.documents.isEmpty {
+            if workspace.editor.documents.isEmpty && settings.showWelcomeScreen {
                 WorkspaceHomeView(clone: { openGitHubImporter() }, configure: { showWorkspaceConfiguration = true }).environmentObject(workspace)
+            } else if workspace.editor.documents.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "doc.text").font(.largeTitle).foregroundStyle(.secondary)
+                    Text("No File Open").font(.headline)
+                    Button("New File", systemImage: "doc.badge.plus") { workspace.files.createFile(named: workspace.newFileName()) }
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 editor
             }
