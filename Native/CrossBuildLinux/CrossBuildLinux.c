@@ -14,12 +14,28 @@
 // static inline and wires up the guest's argv/rootfs; main.c in the upstream
 // tree drives it, and this file reproduces the parts of that sequence that make
 // sense in-process (everything except host-terminal handling and process exit).
+//
+// These includes mirror main.c's, because xX_main_Xx.h expects the kernel, fs
+// and emulator headers to be in scope already (it uses do_execve, task_run_current,
+// struct task, the engine's errno names, and exit_hook).
+#include "kernel/calls.h"
+#include "kernel/task.h"
+#include "fs/path.h"
+#include "emu/cpu.h"
+#include "emu/tlb.h"
+#include "asbestos/frame.h"
+#include "asbestos/asbestos.h"
+#include "platform/host_context_aarch64.h"
+#include "platform/native_fault.h"
 #include "xX_main_Xx.h"
 
 // Set by xX_main_Xx() and invoked by the engine when the root guest task exits.
 // Upstream's own handler calls exit(), which would tear down the host app, so it
 // is replaced below with one that unwinds only the guest thread.
 extern void (*exit_hook)(struct task *task, int code);
+
+// Defined below; referenced by the guest thread, so it must be declared first.
+static void cblk_exit_hook(struct task *task, int code);
 
 static int g_booted = 0;
 static int g_guest_exit_code = 0;
