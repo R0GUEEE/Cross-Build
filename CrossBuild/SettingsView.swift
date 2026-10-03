@@ -8,6 +8,12 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section("Configuration") {
+                    NavigationLink("App Configuration") {
+                        AppConfigurationView(settings: settings)
+                    }
+                    NavigationLink("Agent Configuration") {
+                        AgentConfigurationView(settings: settings)
+                    }
                     NavigationLink("Workspace & Project") {
                         WorkspaceConfigurationView(config: workspace.configuration).environmentObject(workspace)
                     }
