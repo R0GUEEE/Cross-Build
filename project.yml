@@ -50,6 +50,7 @@ targets:
       - package: ZIPFoundation
       - target: CrossBuildClang
       - target: CrossBuildPython
+      - target: CrossBuildLinux
       # Embedded CPython. Dynamic framework, so it is linked and embedded into the
       # app; the support package ships it with its own Info.plist, which is the
       # thing installd insists on for embedded frameworks.
@@ -71,6 +72,12 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
         ENABLE_USER_SCRIPT_SANDBOXING: NO
+        # The ios-linuxkit engine is vendored as prebuilt static libraries (built
+        # by the "Build iOS Linux engine" step), because it is a Meson project and
+        # rebuilding it inside the app target is not practical. Linking by path is
+        # explicit, so a missing library fails the link loudly rather than being
+        # silently skipped.
+        OTHER_LDFLAGS: "-L$(SRCROOT)/Vendor/linuxkit/build-ios -lish_emu -lish -lfakefs -lsqlite3 -ObjC"
     scheme:
       testTargets: []
 
@@ -101,6 +108,35 @@ targets:
         CLANG_CXX_LANGUAGE_STANDARD: "c++17"
         GENERATE_INFOPLIST_FILE: NO
         MACH_O_TYPE: staticlib
+
+  CrossBuildLinux:
+    # C shim over the ios-linuxkit engine. It includes the engine's own
+    # xX_main_Xx.h and drives the boot sequence, so it needs the vendored source
+    # tree on its header search path and the same GUEST_ARM64 define the engine
+    # is built with. Static library, like the other two shims; the app target does
+    # the linking, since a static library links nothing.
+    type: library.static
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Native/CrossBuildLinux
+    settings:
+      base:
+        PRODUCT_NAME: CrossBuildLinux
+        PRODUCT_BUNDLE_IDENTIFIER: dev.rogueee.crossbuild.linux
+        SKIP_INSTALL: YES
+        CODE_SIGNING_ALLOWED: NO
+        GENERATE_INFOPLIST_FILE: NO
+        MACH_O_TYPE: staticlib
+        CLANG_C_LANGUAGE_STANDARD: gnu11
+        GCC_PREPROCESSOR_DEFINITIONS: GUEST_ARM64=1 DEBUG=1
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/Vendor/linuxkit $(SRCROOT)/Vendor/linuxkit/build-ios"
+        # The engine's headers pull in the SDK's ucontext.h, which refuses to
+        # declare the deprecated ucontext routines unless _XOPEN_SOURCE is
+        # defined; _DARWIN_C_SOURCE must come with it or Darwin's full C level
+        # stays off and DT_*/fstatat/makedev disappear.
+        OTHER_CFLAGS: "-D_XOPEN_SOURCE=600 -D_DARWIN_C_SOURCE"
+        USER_HEADER_SEARCH_PATHS: "$(SRCROOT)/Vendor/linuxkit"
 
   CrossBuildPython:
     # C shim over the vendored CPython runtime. Same static-library shape as

@@ -1,0 +1,7 @@
+// Same static-library shape as the CrossBuildClang / CrossBuildPython shims:
+// the module map sits beside the header, and the target sets neither
+// DEFINES_MODULE nor MODULEMAP_FILE (either produces a duplicate module).
+module CrossBuildLinux {
+    header "CrossBuildLinux.h"
+    export *
+}

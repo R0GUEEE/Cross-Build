@@ -47,6 +47,32 @@ jobs:
           test -f "$STDLIB/os.py" || { echo "::error::standard library did not stage correctly (os.py missing)"; exit 1; }
           echo "# Placeholder: user Python modules live here at runtime." > Vendor/Python/stdlib/app/README.txt
 
+      - name: Build iOS Linux engine
+        run: |
+          set -euo pipefail
+          # The engine is a Meson project, so it is built here rather than inside
+          # the app target. Pinned to the release the embedded-Linux work was
+          # validated against; see .github/workflows/linuxkit-engine.yml.
+          PINNED=c1a4064e84f1a957280a62f77d107162032dc908   # 2.4.1 build 818
+          mkdir -p Vendor
+          git clone --filter=blob:none https://github.com/rcarmo/ios-linuxkit.git Vendor/linuxkit
+          cd Vendor/linuxkit
+          git checkout "$PINNED"
+          git submodule update --init --recursive --depth 1 || echo "::warning::submodule init failed; continuing"
+          # platform/darwin.c calls dispatch_once but relies on a system header to
+          # pull libdispatch in; scoped to this file because a global -include also
+          # reaches the .S gadgets and breaks the assembler.
+          printf '#include <dispatch/dispatch.h>\n' > /tmp/darwin.c
+          cat platform/darwin.c >> /tmp/darwin.c
+          mv /tmp/darwin.c platform/darwin.c
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          sed "s|@IOS_SDK@|$SDK|" "$GITHUB_WORKSPACE/Tools/linuxkit-cross-ios.txt" > cross-ios.txt
+          meson setup build-ios --cross-file cross-ios.txt \
+            -Dguest_arch=arm64 -Djit=false -Djit_emit=false -Dcli_aot= \
+            --buildtype=release
+          meson compile -C build-ios
+          ls -la build-ios/*.a
+
       - name: Generate project
         env:
           CROSSBUILD_BUILD_NUMBER: ${{ github.run_number }}
