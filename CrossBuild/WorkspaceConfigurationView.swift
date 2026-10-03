@@ -7,59 +7,85 @@ struct WorkspaceConfigurationView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Project") {
-                    TextField("Project name", text: $config.projectName)
-                    TextField("Working directory", text: $config.workingDirectory)
-                    Toggle("Index source files", isOn: $config.indexSources)
-                    Toggle("Autosave", isOn: $config.autosave)
-                }
-                Section("Build") {
-                    Picker("Configuration", selection: $config.buildTarget) {
-                        Text("Debug").tag("Debug"); Text("Release").tag("Release")
+                Section("Automatic Project Setup") {
+                    LabeledContent("Project", value: activeProjectName)
+                    LabeledContent("Toolchain", value: workspace.activeCompiler?.name ?? workspace.selectedToolchain.rawValue)
+                    if let root = workspace.activeProjectRoot {
+                        Text(root)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
                     }
-                    TextField("Deployment target", text: $config.deploymentTarget)
-                    TextField("Architecture", text: $config.architecture)
-                    TextField("SDK / sysroot path", text: $config.sdkPath)
-                    TextField("Build arguments", text: $config.buildArguments)
-                    TextField("Environment (KEY=VALUE)", text: $config.environmentVariables, axis: .vertical)
+                    Button("Detect & Generate Settings", systemImage: "wand.and.stars") {
+                        workspace.detectSampleProject()
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    if !workspace.generatedConfigurationSummary.isEmpty {
+                        ForEach(workspace.generatedConfigurationSummary, id: \.self) { item in
+                            Label(item, systemImage: "checkmark.circle")
+                                .font(.caption)
+                        }
+                    }
                 }
-                Section("Compiler") {
-                    Toggle("Auto-detect toolchain", isOn: $config.autoDetectToolchain)
-                    TextField("Toolchain override", text: $config.compilerOverride)
-                    LabeledContent("Current", value: workspace.activeCompiler?.name ?? workspace.selectedToolchain.rawValue)
-                    Button("Run Detection", systemImage: "sparkle.magnifyingglass", action: workspace.detectSampleProject)
+
+                Section("Build Overrides") {
+                    Picker("Configuration", selection: $config.buildTarget) {
+                        Text("Debug").tag("Debug")
+                        Text("Release").tag("Release")
+                    }
+                    TextField("Working directory", text: $config.workingDirectory)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    TextField("SDK / sysroot path (optional)", text: $config.sdkPath)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    TextField("Additional build arguments", text: $config.buildArguments, axis: .vertical)
+                    TextField("Environment (KEY=VALUE, one per line)", text: $config.environmentVariables, axis: .vertical)
+                        .lineLimit(2...8)
+                    Text("Leave overrides empty to use automatically generated project settings.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+
                 Section("Editor & Documents") {
+                    Toggle("Workspace autosave", isOn: $config.autosave)
                     Toggle("Restore open tabs", isOn: $config.restoreOpenTabs)
                     Toggle("Confirm closing unsaved files", isOn: $config.confirmCloseDirty)
-                    Picker("Default encoding", selection: $config.defaultEncoding) { Text("UTF-8").tag("UTF-8"); Text("UTF-16").tag("UTF-16") }
-                    Picker("Line endings", selection: $config.lineEndings) { Text("LF").tag("LF"); Text("CRLF").tag("CRLF") }
+                    Picker("Text encoding", selection: $config.defaultEncoding) {
+                        Text("UTF-8").tag("UTF-8")
+                        Text("UTF-16").tag("UTF-16")
+                    }
+                    Picker("Line endings", selection: $config.lineEndings) {
+                        Text("LF").tag("LF")
+                        Text("CRLF").tag("CRLF")
+                    }
                 }
+
                 Section("Loaded Directories") {
                     Toggle("Show app directories", isOn: $config.showAppDirectories)
-                    Toggle("Show application bundle", isOn: $config.showAppBundle)
-                    Toggle("Show app Library", isOn: $config.showContainerLibrary)
-                    Toggle("Show temporary files", isOn: $config.showTemporaryFiles)
+                    if config.showAppDirectories {
+                        Toggle("Show application bundle", isOn: $config.showAppBundle)
+                        Toggle("Show app Library", isOn: $config.showContainerLibrary)
+                        Toggle("Show temporary files", isOn: $config.showTemporaryFiles)
+                    }
                     LabeledContent("Workspace", value: workspace.files.workspaceRoot.path)
-                    LabeledContent("Documents", value: workspace.files.documentsRoot.path)
-                    LabeledContent("Library", value: workspace.files.libraryRoot.path)
-                    LabeledContent("Bundle", value: workspace.files.appBundleRoot.path)
                 }
-                Section("Search & Files") {
+
+                Section("File Discovery") {
+                    Toggle("Include hidden files", isOn: $config.searchHiddenFiles)
                     Toggle("Case-sensitive search", isOn: $config.searchCaseSensitive)
-                    Toggle("Search hidden files", isOn: $config.searchHiddenFiles)
                     Toggle("Follow symbolic links", isOn: $config.followSymlinks)
-                    TextField("Exclude patterns", text: $config.excludePatterns, axis: .vertical)
+                    TextField("Excluded directory names", text: $config.excludePatterns, axis: .vertical)
+                    Text("Separate exclusions with commas. Core exclusions such as .git, DerivedData, .build and node_modules remain protected.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                Section("Git") {
-                    TextField("Default branch", text: $config.gitDefaultBranch)
-                    Toggle("Shallow clone", isOn: $config.gitShallowClone)
-                    Toggle("Clone submodules", isOn: $config.gitSubmodules)
-                    Picker("Clone destination", selection: $config.gitDestination) { Text("Workspace").tag("Workspace") }
-                }
+
                 Section("Workspace Information") {
-                    LabeledContent("Files", value: "\(workspace.files.flattened.filter { !$0.isDirectory }.count)")
-                    LabeledContent("Projects storage", value: "Documents/Workspace")
+                    LabeledContent("Project files", value: "\(workspace.projectFiles.count)")
+                    LabeledContent("Open editors", value: "\(workspace.editor.documents.count)")
+                    LabeledContent("Execution", value: workspace.executionStatus)
                 }
             }
             .navigationTitle("Workspace Configuration")
@@ -73,5 +99,10 @@ struct WorkspaceConfigurationView: View {
             .onChange(of: config.followSymlinks) { _ in workspace.syncFileConfiguration() }
             .onChange(of: config.excludePatterns) { _ in workspace.syncFileConfiguration() }
         }
+    }
+
+    private var activeProjectName: String {
+        guard let root = workspace.activeProjectRoot else { return "Not detected" }
+        return URL(fileURLWithPath: root).lastPathComponent
     }
 }
