@@ -47,8 +47,8 @@ final class FileManagerService: ObservableObject {
         roots = [node(for: base)]
     }
 
-    func open(_ file: WorkspaceFile) { selected=file; guard !file.isDirectory else{return}; recent.removeAll{$0.path==file.path}; recent.insert(file,at:0); if recent.count>20{recent=Array(recent.prefix(20))} }
-    func contents(of file: WorkspaceFile) -> String? { guard !file.isDirectory else{return nil}; return try? String(contentsOfFile:file.path,encoding:.utf8) }
+    func open(_ file: WorkspaceFile) { selected=file; guard !file.isDirectory else { return }; recent.removeAll{$0.path==file.path}; recent.insert(file,at:0); if recent.count>20{recent=Array(recent.prefix(20))} }
+    func contents(of file: WorkspaceFile) -> String? { guard !file.isDirectory else { return nil }; return try? String(contentsOfFile:file.path,encoding:.utf8) }
     func save(_ text:String, to file:WorkspaceFile) throws { guard !file.isDirectory else{return}; try text.write(toFile:file.path,atomically:true,encoding:.utf8); reload() }
 
     func createFile(named name:String, in parentPath:String?=nil) {
@@ -90,7 +90,7 @@ final class FileManagerService: ObservableObject {
         var children:[WorkspaceFile]?=nil
         if isDir.boolValue {
             let urls=(try? FileManager.default.contentsOfDirectory(at:url,includingPropertiesForKeys:nil,options:[.skipsHiddenFiles])) ?? []
-            children=urls.sorted{$0.lastPathComponent.localizedStandardCompare($1.lastPathComponent)==.orderedAscending}.map(node)
+            children=urls.sorted{$0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending}.map(node)
         }
         return .init(name:url.lastPathComponent,path:url.path,isDirectory:isDir.boolValue,size:(attrs?[.size] as? NSNumber)?.int64Value ?? 0,modified:(attrs?[.modificationDate] as? Date) ?? .now,children:children)
     }
