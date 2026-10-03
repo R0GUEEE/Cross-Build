@@ -62,6 +62,7 @@ final class WorkspaceModel: ObservableObject {
     @Published var customCompilers: [CustomCompiler] = []
     @Published var selectedCustomCompilerID: UUID?
     @Published var agentActivity: [String] = []
+    let files = FileManagerService()
 
     var activeCompiler: CustomCompiler? { customCompilers.first { $0.id == selectedCustomCompilerID } }
     @Published var tasks: [AgentTask] = [
@@ -77,8 +78,9 @@ final class WorkspaceModel: ObservableObject {
         TWEAK_NAME = CrossBuildDemo
         include $(THEOS_MAKE_PATH)/tweak.mk
         """
+        let projectPaths = files.flattened.map(\.path) + ["CrossBuildDemo.xm"]
         let result = ProjectDetector.analyze(
-            paths: ["Makefile", "control", "CrossBuildDemo.xm"],
+            paths: projectPaths,
             fileContents: ["Makefile": makefile, "control": "Architecture: iphoneos-arm64"]
         )
         analysis = result
