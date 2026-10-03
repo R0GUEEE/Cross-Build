@@ -292,7 +292,7 @@ struct IDEView: View {
                 Button("Delete Line", systemImage: "trash") { deleteCurrentLine() }
                 Divider()
                 Button("Trim Trailing Whitespace", systemImage: "eraser") { trimTrailingWhitespace() }
-                Button("Sort Selected Lines", systemImage: "arrow.up.arrow.down") { sortSelectedLines() }
+                Button("Sort Lines (Selection or File)", systemImage: "arrow.up.arrow.down") { sortSelectedLines() }
             } label: {
                 Label("Edit", systemImage: "text.cursor")
             }

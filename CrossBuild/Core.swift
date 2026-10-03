@@ -158,7 +158,9 @@ final class WorkspaceModel: ObservableObject {
     }
 
     private func persistOpenDocuments() {
-        guard configuration.restoreOpenTabs else {
+        // "Open last workspace" is the user-facing switch for remembering tabs
+        // between launches; without it the setting was a toggle that did nothing.
+        guard configuration.restoreOpenTabs, appSettings?.openLastWorkspace ?? true else {
             UserDefaults.standard.removeObject(forKey: openDocumentsKey)
             UserDefaults.standard.removeObject(forKey: selectedDocumentKey)
             return

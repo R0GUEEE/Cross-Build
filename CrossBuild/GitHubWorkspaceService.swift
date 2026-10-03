@@ -11,13 +11,6 @@ struct GitRepository: Identifiable, Codable, Hashable {
     var clonedAt = Date()
 }
 
-enum GitCloneMode: String, CaseIterable, Identifiable {
-    case automatic = "Automatic"
-    case git = "Git Clone"
-    case archive = "Archive Import"
-    var id: String { rawValue }
-}
-
 enum GitHubImportError: LocalizedError {
     case invalidURL
     case emptyArchive
