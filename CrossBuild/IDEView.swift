@@ -3,6 +3,7 @@ import SwiftUI
 struct IDEView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
     @State private var selection = "main.swift"
+    @State private var showCompilerManager = false
 
     var body: some View {
         NavigationSplitView {
@@ -20,6 +21,14 @@ struct IDEView: View {
                 Section("Compiler") {
                     Button(action: workspace.detectSampleProject) {
                         Label("Auto Detect Project", systemImage: "waveform.badge.magnifyingglass")
+                    }
+                    Button {
+                        showCompilerManager = true
+                    } label: {
+                        Label("Add / Select Compiler", systemImage: "plus.rectangle.on.folder")
+                    }
+                    if let compiler = workspace.activeCompiler {
+                        Label("Using: \(compiler.name)", systemImage: "checkmark.circle.fill")
                     }
                 }
             }
@@ -84,6 +93,9 @@ struct IDEView: View {
             }
             .navigationTitle(selection)
             .navigationBarTitleDisplayMode(.inline)
+        }
+        .sheet(isPresented: $showCompilerManager) {
+            CompilerManagerView().environmentObject(workspace)
         }
     }
 }
