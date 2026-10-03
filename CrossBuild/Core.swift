@@ -525,6 +525,10 @@ final class WorkspaceModel: ObservableObject {
         }
 
         console += "Agent task: \(request)\n"
+        let lower = request.lowercased()
+        if analysis == nil || lower.contains("detect") || lower.contains("configure") {
+            detectSampleProject()
+        }
         let plan = AgentController.plan(request, workspace: self)
         agentPrompt = ""
 
