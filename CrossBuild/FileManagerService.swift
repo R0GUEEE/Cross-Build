@@ -148,23 +148,23 @@ final class FileManagerService: ObservableObject {
         if recent.count > 20 { recent = Array(recent.prefix(20)) }
     }
 
-    func contents(of file: WorkspaceFile) -> String? {
+    func contents(of file: WorkspaceFile, encoding: String.Encoding = .utf8) -> String? {
         guard !file.isDirectory else { return nil }
         do {
-            return try String(contentsOfFile: file.path, encoding: .utf8)
+            return try String(contentsOfFile: file.path, encoding: encoding)
         } catch {
             errorMessage = "Could not open \(file.name) as UTF-8 text: \(error.localizedDescription)"
             return nil
         }
     }
 
-    func save(_ text: String, to file: WorkspaceFile) throws {
+    func save(_ text: String, to file: WorkspaceFile, encoding: String.Encoding = .utf8) throws {
         guard !file.isDirectory else { return }
         guard !isReadOnly(file) else {
             throw NSError(domain: "CrossBuild.Files", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "The app bundle is read-only."])
         }
-        try text.write(toFile: file.path, atomically: true, encoding: .utf8)
+        try text.write(toFile: file.path, atomically: true, encoding: encoding)
     }
 
     @discardableResult
