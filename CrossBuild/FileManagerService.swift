@@ -55,6 +55,7 @@ final class FileManagerService: ObservableObject {
     private var showHidden = false
     private var followSymlinks = false
     private var searchCaseSensitive = false
+    private var searchFileContents = false
     private var maxRecentFiles = 20
     private var excludedNames: Set<String> = [".git", "DerivedData", ".build", "node_modules", "Caches"]
 
@@ -80,17 +81,33 @@ final class FileManagerService: ObservableObject {
     var searchResults: [WorkspaceFile] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !needle.isEmpty else { return [] }
-        return flattened.filter {
-            if searchCaseSensitive {
-                return $0.name.contains(needle) || $0.path.contains(needle)
-            }
-            return $0.name.localizedCaseInsensitiveContains(needle) || $0.path.localizedCaseInsensitiveContains(needle)
+        return flattened.filter { file in
+            if matchesName(file, needle: needle) { return true }
+            return searchFileContents && matchesContents(file, needle: needle)
         }
+    }
+
+    /// Content search is opt-in and capped at 512 KB per file so a large binary
+    /// or generated artifact accidentally included in the workspace can't make
+    /// every keystroke in the search field scan megabytes of data.
+    private static let contentSearchSizeLimit: Int64 = 512 * 1024
+
+    private func matchesName(_ file: WorkspaceFile, needle: String) -> Bool {
+        if searchCaseSensitive {
+            return file.name.contains(needle) || file.path.contains(needle)
+        }
+        return file.name.localizedCaseInsensitiveContains(needle) || file.path.localizedCaseInsensitiveContains(needle)
+    }
+
+    private func matchesContents(_ file: WorkspaceFile, needle: String) -> Bool {
+        guard !file.isDirectory, file.size > 0, file.size <= Self.contentSearchSizeLimit else { return false }
+        guard let text = try? String(contentsOfFile: file.path, encoding: .utf8) else { return false }
+        return searchCaseSensitive ? text.contains(needle) : text.localizedCaseInsensitiveContains(needle)
     }
 
     func configure(showAppDirectories: Bool, showBundle: Bool, showLibrary: Bool,
                    showTemporary: Bool, showHidden: Bool, followSymlinks: Bool,
-                   searchCaseSensitive: Bool, maxRecentFiles: Int = 20, excludePatterns: String) {
+                   searchCaseSensitive: Bool, searchFileContents: Bool = false, maxRecentFiles: Int = 20, excludePatterns: String) {
         includeAppDirectories = showAppDirectories
         self.showBundle = showBundle
         self.showLibrary = showLibrary
@@ -98,6 +115,7 @@ final class FileManagerService: ObservableObject {
         self.showHidden = showHidden
         self.followSymlinks = followSymlinks
         self.searchCaseSensitive = searchCaseSensitive
+        self.searchFileContents = searchFileContents
         self.maxRecentFiles = max(5, maxRecentFiles)
         let configured = excludePatterns
             .split(separator: ",")

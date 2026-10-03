@@ -33,16 +33,6 @@ enum ToolchainRegistry {
         .init(kind: .clang, markers: [".c", ".cc", ".cpp", ".m", ".mm"], buildCommands: ["clang", "clang++"]),
         .init(kind: .custom, markers: ["CMakeLists.txt", "meson.build", "Makefile"], buildCommands: ["make"])
     ]
-
-    static func detect(fileNames: [String]) -> ToolchainKind {
-        if fileNames.contains("control") && fileNames.contains("Makefile") { return .theos }
-        for provider in providers {
-            if provider.markers.contains(where: { marker in
-                marker.hasPrefix(".") ? fileNames.contains(where: { $0.hasSuffix(marker) }) : fileNames.contains(marker)
-            }) { return provider.kind }
-        }
-        return .custom
-    }
 }
 
 struct AgentTask: Identifiable {
@@ -105,6 +95,7 @@ final class WorkspaceModel: ObservableObject {
             showHidden: configuration.searchHiddenFiles || appSettings?.showHiddenFiles == true,
             followSymlinks: configuration.followSymlinks,
             searchCaseSensitive: configuration.searchCaseSensitive,
+            searchFileContents: configuration.searchFileContents,
             maxRecentFiles: configuration.maxRecentFiles,
             excludePatterns: configuration.excludePatterns
         )
@@ -156,19 +147,29 @@ final class WorkspaceModel: ObservableObject {
             "project.yml", "Package.swift", "Cargo.toml", "go.mod", "build.zig",
             "CMakeLists.txt", "meson.build", "package.json", "pyproject.toml",
             "setup.py", "build.gradle", "build.gradle.kts", "Makefile", "control"
-        ]
+        ].union(customManifestNames())
+
+        // When nested-project detection is off, every manifest found anywhere in
+        // the workspace is still a "candidate" for the *contextual* (currently
+        // selected file) branch below, but the workspace root is always the
+        // fallback instead of picking the shallowest nested manifest -- i.e. we
+        // stop treating subfolders as separate projects on their own.
+        let detectNested = configuration.detectNestedProjects
         let candidates = Set(files.compactMap { file -> String? in
             guard markers.contains(file.name) else { return nil }
             return URL(fileURLWithPath: file.path).deletingLastPathComponent().path
         })
 
-        if let selectedPath = filesServiceSelectedPath(),
+        if configuration.preferNearestManifest,
+           let selectedPath = filesServiceSelectedPath(),
            let contextual = candidates
             .filter({ selectedPath == $0 || selectedPath.hasPrefix($0 + "/") })
             .sorted(by: { $0.count > $1.count })
             .first {
             return contextual
         }
+
+        guard detectNested else { return self.files.workspaceRoot.path }
 
         if let candidate = candidates.sorted(by: {
             let leftDepth = $0.split(separator: "/").count
@@ -178,6 +179,14 @@ final class WorkspaceModel: ObservableObject {
             return candidate
         }
         return self.files.workspaceRoot.path
+    }
+
+    private func customManifestNames() -> [String] {
+        configuration.customManifestNames
+            .components(separatedBy: .newlines)
+            .flatMap { $0.components(separatedBy: ",") }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 
     private func filesServiceSelectedPath() -> String? {
@@ -202,10 +211,15 @@ final class WorkspaceModel: ObservableObject {
         activeProjectRoot = root
         configuration.workingDirectory = root
         let scopedFiles = allFiles.filter { $0.path == root || $0.path.hasPrefix(root + "/") }
-        let projectPaths = scopedFiles.map(\.path)
+        let manifestNames: Set<String> = ["project.yml","Makefile","control","Package.swift","Cargo.toml","go.mod","build.zig","CMakeLists.txt","meson.build","package.json","pyproject.toml","setup.py","build.gradle","build.gradle.kts"]
+        // "Index source files" off means detection only looks at manifest
+        // filenames, not every source file's extension -- useful for very large
+        // trees where walking every path is unnecessary once a manifest already
+        // identifies the toolchain.
+        let projectPaths = configuration.indexSources ? scopedFiles.map(\.path) : scopedFiles.filter { manifestNames.contains($0.name) }.map(\.path)
         var contents: [String:String] = [:]
         for file in scopedFiles {
-            if ["project.yml","Makefile","control","Package.swift","Cargo.toml","go.mod","build.zig","CMakeLists.txt","meson.build","package.json","pyproject.toml","setup.py","build.gradle","build.gradle.kts"].contains(file.name),
+            if manifestNames.contains(file.name),
                let text = files.contents(of: file) { contents[file.name] = text }
         }
         let result = ProjectDetector.analyze(paths: projectPaths, fileContents: contents)
@@ -235,7 +249,11 @@ final class WorkspaceModel: ObservableObject {
 
             if resolved?.cleanBeforeBuild == true {
                 let cleaned = await executeCommand(cleanCommand(), settings: resolved)
-                guard cleaned.succeeded else { return }
+                let stopOnFailure = resolved?.stopOnFirstError ?? true
+                if !cleaned.succeeded && stopOnFailure {
+                    console += "Build stopped after clean failed (Settings → Build Policy → Stop workflow on first failure).\n"
+                    return
+                }
             }
 
             let command = configuredBuildCommand(settings: resolved)
@@ -403,12 +421,21 @@ final class WorkspaceModel: ObservableObject {
         let localWorkingDirectory = configuration.workingDirectory.isEmpty ? (activeProjectRoot ?? files.workspaceRoot.path) : configuration.workingDirectory
         let remoteWorkspace = resolvedSettings?.remoteWorkspace.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let workingDirectory = (mode == "Remote / Helper" || mode == "Remote / SSH") && !remoteWorkspace.isEmpty ? remoteWorkspace : localWorkingDirectory
-        console += "$ \(command)\nBackend: \(backend.name)\n"
+        let startedAt = Date()
+        if resolvedSettings?.timestampBuildOutput == true {
+            console += "[\(Self.timestampFormatter.string(from: startedAt))] $ \(command)\nBackend: \(backend.name)\n"
+        } else {
+            console += "$ \(command)\nBackend: \(backend.name)\n"
+        }
         isExecuting = true
         executionStatus = "Running"
         var environment = resolvedSettings?.forwardEnvironment == false ? [:] : commandEnvironment()
         if environment["PATH"] == nil {
             environment["PATH"] = "/var/jb/usr/bin:/var/jb/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        }
+        if resolvedSettings?.captureEnvironment == true && !environment.isEmpty {
+            let summary = environment.keys.sorted().joined(separator: ", ")
+            console += "env: \(summary)\n"
         }
         let configuredShell = resolvedSettings?.shellPath.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Auto"
         let request = CommandRequest(
@@ -419,15 +446,72 @@ final class WorkspaceModel: ObservableObject {
             loginShell: resolvedSettings?.shellLogin ?? false,
             interactiveShell: resolvedSettings?.shellInteractive ?? false,
             initCommand: resolvedSettings?.shellInitCommand.trimmingCharacters(in: .whitespacesAndNewlines),
-            timeout: resolvedSettings?.commandTimeout ?? 0
+            timeout: resolvedSettings?.commandTimeout ?? 0,
+            sessionID: sessionID
         )
         let result = await backend.execute(request)
-        if !result.stdout.isEmpty { console += result.stdout + "\n" }
-        if !result.stderr.isEmpty { console += "error: " + result.stderr + "\n" }
+        appendResultOutput(result, settings: resolvedSettings)
         lastExitCode = result.exitCode
         executionStatus = result.succeeded ? "Succeeded" : "Failed (\(result.exitCode))"
         isExecuting = false
+        if resolvedSettings?.timestampBuildOutput == true {
+            let elapsed = String(format: "%.2f", Date().timeIntervalSince(startedAt))
+            console += "[\(Self.timestampFormatter.string(from: Date()))] finished in \(elapsed)s\n"
+        }
         return result
+    }
+
+    private static let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
+
+    /// Appends a command's stdout/stderr to the console, honoring the diagnostics
+    /// filtering settings (include warnings/notes, max problem lines). "Problem"
+    /// lines are stderr text and any stdout line that reads as a compiler
+    /// diagnostic (error:/warning:/note:); everything else in stdout always passes
+    /// through unfiltered since those settings only describe diagnostics, not
+    /// general build output.
+    private func appendResultOutput(_ result: CommandResult, settings: AppSettings?) {
+        let includeWarnings = settings?.includeWarnings ?? true
+        let includeNotes = settings?.includeNotes ?? true
+        let maxProblems = max(1, settings?.maxProblems ?? 200)
+
+        func isProblemLine(_ line: String) -> Bool {
+            line.localizedCaseInsensitiveContains("error:") ||
+            line.localizedCaseInsensitiveContains("warning:") ||
+            line.localizedCaseInsensitiveContains("note:")
+        }
+        func passesFilter(_ line: String) -> Bool {
+            if !includeWarnings && line.localizedCaseInsensitiveContains("warning:") { return false }
+            if !includeNotes && line.localizedCaseInsensitiveContains("note:") { return false }
+            return true
+        }
+
+        if !result.stdout.isEmpty {
+            let lines = result.stdout.components(separatedBy: "\n")
+            var kept: [String] = []
+            var problemCount = 0
+            for line in lines {
+                if isProblemLine(line) {
+                    guard passesFilter(line) else { continue }
+                    problemCount += 1
+                    if problemCount > maxProblems {
+                        if problemCount == maxProblems + 1 {
+                            kept.append("… additional problems truncated at \(maxProblems) (Settings → Diagnostics → Maximum problems)")
+                        }
+                        continue
+                    }
+                }
+                kept.append(line)
+            }
+            console += kept.joined(separator: "\n") + "\n"
+        }
+        if !result.stderr.isEmpty {
+            let lines = result.stderr.components(separatedBy: "\n").filter(passesFilter)
+            if !lines.isEmpty { console += "error: " + lines.joined(separator: "\n") + "\n" }
+        }
     }
 
     private func commandEnvironment() -> [String: String] {
@@ -471,6 +555,12 @@ final class WorkspaceModel: ObservableObject {
         if compilerConfiguration.clangModules { cFlags.append("-fmodules") }
         if !compilerConfiguration.objcARC { cFlags.append("-fno-objc-arc") }
         if compilerConfiguration.linkTimeOptimization { cFlags.append("-flto") }
+        if compilerConfiguration.bitcode { cFlags.append("-fembed-bitcode") }
+        if compilerConfiguration.reproducibleBuild {
+            cFlags.append(contentsOf: ["-Xclang", "-fdebug-compilation-dir=.", "-ffile-prefix-map=\(configuration.workingDirectory)=."])
+        }
+        let minimumOS = compilerConfiguration.minimumOS.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !minimumOS.isEmpty { cFlags.append("-mios-version-min=\(minimumOS)") }
         let defines = compilerConfiguration.defines
             .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "," })
             .map(String.init)
@@ -520,7 +610,9 @@ final class WorkspaceModel: ObservableObject {
             .filter { !$0.isEmpty }
         ldFlags.append(contentsOf: frameworks.map { "-framework \($0)" })
         if compilerConfiguration.stripSymbols { ldFlags.append("-Wl,-S") }
+        if compilerConfiguration.deadStrip { ldFlags.append("-Wl,-dead_strip") }
         if !ldFlags.isEmpty { environment["LDFLAGS"] = ldFlags.joined(separator: " ") }
+        environment["CROSSBUILD_INCREMENTAL_BUILD"] = compilerConfiguration.incrementalBuild ? "1" : "0"
 
         let entitlements = compilerConfiguration.entitlementsPath.trimmingCharacters(in: .whitespacesAndNewlines)
         if !entitlements.isEmpty { environment["CROSSBUILD_ENTITLEMENTS"] = entitlements }
@@ -535,6 +627,9 @@ final class WorkspaceModel: ObservableObject {
         if !compilerConfiguration.packageVersion.isEmpty { environment["CROSSBUILD_PACKAGE_VERSION"] = compilerConfiguration.packageVersion }
         if !compilerConfiguration.packageArchitecture.isEmpty { environment["CROSSBUILD_PACKAGE_ARCH"] = compilerConfiguration.packageArchitecture }
         if !compilerConfiguration.packageDepends.isEmpty { environment["CROSSBUILD_PACKAGE_DEPENDS"] = compilerConfiguration.packageDepends }
+        if !compilerConfiguration.packageSection.isEmpty { environment["CROSSBUILD_PACKAGE_SECTION"] = compilerConfiguration.packageSection }
+        if !compilerConfiguration.packageMaintainer.isEmpty { environment["CROSSBUILD_PACKAGE_MAINTAINER"] = compilerConfiguration.packageMaintainer }
+        if !compilerConfiguration.packageDescription.isEmpty { environment["CROSSBUILD_PACKAGE_DESCRIPTION"] = compilerConfiguration.packageDescription }
         if !compilerConfiguration.bundleIdentifier.isEmpty { environment["PRODUCT_BUNDLE_IDENTIFIER"] = compilerConfiguration.bundleIdentifier }
         if !compilerConfiguration.signingIdentity.isEmpty { environment["CROSSBUILD_SIGNING_IDENTITY"] = compilerConfiguration.signingIdentity }
         if !compilerConfiguration.provisioningProfile.isEmpty { environment["CROSSBUILD_PROVISIONING_PROFILE"] = compilerConfiguration.provisioningProfile }
@@ -558,6 +653,93 @@ final class WorkspaceModel: ObservableObject {
             return
         }
         Task { _ = await executeCommand(command, settings: settings) }
+    }
+
+    /// Runs the package command and, if it succeeds and an artifact directory is
+    /// configured, copies anything new the command produced under the project
+    /// root into that directory (optionally clearing it first). Cross Build has
+    /// no structured knowledge of what a given toolchain's package step
+    /// produces, so this works by diffing the project root's file list before
+    /// and after the command runs -- simple, but accurate for the common case of
+    /// a build dropping a .deb/.ipa/.zip/binary next to the sources.
+    @discardableResult
+    func runPackage(settings: AppSettings? = nil) async -> CommandResult {
+        let resolved = settings ?? appSettings
+        let command = packageCommand()
+        guard !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            console += "error: No package command is configured.\n"
+            return .init(exitCode: 1, stdout: "", stderr: "No package command configured.", duration: 0)
+        }
+        let artifactDir = configuration.artifactDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        let root = activeProjectRoot ?? files.workspaceRoot.path
+        let beforePaths: Set<String> = artifactDir.isEmpty ? [] : Set(snapshotFiles(under: root))
+
+        let result = await executeCommand(command, settings: resolved)
+
+        guard result.succeeded, !artifactDir.isEmpty else { return result }
+        let destination = URL(fileURLWithPath: artifactDir, isDirectory: true)
+        let fm = FileManager.default
+        do {
+            if configuration.cleanArtifactDirectory, fm.fileExists(atPath: destination.path) {
+                try fm.removeItem(at: destination)
+            }
+            try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+        } catch {
+            console += "error: Could not prepare artifact directory: \(error.localizedDescription)\n"
+            return result
+        }
+
+        let afterPaths = Set(snapshotFiles(under: root))
+        let newPaths = afterPaths.subtracting(beforePaths).sorted()
+        guard !newPaths.isEmpty else {
+            console += "Package succeeded but no new files were found under the project root to copy to the artifact directory.\n"
+            return result
+        }
+        var copied = 0
+        for path in newPaths {
+            let source = URL(fileURLWithPath: path)
+            let dest = destination.appendingPathComponent(source.lastPathComponent)
+            do {
+                if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+                try fm.copyItem(at: source, to: dest)
+                copied += 1
+            } catch {
+                console += "error: Could not copy \(source.lastPathComponent) to artifact directory: \(error.localizedDescription)\n"
+            }
+        }
+        if copied > 0 {
+            console += "Copied \(copied) artifact\(copied == 1 ? "" : "s") to \(destination.path)\n"
+        }
+        if !configuration.keepBuildArtifacts {
+            for path in newPaths {
+                try? fm.removeItem(atPath: path)
+            }
+            console += "Removed build artifacts from the project root (Settings → Artifacts → Keep build artifacts is off).\n"
+        }
+        return result
+    }
+
+    /// A flat list of regular-file paths under `root`, skipping the same
+    /// directory names FileManagerService already excludes from the browser
+    /// (.git, DerivedData, .build, node_modules) so a diff doesn't pick up
+    /// unrelated VCS/dependency churn as "new artifacts".
+    private func snapshotFiles(under root: String) -> [String] {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(at: URL(fileURLWithPath: root, isDirectory: true),
+                                              includingPropertiesForKeys: [.isDirectoryKey],
+                                              options: [.skipsHiddenFiles]) else { return [] }
+        let skip: Set<String> = [".git", "DerivedData", ".build", "node_modules"]
+        var results: [String] = []
+        for case let url as URL in enumerator {
+            if skip.contains(url.lastPathComponent) {
+                enumerator.skipDescendants()
+                continue
+            }
+            if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true {
+                results.append(url.path)
+            }
+        }
+        return results
     }
 
     func openSelectedFile() {
@@ -706,7 +888,7 @@ final class WorkspaceModel: ObservableObject {
                 console += "Agent package blocked by permissions.\n"
                 return
             }
-            _ = await executeCommand(packageCommand(), settings: settings)
+            _ = await runPackage(settings: settings)
         case .inspectDiagnostics:
             let lines = console.split(separator: "\n")
                 .filter { $0.localizedCaseInsensitiveContains("error") || $0.localizedCaseInsensitiveContains("warning") }

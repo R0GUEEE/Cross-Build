@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(CrossBuildClang)
+import CrossBuildClang
+#endif
 
 enum NativeLanguage:String, Codable, CaseIterable {
     case c="c", cpp="c++", objectiveC="objective-c", objectiveCpp="objective-c++"
@@ -36,25 +39,59 @@ protocol NativeCompilerBridge {
 }
 
 struct ClangEmbeddedBridge: NativeCompilerBridge {
-    // The stable Swift boundary for a vendored libclang/clangDriver implementation.
-    // Cross Build only reports the engine ready when the native module marker exists.
+    // CrossBuildClang is a small, always-linked C ABI target (see
+    // Native/CrossBuildClang). It is real and callable in every app build, but
+    // it currently ships without a vendored LLVM/clangDriver implementation, so
+    // `compile` always reports a native-but-unimplemented failure rather than
+    // actually compiling anything. `isLinked` reflects whether the module itself
+    // built into this binary (always true once Xcode links the framework target),
+    // not whether a real LLVM payload is behind it -- see `version`/`compile` for
+    // the honest distinction.
     var isLinked:Bool {
-        Bundle.main.url(forResource:"CrossBuildClang",withExtension:"framework",subdirectory:"Frameworks") != nil
+        #if canImport(CrossBuildClang)
+        return true
+        #else
+        return false
+        #endif
     }
-    var version:String { isLinked ? "Embedded LLVM" : "Bridge ready • LLVM payload missing" }
+
+    var version:String {
+        #if canImport(CrossBuildClang)
+        return String(cString: cb_clang_version())
+        #else
+        return "Bridge not linked in this build"
+        #endif
+    }
 
     func compile(_ request:NativeCompileRequest) async -> NativeCompileResult {
-        guard isLinked else {
-            return .init(succeeded:false,diagnostics:[
-                .init(severity:"error",message:"Embedded LLVM payload is not linked in this app build.",file:request.sourcePath),
-                .init(severity:"note",message:"CrossBuildClang bridge is ready for a compatible static/framework LLVM payload.")
-            ],outputPath:nil)
-        }
+        #if canImport(CrossBuildClang)
+        let box = DiagnosticsBox()
+        let exitCode = cb_clang_compile(0, nil, { severityPtr, messagePtr, filePtr, line, column, ctx in
+            guard let ctx else { return }
+            let box = Unmanaged<DiagnosticsBox>.fromOpaque(ctx).takeUnretainedValue()
+            let severity = severityPtr.map { String(cString: $0) } ?? "error"
+            let message = messagePtr.map { String(cString: $0) } ?? "unknown error"
+            let file = filePtr.map { String(cString: $0) }
+            box.diagnostics.append(.init(severity: severity, message: message, file: file,
+                                          line: line > 0 ? Int(line) : nil,
+                                          column: column > 0 ? Int(column) : nil))
+        }, Unmanaged.passUnretained(box).toOpaque())
+        return .init(succeeded: exitCode == 0, diagnostics: box.diagnostics, outputPath: exitCode == 0 ? request.outputPath : nil)
+        #else
         return .init(succeeded:false,diagnostics:[
-            .init(severity:"error",message:"LLVM payload detected but the native clangDriver shim has not been linked yet.")
+            .init(severity:"error",message:"CrossBuildClang was not linked into this app build.",file:request.sourcePath)
         ],outputPath:nil)
+        #endif
     }
 }
+
+#if canImport(CrossBuildClang)
+/// Reference box so the C callback (which only receives an opaque pointer) can
+/// append into the same diagnostics array the async caller reads back afterward.
+private final class DiagnosticsBox {
+    var diagnostics: [NativeDiagnostic] = []
+}
+#endif
 
 enum IOSSDKDiscovery {
     static func bundledSDKs()->[URL] {

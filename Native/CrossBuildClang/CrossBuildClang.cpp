@@ -1,4 +1,4 @@
-#include "include/CrossBuildClang.h"
+#include "CrossBuildClang.h"
 
 // Stable C ABI consumed by Swift. A production build links this target against
 // LLVM clangDriver/clangFrontend and replaces the unavailable return below.

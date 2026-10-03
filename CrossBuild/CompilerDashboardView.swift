@@ -121,7 +121,7 @@ struct CompilerDashboardView: View {
                             action("Clean", "trash") { workspace.runCommand(workspace.cleanCommand(), settings: settings) }
                             action("Build", "hammer.fill") { workspace.runBuild(settings: settings) }
                             action("Test", "checkmark.seal") { workspace.runCommand(workspace.testCommand(), settings: settings) }
-                            action("Package", "shippingbox.fill") { workspace.runCommand(workspace.packageCommand(), settings: settings) }
+                            action("Package", "shippingbox.fill") { Task { _ = await workspace.runPackage(settings: settings) } }
                         }
                     }
                 }.padding()
