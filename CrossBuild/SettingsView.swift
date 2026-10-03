@@ -9,10 +9,8 @@ struct SettingsView: View {
             Form {
                 Section("Editor") {
                     HStack { Text("Font Size"); Slider(value:$settings.editorFontSize,in:11...24,step:1); Text("\(Int(settings.editorFontSize))").monospacedDigit() }
-                    Stepper("Tab width: \(settings.tabWidth)", value:$settings.tabWidth,in:2...8)
-                    Toggle("Line numbers",isOn:$settings.showLineNumbers)
-                    LabeledContent("Word wrap", value: "System editor")
-                    Text("Code folding, minimap and whitespace visualization are hidden until the advanced editor engine is available.")
+                    LabeledContent("Editor engine", value: "System TextEditor")
+                    Text("Line gutters, configurable tab width, code folding, minimap and whitespace visualization are hidden until the advanced editor engine is available.")
                         .font(.caption).foregroundStyle(.secondary)
                     Toggle("Autosave",isOn:$settings.autosave)
                     Toggle("Trim trailing whitespace",isOn:$settings.trimWhitespace)
