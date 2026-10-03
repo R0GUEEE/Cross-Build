@@ -118,10 +118,10 @@ struct CompilerDashboardView: View {
 
                     GroupBox("Build Actions") {
                         HStack {
-                            action("Clean", "trash") { workspace.runCommand(workspace.activeCompiler?.cleanCommand.isEmpty == false ? workspace.activeCompiler!.cleanCommand : "clean", settings: settings) }
+                            action("Clean", "trash") { workspace.runCommand(workspace.cleanCommand(), settings: settings) }
                             action("Build", "hammer.fill") { workspace.runBuild(settings: settings) }
-                            action("Test", "checkmark.seal") { workspace.runCommand(workspace.activeCompiler?.testCommand.isEmpty == false ? workspace.activeCompiler!.testCommand : "test", settings: settings) }
-                            action("Package", "shippingbox.fill") { workspace.runCommand(workspace.activeCompiler?.packageCommand.isEmpty == false ? workspace.activeCompiler!.packageCommand : "package", settings: settings) }
+                            action("Test", "checkmark.seal") { workspace.runCommand(workspace.testCommand(), settings: settings) }
+                            action("Package", "shippingbox.fill") { workspace.runCommand(workspace.packageCommand(), settings: settings) }
                         }
                     }
                 }.padding()
@@ -138,5 +138,6 @@ struct CompilerDashboardView: View {
     private func action(_ title: String, _ icon: String, _ run: @escaping () -> Void) -> some View {
         Button(action: run) { VStack { Image(systemName: icon).font(.title2); Text(title).font(.caption) }.frame(maxWidth: .infinity) }
             .buttonStyle(.bordered)
+            .disabled(workspace.isExecuting)
     }
 }
