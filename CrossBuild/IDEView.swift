@@ -11,6 +11,7 @@ struct IDEView: View {
     @State private var bottomPanel: ForgePanel = .terminal
     @State private var bottomExpanded = true
     @State private var pendingCloseDocument: EditorDocument?
+    @State private var editorSelection = CodeEditorSelection()
 
     var body: some View {
         NavigationSplitView {
@@ -238,11 +239,151 @@ struct IDEView: View {
     }
 
     private var editor: some View {
-        TextEditor(text: Binding(get: { workspace.editorText }, set: { workspace.updateEditorText($0) }))
-            .font(.system(size: settings.editorFontSize, design: .monospaced))
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
+        VStack(spacing: 0) {
+            editorCommandBar
+            Divider()
+            CodeEditorView(
+                text: Binding(get: { workspace.editorText }, set: { workspace.updateEditorText($0) }),
+                selection: $editorSelection,
+                fileName: workspace.editor.selected?.name ?? "Untitled",
+                options: .init(
+                    fontSize: settings.editorFontSize,
+                    tabWidth: settings.editorTabWidth,
+                    insertSpaces: settings.editorInsertSpaces,
+                    wordWrap: settings.editorWordWrap,
+                    showLineNumbers: settings.editorLineNumbers,
+                    highlightCurrentLine: settings.editorHighlightCurrentLine,
+                    showInvisibleCharacters: settings.editorShowInvisibles,
+                    autoClosePairs: settings.editorAutoClosePairs
+                )
+            )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            editorStatusBar
+        }
+    }
+
+    private var editorCommandBar: some View {
+        HStack(spacing: 8) {
+            Menu {
+                Button("Save", systemImage: "square.and.arrow.down", action: workspace.saveEditor)
+                Button("Find & Replace", systemImage: "magnifyingglass") { workspace.editor.showFind.toggle() }
+                Divider()
+                Button("Indent Selection", systemImage: "increase.indent") { transformSelectedLines(indent: true) }
+                Button("Outdent Selection", systemImage: "decrease.indent") { transformSelectedLines(indent: false) }
+                Button("Duplicate Line", systemImage: "plus.square.on.square") { duplicateCurrentLine() }
+                Button("Delete Line", systemImage: "trash") { deleteCurrentLine() }
+                Divider()
+                Button("Trim Trailing Whitespace", systemImage: "eraser") { trimTrailingWhitespace() }
+                Button("Sort Selected Lines", systemImage: "arrow.up.arrow.down") { sortSelectedLines() }
+            } label: {
+                Label("Edit", systemImage: "text.cursor")
+            }
+            .buttonStyle(.bordered)
+
+            Menu {
+                Toggle("Word Wrap", isOn: $settings.editorWordWrap)
+                Toggle("Line Numbers", isOn: $settings.editorLineNumbers)
+                Toggle("Highlight Current Line", isOn: $settings.editorHighlightCurrentLine)
+                Toggle("Auto-close Pairs", isOn: $settings.editorAutoClosePairs)
+                Divider()
+                Picker("Tab Width", selection: $settings.editorTabWidth) {
+                    Text("2 spaces").tag(2)
+                    Text("4 spaces").tag(4)
+                    Text("8 spaces").tag(8)
+                }
+                Toggle("Insert Spaces", isOn: $settings.editorInsertSpaces)
+            } label: {
+                Label("View", systemImage: "slider.horizontal.3")
+            }
+            .buttonStyle(.bordered)
+
+            Spacer()
+            if let doc = workspace.editor.selected {
+                Text(URL(fileURLWithPath: doc.path).pathExtension.uppercased())
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.secondary.opacity(0.035))
+    }
+
+    private var editorStatusBar: some View {
+        HStack(spacing: 14) {
+            Text("Ln \(editorSelection.line), Col \(editorSelection.column)")
+            if editorSelection.selectedLength > 0 { Text("\(editorSelection.selectedLength) selected") }
+            Spacer()
+            Text(workspace.configuration.defaultEncoding)
+            Text(workspace.configuration.lineEndings)
+            Text(settings.editorInsertSpaces ? "Spaces: \(settings.editorTabWidth)" : "Tab: \(settings.editorTabWidth)")
+            if workspace.editor.selected?.isDirty == true {
+                Label("Modified", systemImage: "circle.fill")
+            } else {
+                Label("Saved", systemImage: "checkmark.circle")
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(.secondary.opacity(0.05))
+    }
+
+    private func lineRange(in text: String, line: Int) -> Range<String.Index>? {
+        guard line > 0 else { return nil }
+        var start = text.startIndex
+        var current = 1
+        while current < line, let newline = text[start...].firstIndex(of: "\n") {
+            start = text.index(after: newline)
+            current += 1
+        }
+        guard current == line else { return nil }
+        let end = text[start...].firstIndex(of: "\n") ?? text.endIndex
+        return start..<end
+    }
+
+    private func duplicateCurrentLine() {
+        var text = workspace.editorText
+        guard let range = lineRange(in: text, line: editorSelection.line) else { return }
+        let value = String(text[range])
+        text.insert(contentsOf: "\n" + value, at: range.upperBound)
+        workspace.updateEditorText(text)
+    }
+
+    private func deleteCurrentLine() {
+        var text = workspace.editorText
+        guard let range = lineRange(in: text, line: editorSelection.line) else { return }
+        var removal = range
+        if removal.upperBound < text.endIndex { removal = removal.lowerBound..<text.index(after: removal.upperBound) }
+        else if removal.lowerBound > text.startIndex { removal = text.index(before: removal.lowerBound)..<removal.upperBound }
+        text.removeSubrange(removal)
+        workspace.updateEditorText(text)
+    }
+
+    private func transformSelectedLines(indent: Bool) {
+        let unit = settings.editorInsertSpaces ? String(repeating: " ", count: settings.editorTabWidth) : "\t"
+        var lines = workspace.editorText.components(separatedBy: "\n")
+        guard lines.indices.contains(editorSelection.line - 1) else { return }
+        let index = editorSelection.line - 1
+        if indent { lines[index] = unit + lines[index] }
+        else if lines[index].hasPrefix(unit) { lines[index].removeFirst(unit.count) }
+        else if lines[index].hasPrefix("\t") { lines[index].removeFirst() }
+        workspace.updateEditorText(lines.joined(separator: "\n"))
+    }
+
+    private func trimTrailingWhitespace() {
+        let cleaned = workspace.editorText.components(separatedBy: "\n")
+            .map { $0.replacingOccurrences(of: #"\\s+$"#, with: "", options: .regularExpression) }
+            .joined(separator: "\n")
+        workspace.updateEditorText(cleaned)
+    }
+
+    private func sortSelectedLines() {
+        var lines = workspace.editorText.components(separatedBy: "\n")
+        guard lines.indices.contains(editorSelection.line - 1) else { return }
+        lines.sort { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        workspace.updateEditorText(lines.joined(separator: "\n"))
     }
 
     private func openGitHubImporter() {
