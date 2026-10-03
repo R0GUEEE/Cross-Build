@@ -67,6 +67,7 @@ final class WorkspaceModel: ObservableObject {
     @Published var lastExitCode: Int32?
     @Published var executionStatus = "Idle"
     @Published var generatedConfigurationSummary: [String] = []
+    @Published var activeProjectRoot: String?
     weak var appSettings: AppSettings?
     private var autosaveTask: Task<Void, Never>?
     let files = FileManagerService()
@@ -106,13 +107,50 @@ final class WorkspaceModel: ObservableObject {
             UserDefaults.standard.set(data, forKey: compilersKey)
         }
     }
+
+    private func inferProjectRoot(from files: [WorkspaceFile]) -> String {
+        let markers: Set<String> = [
+            "project.yml", "Package.swift", "Cargo.toml", "go.mod", "build.zig",
+            "CMakeLists.txt", "meson.build", "package.json", "pyproject.toml",
+            "setup.py", "build.gradle", "build.gradle.kts", "Makefile", "control"
+        ]
+        let candidates = Set(files.compactMap { file -> String? in
+            guard markers.contains(file.name) else { return nil }
+            return URL(fileURLWithPath: file.path).deletingLastPathComponent().path
+        })
+
+        if let selectedPath = filesServiceSelectedPath(),
+           let contextual = candidates
+            .filter({ selectedPath == $0 || selectedPath.hasPrefix($0 + "/") })
+            .sorted(by: { $0.count > $1.count })
+            .first {
+            return contextual
+        }
+
+        if let candidate = candidates.sorted(by: {
+            let leftDepth = $0.split(separator: "/").count
+            let rightDepth = $1.split(separator: "/").count
+            return leftDepth == rightDepth ? $0.localizedStandardCompare($1) == .orderedAscending : leftDepth < rightDepth
+        }).first {
+            return candidate
+        }
+        return files.workspaceRoot.path
+    }
+
+    private func filesServiceSelectedPath() -> String? {
+        files.selected?.path
+    }
     @Published var tasks: [AgentTask] = [
         .init(title: "Repair failed builds", instruction: "Inspect diagnostics, patch safe compiler errors, and rebuild."),
         .init(title: "Build & Package", instruction: "Detect the toolchain, resolve dependencies, build, test, and package the artifact.")
     ]
 
     func detectSampleProject() {
-        let scopedFiles = projectFiles
+        let allFiles = projectFiles
+        let root = inferProjectRoot(from: allFiles)
+        activeProjectRoot = root
+        configuration.workingDirectory = root
+        let scopedFiles = allFiles.filter { $0.path == root || $0.path.hasPrefix(root + "/") }
         let projectPaths = scopedFiles.map(\.path)
         var contents: [String:String] = [:]
         for file in scopedFiles {
@@ -217,7 +255,7 @@ final class WorkspaceModel: ObservableObject {
         let host = resolvedSettings?.remoteHost ?? ""
         let port = resolvedSettings?.remotePort ?? 22
         let backend = ExecutionBackendFactory.make(mode: mode, host: host, port: port)
-        let workingDirectory = configuration.workingDirectory.isEmpty ? files.workspaceRoot.path : configuration.workingDirectory
+        let workingDirectory = configuration.workingDirectory.isEmpty ? (activeProjectRoot ?? files.workspaceRoot.path) : configuration.workingDirectory
         console += "$ \(command)\nBackend: \(backend.name)\n"
         isExecuting = true
         executionStatus = "Running"
