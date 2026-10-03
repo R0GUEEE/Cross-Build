@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct IDEView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
@@ -35,12 +36,22 @@ struct IDEView: View {
                 Spacer()
                 Menu {
                     Section("Project") {
-                        Button("Refresh Workspace", systemImage: "arrow.clockwise") { workspace.files.reload() }
+                        Button("Refresh All Directories", systemImage: "arrow.clockwise") { workspace.files.reload() }
+                        Button("Show App Files & Folders", systemImage: "square.stack.3d.up") { workspace.files.revealAllAppDirectories() }
+                        Button("Workspace Only", systemImage: "folder") { workspace.files.revealWorkspaceOnly() }
                         Button("Save Current File", systemImage: "square.and.arrow.down", action: workspace.saveEditor)
                         Button("Detect Project & Compiler", systemImage: "waveform.badge.magnifyingglass", action: workspace.detectSampleProject)
                     }
                     Section("Source Control") {
                         Button("Clone from GitHub", systemImage: "arrow.down.circle") { showGitHub = true }
+                    }
+                    Section("File Operations") {
+                        Button("New File", systemImage: "doc.badge.plus") { workspace.files.createFile(named: "Untitled.swift") }
+                        Button("New Folder", systemImage: "folder.badge.plus") { workspace.files.createFolder(named: "New Folder") }
+                        if let selected = workspace.files.selected {
+                            Button("Duplicate Selected", systemImage: "plus.square.on.square") { workspace.files.duplicate(selected) }
+                            Button("Copy Selected Path", systemImage: "doc.on.doc") { UIPasteboard.general.string = selected.path }
+                        }
                     }
                     Section("Tools") {
                         Button("Manage Compilers", systemImage: "cpu") { showCompilerManager = true }
