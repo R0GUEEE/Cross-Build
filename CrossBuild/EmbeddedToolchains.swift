@@ -15,7 +15,7 @@ protocol EmbeddedToolchainEngine {
 }
 
 final class JavaScriptCoreEngine: EmbeddedToolchainEngine {
-    let id="node"
+    let id="javascriptcore"
     let name="JavaScriptCore"
     let version="System JavaScriptCore"
     func run(source:String, options:[String:String]) async -> EmbeddedToolchainResult {
