@@ -303,7 +303,7 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func cleanCommand() -> String {
-        if let custom = activeCompiler, !custom.cleanCommand.isEmpty { return custom.cleanCommand }
+        if let custom = activeCompiler, !custom.cleanCommand.isEmpty { return appendActionArguments(custom.cleanCommand, configuration.cleanArguments) }
         switch selectedToolchain {
         case .theos, .custom, .clang: return "make clean"
         case .swift: return "swift package clean"
@@ -311,36 +311,41 @@ final class WorkspaceModel: ObservableObject {
         case .go: return "go clean"
         case .zig: return "rm -rf .zig-cache zig-cache zig-out"
         case .python: return "find . -name __pycache__ -type d -prune -exec rm -rf {} +"
-        case .javascript: return "npm run clean"
+        case .javascript: return appendActionArguments("npm run clean", configuration.cleanArguments)
         }
     }
 
     func testCommand() -> String {
-        if let custom = activeCompiler, !custom.testCommand.isEmpty { return custom.testCommand }
+        if let custom = activeCompiler, !custom.testCommand.isEmpty { return appendActionArguments(custom.testCommand, configuration.testArguments) }
         switch selectedToolchain {
-        case .theos: return "make"
-        case .swift: return "swift test"
-        case .rust: return "cargo test"
-        case .go: return "go test ./..."
-        case .zig: return "zig build test"
-        case .python: return "python3 -m unittest"
-        case .javascript: return "npm test"
-        case .clang, .custom: return "make test"
+        case .theos: return appendActionArguments("make", configuration.testArguments)
+        case .swift: return appendActionArguments("swift test", configuration.testArguments)
+        case .rust: return appendActionArguments("cargo test", configuration.testArguments)
+        case .go: return appendActionArguments("go test ./...", configuration.testArguments)
+        case .zig: return appendActionArguments("zig build test", configuration.testArguments)
+        case .python: return appendActionArguments("python3 -m unittest", configuration.testArguments)
+        case .javascript: return appendActionArguments("npm test", configuration.testArguments)
+        case .clang, .custom: return appendActionArguments("make test", configuration.testArguments)
         }
     }
 
     func packageCommand() -> String {
-        if let custom = activeCompiler, !custom.packageCommand.isEmpty { return custom.packageCommand }
+        if let custom = activeCompiler, !custom.packageCommand.isEmpty { return appendActionArguments(custom.packageCommand, configuration.packageArguments) }
         switch selectedToolchain {
-        case .theos: return "make package"
-        case .swift: return "swift build -c release"
-        case .rust: return "cargo build --release"
-        case .go: return "go build -trimpath ./..."
-        case .zig: return "zig build -Doptimize=ReleaseSafe"
-        case .python: return "python3 -m build"
-        case .javascript: return "npm pack"
-        case .clang, .custom: return "make package"
+        case .theos: return appendActionArguments("make package", configuration.packageArguments)
+        case .swift: return appendActionArguments("swift build -c release", configuration.packageArguments)
+        case .rust: return appendActionArguments("cargo build --release", configuration.packageArguments)
+        case .go: return appendActionArguments("go build -trimpath ./...", configuration.packageArguments)
+        case .zig: return appendActionArguments("zig build -Doptimize=ReleaseSafe", configuration.packageArguments)
+        case .python: return appendActionArguments("python3 -m build", configuration.packageArguments)
+        case .javascript: return appendActionArguments("npm pack", configuration.packageArguments)
+        case .clang, .custom: return appendActionArguments("make package", configuration.packageArguments)
         }
+    }
+
+    private func appendActionArguments(_ command: String, _ arguments: String) -> String {
+        let extra = arguments.trimmingCharacters(in: .whitespacesAndNewlines)
+        return extra.isEmpty ? command : command + " " + extra
     }
 
     func runEmbedded(id: String, source: String? = nil) {
@@ -408,8 +413,14 @@ final class WorkspaceModel: ObservableObject {
         environment["CROSSBUILD_PACKAGE_FORMAT"] = compilerConfiguration.packageFormat
         environment["CROSSBUILD_SIGNING_MODE"] = compilerConfiguration.signingMode
 
-        if selectedToolchain == .theos && compilerConfiguration.theosScheme == "rootless" {
-            environment["THEOS_PACKAGE_SCHEME"] = "rootless"
+        if selectedToolchain == .theos {
+            if compilerConfiguration.theosScheme == "rootless" {
+                environment["THEOS_PACKAGE_SCHEME"] = "rootless"
+            }
+            let theosPath = compilerConfiguration.theosPath.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !theosPath.isEmpty { environment["THEOS"] = theosPath }
+            let theosTarget = compilerConfiguration.theosTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !theosTarget.isEmpty { environment["TARGET"] = theosTarget }
         }
 
         var cFlags: [String] = []
