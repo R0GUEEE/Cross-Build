@@ -154,7 +154,7 @@ final class WorkspaceModel: ObservableObject {
         let projectPaths = scopedFiles.map(\.path)
         var contents: [String:String] = [:]
         for file in scopedFiles {
-            if ["Makefile","control","Package.swift","Cargo.toml","go.mod","build.zig","CMakeLists.txt","meson.build","package.json","pyproject.toml"].contains(file.name),
+            if ["project.yml","Makefile","control","Package.swift","Cargo.toml","go.mod","build.zig","CMakeLists.txt","meson.build","package.json","pyproject.toml","setup.py","build.gradle","build.gradle.kts"].contains(file.name),
                let text = files.contents(of: file) { contents[file.name] = text }
         }
         let result = ProjectDetector.analyze(paths: projectPaths, fileContents: contents)
