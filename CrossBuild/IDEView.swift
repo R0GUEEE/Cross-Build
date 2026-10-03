@@ -17,6 +17,9 @@ struct IDEView: View {
         NavigationSplitView {
             navigator
                 .navigationTitle("Cross Build")
+                // Applies the "Navigator width" preference, which used to be a
+                // slider that nothing read.
+                .navigationSplitViewColumnWidth(min: 220, ideal: settings.navigatorWidth, max: 480)
         } detail: {
             editorWorkspace
         }

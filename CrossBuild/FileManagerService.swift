@@ -32,6 +32,31 @@ struct WorkspaceFile: Identifiable, Hashable, Sendable {
     }
 }
 
+/// Directories the browser never descends into, whatever the user's exclude
+/// patterns say. Declared once so `configure(_:)` cannot quietly drop an entry
+/// the way it used to drop "Caches" -- which meant every launch walked the whole
+/// of Library/Caches.
+private let alwaysExcludedFileNames: Set<String> = [".git", "DerivedData", ".build", "node_modules", "Caches"]
+
+/// One root to enumerate.
+struct FileTreeRequest: Sendable {
+    var root: URL
+    var displayName: String
+    var skipWorkspaceChild: Bool
+}
+
+/// Everything the traversal needs, snapshotted so the walk can leave the main
+/// actor without touching service state.
+struct FileTreeOptions: Sendable {
+    var excludedNames: Set<String>
+    var showHidden: Bool
+    var followSymlinks: Bool
+    var favoritePaths: Set<String>
+    /// Needed to skip the Workspace folder when listing App Documents, which
+    /// contains it.
+    var workspaceRootPath: String
+}
+
 @MainActor
 final class FileManagerService: ObservableObject {
     @Published var roots: [WorkspaceFile] = []
