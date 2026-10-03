@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AppConfigurationView: View {
     @ObservedObject var settings: AppSettings
+    @ObservedObject private var secrets = SecureExecutionSecrets.shared
 
     var body: some View {
         Form {
@@ -49,7 +50,7 @@ struct AppConfigurationView: View {
                     Text("HTTPS").tag("https")
                 }
                 Stepper("Helper port: \(settings.helperPort)", value: $settings.helperPort, in: 1...65535)
-                SecureField("Bearer token (optional)", text: $settings.remoteAPIToken)
+                SecureField("Bearer token (optional)", text: $secrets.remoteToken)
                 TextField("Remote workspace", text: $settings.remoteWorkspace)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
             }
@@ -58,7 +59,7 @@ struct AppConfigurationView: View {
                 TextField("Helper host", text: $settings.jailbreakHelperHost)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                 Stepper("Helper port: \(settings.jailbreakHelperPort)", value: $settings.jailbreakHelperPort, in: 1...65535)
-                SecureField("Bearer token (optional)", text: $settings.jailbreakAPIToken)
+                SecureField("Bearer token (optional)", text: $secrets.jailbreakToken)
                 Text("Default localhost helper endpoint is 127.0.0.1:8765.")
                     .font(.caption).foregroundStyle(.secondary)
             }
