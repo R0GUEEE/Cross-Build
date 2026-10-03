@@ -40,3 +40,60 @@ struct IDESectionHeader: View {
         }
     }
 }
+
+
+struct ForgeCard<Content: View>: View {
+    let title:String
+    var subtitle:String? = nil
+    @ViewBuilder let content:Content
+    init(_ title:String, subtitle:String?=nil, @ViewBuilder content:()->Content) {
+        self.title=title; self.subtitle=subtitle; self.content=content()
+    }
+    var body: some View {
+        VStack(alignment:.leading,spacing:12) {
+            VStack(alignment:.leading,spacing:2) {
+                Text(title).font(.headline)
+                if let subtitle { Text(subtitle).font(.caption).foregroundStyle(.secondary) }
+            }
+            content
+        }
+        .padding(14)
+        .frame(maxWidth:.infinity,alignment:.leading)
+        .background(.secondary.opacity(0.055),in:RoundedRectangle(cornerRadius:ForgeTheme.corner))
+    }
+}
+
+struct ForgeActionButton: View {
+    let title:String
+    let icon:String
+    var prominent=false
+    let action:()->Void
+    var body: some View {
+        Button(action:action) {
+            Label(title,systemImage:icon).font(.subheadline.weight(.medium))
+                .frame(maxWidth:.infinity,minHeight:38)
+        }
+        .buttonStyle(prominent ? AnyButtonStyle(.borderedProminent) : AnyButtonStyle(.bordered))
+    }
+}
+
+struct AnyButtonStyle: PrimitiveButtonStyle {
+    private let makeBodyClosure:(Configuration)->AnyView
+    init<S:PrimitiveButtonStyle>(_ style:S) { makeBodyClosure={ AnyView(style.makeBody(configuration:$0)) } }
+    func makeBody(configuration:Configuration)->some View { makeBodyClosure(configuration) }
+}
+
+struct ForgeMetric: View {
+    let title:String
+    let value:String
+    let icon:String
+    var body: some View {
+        HStack(spacing:8) {
+            Image(systemName:icon).foregroundStyle(.secondary)
+            VStack(alignment:.leading,spacing:1) {
+                Text(value).font(.headline)
+                Text(title).font(.caption2).foregroundStyle(.secondary)
+            }
+        }.frame(maxWidth:.infinity,alignment:.leading)
+    }
+}
