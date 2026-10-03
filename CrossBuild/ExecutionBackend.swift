@@ -74,9 +74,9 @@ enum ExecutionBackendFactory {
                 timeout: settings?.connectionTimeout ?? 15
             )
             return HelperExecutionBackend(name:"Jailbreak Local", client:client, localWorkspace:true, packageAccess:true)
-        case "Remote / SSH":
+        case "Remote / Helper", "Remote / SSH":
             let host = settings?.remoteHost.trimmingCharacters(in:.whitespacesAndNewlines) ?? ""
-            guard !host.isEmpty else { return UnavailableExecutionBackend(name:"Remote / SSH", reason:"Configure a remote host.") }
+            guard !host.isEmpty else { return UnavailableExecutionBackend(name:"Remote / Helper", reason:"Configure a remote host.") }
             let client = CrossBuildHelperClient(
                 host:host,
                 port:settings?.helperPort ?? 8765,
