@@ -26,6 +26,7 @@ final class LinuxGuestSession: ObservableObject {
     /// Serialises command execution: the guest shell is a single stream, so two
     /// concurrent commands would interleave their output.
     private var queue: Task<Void, Never>?
+    private var bootTask: Task<String?, Never>?
 
     private init() {}
 
@@ -34,11 +35,12 @@ final class LinuxGuestSession: ObservableObject {
     /// Boots the guest if it is not already up. Safe to call from anywhere and as
     /// often as you like; concurrent callers wait for the same boot.
     func startIfNeeded() async {
-        if state == .running || state == .starting { return }
-        await boot()
-    }
-
-    private func boot() async {
+        if state == .running { return }
+        if let bootTask {
+            let failure = await bootTask.value
+            if let failure { state = .failed(failure) } else { state = .running }
+            return
+        }
         guard LinuxGuestEngine.isLinked else {
             state = .unavailable("The Linux engine is not linked into this build.")
             return
@@ -47,10 +49,9 @@ final class LinuxGuestSession: ObservableObject {
             state = .unavailable("No Linux rootfs image is bundled with this build.")
             return
         }
+
         state = .starting
-        // Booting runs an emulated kernel and takes real time, and the guest works
-        // on its own thread, so keep this off the main actor.
-        let failure: String? = await Task.detached(priority: .userInitiated) {
+        let task = Task.detached(priority: .userInitiated) {
             do {
                 let root = try LinuxGuestEngine.prepareWritableRoot()
                 #if canImport(CrossBuildLinux)
@@ -62,8 +63,10 @@ final class LinuxGuestSession: ObservableObject {
             } catch {
                 return error.localizedDescription
             }
-        }.value
-
+        }
+        bootTask = task
+        let failure = await task.value
+        bootTask = nil
         if let failure { state = .failed(failure) } else { state = .running }
     }
 
