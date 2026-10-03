@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import UIKit
 
 struct WorkspaceBrowserView: View {
     @ObservedObject var files: FileManagerService
@@ -17,7 +18,7 @@ struct WorkspaceBrowserView: View {
                 }
             }
             if files.query.isEmpty {
-                Section("Project") {
+                Section("Loaded Directories") {
                     OutlineGroup(files.roots, children: \.children) { file in row(file) }
                 }
                 let favorites = files.flattened.filter(\.isFavorite)
@@ -36,6 +37,10 @@ struct WorkspaceBrowserView: View {
                     Button("New File", systemImage: "doc.badge.plus") { showNewFile = true }
                     Button("New Folder", systemImage: "folder.badge.plus") { showNewFolder = true }
                     Button("Import Files", systemImage: "square.and.arrow.down") { showImporter = true }
+                    Divider()
+                    Button("Show All App Directories", systemImage: "square.stack.3d.up") { files.revealAllAppDirectories() }
+                    Button("Workspace Only", systemImage: "folder") { files.revealWorkspaceOnly() }
+                    Button("Refresh", systemImage: "arrow.clockwise") { files.reload() }
                 } label: { Label("Add", systemImage: "plus") }
                 Spacer()
                 Text("\(files.flattened.filter { !$0.isDirectory }.count) files").font(.caption).foregroundStyle(.secondary)
@@ -80,8 +85,13 @@ struct WorkspaceBrowserView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button("Duplicate", systemImage: "plus.square.on.square") { files.duplicate(file) }
-            Button("Delete", systemImage: "trash", role: .destructive) { files.delete(file) }
+            Button("Copy Path", systemImage: "doc.on.doc") { UIPasteboard.general.string = file.path }
+            if !files.isReadOnly(file) {
+                Button("Duplicate", systemImage: "plus.square.on.square") { files.duplicate(file) }
+                Button("Delete", systemImage: "trash", role: .destructive) { files.delete(file) }
+            } else {
+                Label("Read-only App Bundle", systemImage: "lock.fill")
+            }
         }
     }
 
