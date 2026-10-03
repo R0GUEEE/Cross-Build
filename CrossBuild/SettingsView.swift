@@ -46,6 +46,7 @@ struct SettingsView: View {
                     Toggle("Highlight current line", isOn: $settings.editorHighlightCurrentLine)
                     Toggle("Word wrap", isOn: $settings.editorWordWrap)
                     Toggle("Auto-close brackets & quotes", isOn: $settings.editorAutoClosePairs)
+                    Toggle("Show invisible characters", isOn: $settings.editorShowInvisibles)
                     Toggle("Insert spaces for tabs", isOn: $settings.editorInsertSpaces)
                     Picker("Tab width", selection: $settings.editorTabWidth) {
                         Text("2").tag(2)

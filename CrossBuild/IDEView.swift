@@ -86,7 +86,10 @@ struct IDEView: View {
             }.padding(10)
 
             Divider()
-            WorkspaceBrowserView(files: workspace.files, onDelete: workspace.deleteFile)
+            WorkspaceBrowserView(files: workspace.files,
+                                 onDelete: workspace.deleteFile,
+                                 onRename: workspace.renameFile,
+                                 confirmDeletes: settings.confirmDestructiveActions)
                 .onChange(of: workspace.files.selected) { _ in workspace.openSelectedFile() }
         }
     }
@@ -145,7 +148,12 @@ struct IDEView: View {
                 Button("Manage Compilers", systemImage: "slider.horizontal.3") { showCompilerManager = true }
                 Button("Auto Detect", systemImage: "sparkle.magnifyingglass", action: workspace.detectSampleProject)
             } label: {
-                IDEStatusPill(icon: "cpu", text: workspace.activeCompiler?.name ?? workspace.selectedToolchain.rawValue)
+                if settings.showStatusBadges {
+                    IDEStatusPill(icon: "cpu", text: workspace.activeCompiler?.name ?? workspace.selectedToolchain.rawValue)
+                } else {
+                    Text(workspace.activeCompiler?.name ?? workspace.selectedToolchain.rawValue)
+                        .font(.caption)
+                }
             }
             if workspace.editor.selected != nil {
                 Button { workspace.editor.showFind.toggle() } label: { Image(systemName: "magnifyingglass") }
@@ -225,26 +233,18 @@ struct IDEView: View {
         workspace.openSelectedFile()
     }
 
-    private func editorTab(_ title: String, icon: String, selected: Bool) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-            Text(title)
-            if selected { Image(systemName: "circle.fill").font(.system(size: 5)).foregroundStyle(.secondary) }
-        }
-        .font(.caption)
-        .padding(.horizontal, 10).padding(.vertical, 7)
-        .background(
-            RoundedRectangle(cornerRadius: ForgeTheme.compactCorner)
-                .fill(selected ? Color.secondary.opacity(0.12) : Color.clear)
-        )
-    }
-
     @ViewBuilder private var detectionBar: some View {
         if let analysis = workspace.analysis {
             HStack(spacing: 8) {
-                IDEStatusPill(icon: "cpu", text: analysis.primaryToolchain.rawValue)
-                IDEStatusPill(icon: "chart.bar.fill", text: "\(Int(analysis.confidence * 100))%")
-                if let type = analysis.theosType { IDEStatusPill(icon: "wrench.and.screwdriver", text: type.rawValue) }
+                if settings.showStatusBadges {
+                    IDEStatusPill(icon: "cpu", text: analysis.primaryToolchain.rawValue)
+                    IDEStatusPill(icon: "chart.bar.fill", text: "\(Int(analysis.confidence * 100))%")
+                    if let type = analysis.theosType { IDEStatusPill(icon: "wrench.and.screwdriver", text: type.rawValue) }
+                } else {
+                    Text("\(analysis.primaryToolchain.rawValue) · \(Int(analysis.confidence * 100))%")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 if let candidate = analysis.candidates.first {
                     Text(candidate.command).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
@@ -379,26 +379,70 @@ struct IDEView: View {
     private func transformSelectedLines(indent: Bool) {
         let unit = settings.editorInsertSpaces ? String(repeating: " ", count: settings.editorTabWidth) : "\t"
         var lines = workspace.editorText.components(separatedBy: "\n")
-        guard lines.indices.contains(editorSelection.line - 1) else { return }
-        let index = editorSelection.line - 1
-        if indent { lines[index] = unit + lines[index] }
-        else if lines[index].hasPrefix(unit) { lines[index].removeFirst(unit.count) }
-        else if lines[index].hasPrefix("\t") { lines[index].removeFirst() }
+
+        // Indent/outdent every line the selection covers; with no selection, the
+        // caret's line -- which is what the command already did.
+        var bounds: (lower: Int, upper: Int)?
+        if let selection = selectedLineBounds() {
+            bounds = selection
+        } else {
+            let index = editorSelection.line - 1
+            bounds = lines.indices.contains(index) ? (lower: index, upper: index + 1) : nil
+        }
+        guard let bounds, bounds.lower < bounds.upper, bounds.upper <= lines.count else { return }
+
+        for index in bounds.lower..<bounds.upper {
+            if indent {
+                lines[index] = unit + lines[index]
+            } else if lines[index].hasPrefix(unit) {
+                lines[index].removeFirst(unit.count)
+            } else if lines[index].hasPrefix("\t") {
+                lines[index].removeFirst()
+            }
+        }
         workspace.updateEditorText(lines.joined(separator: "\n"))
     }
 
     private func trimTrailingWhitespace() {
+        // `#"\\s+$"#` is a *literal backslash* followed by `s+$` in a raw string,
+        // so it could only ever match a line ending in `\sss...` and the command
+        // never removed a space or a tab. Use the same pattern the save path uses.
         let cleaned = workspace.editorText.components(separatedBy: "\n")
-            .map { $0.replacingOccurrences(of: #"\\s+$"#, with: "", options: .regularExpression) }
+            .map { $0.replacingOccurrences(of: #"[ \t]+$"#, with: "", options: .regularExpression) }
             .joined(separator: "\n")
         workspace.updateEditorText(cleaned)
     }
 
+    /// Sorts the selected lines when there is a selection, and the whole document
+    /// when there is none (the behaviour a "sort lines" command normally has).
+    /// The previous version checked only the caret's line and then sorted every
+    /// line regardless of what was selected, silently reordering the entire file
+    /// behind an autosave.
     private func sortSelectedLines() {
         var lines = workspace.editorText.components(separatedBy: "\n")
-        guard lines.indices.contains(editorSelection.line - 1) else { return }
-        lines.sort { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        guard !lines.isEmpty else { return }
+        let bounds = selectedLineBounds() ?? (lower: 0, upper: lines.count)
+        guard bounds.lower < bounds.upper, bounds.upper <= lines.count else { return }
+        lines[bounds.lower..<bounds.upper].sort { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
         workspace.updateEditorText(lines.joined(separator: "\n"))
+    }
+
+    /// The half-open line range covered by the current selection, or nil when
+    /// nothing is selected. A selection ending exactly at a line break does not
+    /// drag in the following line.
+    private func selectedLineBounds() -> (lower: Int, upper: Int)? {
+        let selection = editorSelection.range
+        guard selection.length > 0, selection.location != NSNotFound else { return nil }
+        let first = lineIndex(atUTF16Offset: selection.location)
+        let last = lineIndex(atUTF16Offset: selection.location + selection.length - 1)
+        return (max(0, first - 1), last)
+    }
+
+    /// 1-based line number containing the given UTF-16 offset.
+    private func lineIndex(atUTF16Offset offset: Int) -> Int {
+        let ns = workspace.editorText as NSString
+        let clamped = max(0, min(offset, ns.length))
+        return ns.substring(to: clamped).reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
     }
 
     private func openGitHubImporter() {

@@ -20,6 +20,10 @@ struct LinuxGuestExecutionBackend: ExecutionBackend {
         canInstallPackages: true       // apk runs inside the guest
     )
 
+    /// Timeout used when the caller asks for "no timeout" (0), matching the
+    /// CrossBuild Helper backend's convention so the two behave the same.
+    private static let unlimitedCommandTimeout: TimeInterval = 900
+
     func execute(_ request: CommandRequest) async -> CommandResult {
         let started = Date()
 
@@ -27,10 +31,20 @@ struct LinuxGuestExecutionBackend: ExecutionBackend {
             return .init(exitCode: 125, stdout: "", stderr: "The Linux engine is not linked into this build.", duration: 0)
         }
 
+        // A request timeout of 0 means unlimited -- that is what the "Command
+        // timeout: Unlimited" setting and `CommandRequest`'s own default both
+        // document. Passing it straight through as `max(1, ...)` used to give
+        // every guest command one second, which made the whole backend useless
+        // for anything but the fastest command. The helper backend translates 0
+        // to an hour; do the same here.
+        let timeout = request.timeout > 0
+            ? TimeInterval(request.timeout)
+            : Self.unlimitedCommandTimeout
+
         // Uses the shared session, so the root is booted once and stays up: every
         // command afterwards runs in the same guest, which is what makes this a
         // usable backend rather than a single command.
-        let result = await LinuxGuestSession.shared.run(request.command, timeout: TimeInterval(max(1, request.timeout)))
+        let result = await LinuxGuestSession.shared.run(request.command, timeout: timeout)
         guard result.code >= 0 else {
             return .init(exitCode: 125, stdout: "", stderr: result.output, duration: Date().timeIntervalSince(started))
         }

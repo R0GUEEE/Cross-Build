@@ -28,10 +28,11 @@ struct AgentDashboardView: View {
                             .background(.background, in: RoundedRectangle(cornerRadius: 10))
 
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 8)], spacing: 8) {
-                            quick("Detect & Build", "Detect this project, configure it automatically, and build it")
-                            quick("Fix Build", "Inspect diagnostics, identify the build failure, and rebuild")
-                            quick("Clean & Package", "Clean the project and package the final artifact")
-                            quick("Run Tests", "Run the project tests and inspect failures")
+                            // Driven by the workspace's own preset list rather than
+                            // a parallel set of hardcoded prompts.
+                            ForEach(workspace.tasks.filter(\.enabled)) { task in
+                                quick(task.title, task.instruction)
+                            }
                         }
 
                         HStack {

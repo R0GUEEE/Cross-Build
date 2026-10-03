@@ -284,6 +284,7 @@ static int g_session_running = 0;
 static pthread_t g_session_thread;
 static char *g_session_scratch = NULL;
 static size_t g_session_scratch_len = 0;
+static size_t g_session_scratch_capacity = 0;
 static unsigned g_session_serial = 0;
 
 static int write_all(int fd, const char *text, size_t length) {
@@ -426,9 +427,16 @@ int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory)
     // stdin is restored together with stdout/stderr when the session stops.
 
     // Wait for the shell to come up by round-tripping a marker.
+    //
+    // Ownership matters here: cblk_session_run hands back its internal scratch
+    // buffer on every non-error return, and only strdup()s a string on the error
+    // paths. Freeing the success result would not just leak-vs-crash once -- the
+    // scratch pointer would stay dangling and the NEXT command's "free the old
+    // scratch" line would free it a second time, corrupting the heap. So only the
+    // error paths (rc < 0) own the string.
     char *ready = NULL;
     int rc = cblk_session_run(":", 30000, &ready);
-    if (ready != NULL) { free(ready); }
+    if (rc < 0 && ready != NULL) { free(ready); }
     return rc;
 }
 
@@ -437,12 +445,19 @@ int32_t cblk_session_is_running(void) {
 }
 
 // Appends to a growable scratch buffer, used to accumulate one command's output.
+//
+// Capacity is tracked separately from length: the old check compared the needed
+// size against the *length*, which is always true, so every 4 KB read realloc'd
+// the whole buffer to exactly the required size -- quadratic copying for a large
+// command's output (apk add prints a lot). Growing geometrically fixes that.
 static int scratch_append(const char *text, size_t length) {
-    if (g_session_scratch_len + length + 1 > g_session_scratch_len) {
-        size_t want = g_session_scratch_len + length + 1;
+    if (g_session_scratch_len + length + 1 > g_session_scratch_capacity) {
+        size_t want = g_session_scratch_capacity > 0 ? g_session_scratch_capacity : 8192;
+        while (want < g_session_scratch_len + length + 1) { want *= 2; }
         char *grown = (char *)realloc(g_session_scratch, want);
         if (grown == NULL) { return -1; }
         g_session_scratch = grown;
+        g_session_scratch_capacity = want;
     }
     memcpy(g_session_scratch + g_session_scratch_len, text, length);
     g_session_scratch_len += length;
@@ -478,6 +493,10 @@ int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombi
 
     if (g_session_scratch != NULL) { free(g_session_scratch); g_session_scratch = NULL; }
     g_session_scratch_len = 0;
+    // The buffer is gone, so the capacity it described is meaningless too.
+    // Leaving this stale would make scratch_append believe it had room and write
+    // through a freed pointer.
+    g_session_scratch_capacity = 0;
 
     // Read until the sentinel appears or the deadline passes.
     char chunk[4096];

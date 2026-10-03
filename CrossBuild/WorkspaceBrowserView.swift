@@ -5,11 +5,19 @@ import UIKit
 struct WorkspaceBrowserView: View {
     @ObservedObject var files: FileManagerService
     var onDelete: ((WorkspaceFile) -> Void)? = nil
+    /// Routed through the workspace rather than straight to `files.rename` so the
+    /// rename can also fix up any open editor tab pointing at the old path.
+    var onRename: ((WorkspaceFile, String) -> Void)? = nil
+    /// Mirrors "Confirm destructive actions". When it is off, Delete acts
+    /// immediately instead of asking.
+    var confirmDeletes: Bool = true
     @State private var showImporter = false
     @State private var newItemName = ""
     @State private var showNewFile = false
     @State private var showNewFolder = false
     @State private var pendingDelete: WorkspaceFile?
+    @State private var pendingRename: WorkspaceFile?
+    @State private var renameName = ""
 
     var body: some View {
         List {
@@ -92,9 +100,7 @@ struct WorkspaceBrowserView: View {
             titleVisibility: .visible
         ) {
             Button("Delete", role: .destructive) {
-                if let file = pendingDelete {
-                    if let onDelete { onDelete(file) } else { files.delete(file) }
-                }
+                if let file = pendingDelete { performDelete(file) }
                 pendingDelete = nil
             }
             Button("Cancel", role: .cancel) { pendingDelete = nil }
@@ -108,6 +114,19 @@ struct WorkspaceBrowserView: View {
             Button("OK", role: .cancel) { files.errorMessage = nil }
         } message: {
             Text(files.errorMessage ?? "Unknown file error.")
+        }
+        .alert("Rename \(pendingRename?.name ?? "item")", isPresented: Binding(
+            get: { pendingRename != nil },
+            set: { if !$0 { pendingRename = nil } }
+        )) {
+            TextField("New name", text: $renameName)
+            Button("Rename") {
+                if let file = pendingRename {
+                    if let onRename { onRename(file, renameName) } else { files.rename(file, to: renameName) }
+                }
+                pendingRename = nil
+            }
+            Button("Cancel", role: .cancel) { pendingRename = nil }
         }
     }
 
@@ -131,12 +150,22 @@ struct WorkspaceBrowserView: View {
             Button(file.isFavorite ? "Remove Favorite" : "Add Favorite",
                    systemImage: file.isFavorite ? "star.slash" : "star") { files.toggleFavorite(file) }
             if !files.isReadOnly(file) {
+                Button("Rename", systemImage: "pencil") {
+                    renameName = file.name
+                    pendingRename = file
+                }
                 Button("Duplicate", systemImage: "plus.square.on.square") { files.duplicate(file) }
-                Button("Delete", systemImage: "trash", role: .destructive) { pendingDelete = file }
+                Button("Delete", systemImage: "trash", role: .destructive) {
+                    if confirmDeletes { pendingDelete = file } else { performDelete(file) }
+                }
             } else {
                 Label("Read-only App Bundle", systemImage: "lock.fill")
             }
         }
+    }
+
+    private func performDelete(_ file: WorkspaceFile) {
+        if let onDelete { onDelete(file) } else { files.delete(file) }
     }
 
 

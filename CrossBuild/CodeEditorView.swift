@@ -16,6 +16,11 @@ struct CodeEditorSelection: Equatable {
     var line: Int = 1
     var column: Int = 1
     var selectedLength: Int = 0
+    /// The actual caret/selection range in the document, in UTF-16 units. The
+    /// editing commands that act on a *selection* (sorting, for one) need the
+    /// range itself -- line/column alone can only describe a caret, which is why
+    /// "Sort Selected Lines" used to fall back to sorting the whole file.
+    var range: NSRange = NSRange(location: 0, length: 0)
 }
 
 struct CodeEditorView: UIViewRepresentable {
@@ -62,7 +67,7 @@ struct CodeEditorView: UIViewRepresentable {
             container?.updateGutter()
             container?.updateCurrentLine()
             updateSelection(textView)
-            highlight(text: textView.text, fileName: parent.fileName)
+            scheduleHighlight(text: textView.text, fileName: parent.fileName)
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
@@ -102,12 +107,35 @@ struct CodeEditorView: UIViewRepresentable {
             let line = prefix.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
             let lastBreak = prefix.lastIndex(of: "\n")
             let column = lastBreak.map { prefix.distance(from: $0, to: prefix.endIndex) } ?? prefix.count + 1
-            let value = CodeEditorSelection(line: line, column: column, selectedLength: textView.selectedRange.length)
+            let value = CodeEditorSelection(line: line, column: column,
+                                            selectedLength: textView.selectedRange.length,
+                                            range: textView.selectedRange)
             if parent.selection != value { parent.selection = value }
+        }
+
+        /// Re-highlighting the whole document on every keystroke is
+        /// O(document size x 5 regular expressions) per character typed, and
+        /// reassigning `attributedText` that often also resets the text view's
+        /// typing attributes. Coalesce instead: the highlight runs once the user
+        /// pauses, taking the text as it is then.
+        private var highlightWorkItem: DispatchWorkItem?
+
+        private static let highlightDebounce: TimeInterval = 0.15
+
+        func scheduleHighlight(text: String, fileName: String) {
+            highlightWorkItem?.cancel()
+            let item = DispatchWorkItem { [weak self] in
+                self?.highlight(text: text, fileName: fileName)
+            }
+            highlightWorkItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.highlightDebounce, execute: item)
         }
 
         func highlight(text: String, fileName: String) {
             guard let textView = container?.textView else { return }
+            // A debounced highlight can outlive its text; never paint attributes
+            // computed for a previous revision onto the current document.
+            guard textView.text == text else { return }
             let selected = textView.selectedRange
             let baseFont = UIFont.monospacedSystemFont(ofSize: parent.options.fontSize, weight: .regular)
             let attributed = NSMutableAttributedString(string: text, attributes: [
@@ -123,10 +151,25 @@ struct CodeEditorView: UIViewRepresentable {
             if language == .logos {
                 apply(pattern: #"%\w+"#, color: .systemBlue, to: attributed)
             }
+            if parent.options.showInvisibleCharacters {
+                shadeWhitespace(in: attributed)
+            }
             applyingAttributes = true
             textView.attributedText = attributed
             textView.selectedRange = NSRange(location: min(selected.location, attributed.length), length: min(selected.length, max(0, attributed.length - min(selected.location, attributed.length))))
             applyingAttributes = false
+        }
+
+        /// Makes spaces and tabs visible without altering the text: a run of
+        /// whitespace gets a subtle background, which is exactly what the
+        /// "Show invisible characters" option promises. Done by attribute rather
+        /// than by substituting glyphs so the document on disk is untouched.
+        private func shadeWhitespace(in text: NSMutableAttributedString) {
+            guard let regex = try? NSRegularExpression(pattern: #"[ \t]+"#) else { return }
+            regex.enumerateMatches(in: text.string, range: NSRange(location: 0, length: text.length)) { match, _, _ in
+                guard let range = match?.range else { return }
+                text.addAttribute(.backgroundColor, value: UIColor.systemFill, range: range)
+            }
         }
 
         private func apply(pattern: String, color: UIColor, to text: NSMutableAttributedString) {

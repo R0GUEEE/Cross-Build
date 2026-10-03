@@ -9,12 +9,17 @@ struct CrossBuildApp: App {
         WindowGroup {
             RootView(settings: settings)
                 .environmentObject(workspace)
-                .onAppear {
+                .task {
                     workspace.appSettings = settings
                     workspace.syncFileConfiguration()
+
+                    // The visible file tree is built off the main actor, so wait
+                    // for the first pass before doing anything that reads it.
+                    // `projectFiles` derives from that tree, and an empty one would
+                    // silently skip project detection at launch.
+                    await workspace.files.waitForTree()
                     if settings.autoDetect && !workspace.projectFiles.isEmpty { workspace.detectSampleProject() }
-                }
-                .task {
+
                     // Start the Linux guest as soon as the app opens when it is the
                     // selected backend. Booting an emulated kernel takes real time,
                     // so doing it here rather than on the first command means the
@@ -52,7 +57,7 @@ struct RootView: View {
         }
         .alert("Allow Agent Commands?", isPresented: Binding(
             get: { workspace.pendingAgentConfirmation != nil },
-            set: { if !$0 { workspace.cancelPendingAgentPlan() } }
+            set: { if !$0 { workspace.pendingAgentPlanDismissed() } }
         )) {
             Button("Run Commands") { workspace.confirmPendingAgentPlan() }
             Button("Cancel", role: .cancel) { workspace.cancelPendingAgentPlan() }

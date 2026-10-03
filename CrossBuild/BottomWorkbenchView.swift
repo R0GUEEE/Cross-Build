@@ -88,11 +88,21 @@ struct BottomWorkbenchView: View {
         }
     }
 
+    /// Diagnostics parsed out of the last command, when the output was in a
+    /// recognisable `file:line:col: error: message` form.
+    private var structuredProblems: [BuildDiagnostic] {
+        workspace.buildDiagnostics.filter { diagnostic in
+            guard !problemFilter.isEmpty else { return true }
+            return diagnostic.message.localizedCaseInsensitiveContains(problemFilter)
+                || (diagnostic.file ?? "").localizedCaseInsensitiveContains(problemFilter)
+        }
+    }
+
     private var problemsView: some View {
         VStack(spacing: 0) {
             TextField("Filter problems", text: $problemFilter)
                 .textFieldStyle(.roundedBorder).padding(8)
-            if problemLines.isEmpty {
+            if structuredProblems.isEmpty && problemLines.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "checkmark.circle").font(.largeTitle).foregroundStyle(.secondary)
                     Text("No Problems").font(.headline)
@@ -101,17 +111,51 @@ struct BottomWorkbenchView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
-                        ForEach(Array(problemLines.enumerated()), id: \.offset) { _, line in
+                        ForEach(structuredProblems) { diagnostic in
                             HStack(alignment: .top, spacing: 8) {
-                                Image(systemName: line.localizedCaseInsensitiveContains("error:") ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
-                                Text(line).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                                Image(systemName: icon(for: diagnostic.severity))
+                                    .foregroundStyle(diagnostic.severity == .error ? .red : .orange)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(diagnostic.message).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                                    Text(location(for: diagnostic))
+                                        .font(.system(.caption2, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
                                 Spacer()
                             }.padding(8).background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+                        }
+                        // Only fall back to raw console lines when nothing was
+                        // parsed; otherwise the same problem would be listed twice.
+                        if structuredProblems.isEmpty {
+                            ForEach(Array(problemLines.enumerated()), id: \.offset) { _, line in
+                                HStack(alignment: .top, spacing: 8) {
+                                    Image(systemName: line.localizedCaseInsensitiveContains("error:") ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                                    Text(line).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                                    Spacer()
+                                }.padding(8).background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+                            }
                         }
                     }.padding(10)
                 }
             }
         }
+    }
+
+    private func icon(for severity: BuildDiagnosticSeverity) -> String {
+        switch severity {
+        case .error: return "xmark.octagon.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        case .note: return "info.circle.fill"
+        }
+    }
+
+    private func location(for diagnostic: BuildDiagnostic) -> String {
+        var parts = [diagnostic.tool]
+        if let file = diagnostic.file { parts.append(URL(fileURLWithPath: file).lastPathComponent) }
+        if let line = diagnostic.line { parts.append("line \(line)") }
+        if let column = diagnostic.column { parts.append("col \(column)") }
+        if let code = diagnostic.code { parts.append(code) }
+        return parts.joined(separator: " · ")
     }
 
     private var agentView: some View {

@@ -221,9 +221,13 @@ final class WorkspaceModel: ObservableObject {
     private func filesServiceSelectedPath() -> String? {
         files.selected?.path
     }
+    /// Preset prompts for the Agent dashboard. These drive the quick-action grid
+    /// directly, so the list the model exposes is also the list the user sees.
     @Published var tasks: [AgentTask] = [
+        .init(title: "Detect & Build", instruction: "Detect this project, configure it automatically, and build it"),
         .init(title: "Repair failed builds", instruction: "Inspect diagnostics, patch safe compiler errors, and rebuild."),
-        .init(title: "Build & Package", instruction: "Detect the toolchain, resolve dependencies, build, test, and package the artifact.")
+        .init(title: "Clean & Package", instruction: "Clean the project and package the final artifact"),
+        .init(title: "Run Tests", instruction: "Run the project tests and inspect failures")
     ]
 
     func detectSampleProject() {
@@ -238,7 +242,12 @@ final class WorkspaceModel: ObservableObject {
         let allFiles = projectFiles
         let root = rootOverride ?? inferProjectRoot(from: allFiles)
         activeProjectRoot = root
-        configuration.workingDirectory = root
+        // Deliberately NOT written into `configuration.workingDirectory`: that is
+        // the user's "Working directory override" and `executeCommand` already
+        // prefers it when it is set. Overwriting it here meant the override was
+        // destroyed on every auto-detect at launch and could never be empty
+        // again, so the fallback below never applied. The detected root is kept
+        // where it belongs, in `activeProjectRoot`.
         let scopedFiles = allFiles.filter { $0.path == root || $0.path.hasPrefix(root + "/") }
         let manifestNames: Set<String> = ["project.yml","Makefile","control","Package.swift","Cargo.toml","go.mod","build.zig","CMakeLists.txt","meson.build","package.json","pyproject.toml","setup.py","build.gradle","build.gradle.kts"]
         // "Index source files" off means detection only looks at manifest
@@ -275,10 +284,13 @@ final class WorkspaceModel: ObservableObject {
         Task {
             if resolved?.clearDiagnosticsOnBuild == true {
                 console = "Build started.\n"
+                buildDiagnostics = []
             }
 
+            let timeout = resolvedBuildTimeout(resolved)
+
             if resolved?.cleanBeforeBuild == true {
-                let cleaned = await executeCommand(cleanCommand(), settings: resolved)
+                let cleaned = await executeCommand(cleanCommand(), settings: resolved, timeoutOverride: timeout)
                 let stopOnFailure = resolved?.stopOnFirstError ?? true
                 if !cleaned.succeeded && stopOnFailure {
                     console += "Build stopped after clean failed (Settings → Build Policy → Stop workflow on first failure).\n"
@@ -287,7 +299,7 @@ final class WorkspaceModel: ObservableObject {
             }
 
             let command = configuredBuildCommand(settings: resolved)
-            _ = await executeCommand(command, settings: resolved)
+            _ = await executeCommand(command, settings: resolved, timeoutOverride: timeout)
         }
     }
 
@@ -448,8 +460,11 @@ final class WorkspaceModel: ObservableObject {
         return (ExecutionBackendFactory.make(mode: mode, settings: resolvedSettings), mode)
     }
 
+    /// Runs a command through the resolved backend. `timeoutOverride` lets the
+    /// build/test/package paths apply the dedicated "Build timeout" setting
+    /// instead of the general command timeout; a value of 0 means unlimited.
     @discardableResult
-    func executeCommand(_ command: String, settings: AppSettings? = nil, sessionID: String? = nil) async -> CommandResult {
+    func executeCommand(_ command: String, settings: AppSettings? = nil, sessionID: String? = nil, timeoutOverride: Int? = nil) async -> CommandResult {
         guard !isExecuting else {
             let result = CommandResult(exitCode: 75, stdout: "", stderr: "Another command is already running.", duration: 0)
             console += "error: \(result.stderr)\n"
@@ -487,11 +502,12 @@ final class WorkspaceModel: ObservableObject {
             loginShell: resolvedSettings?.shellLogin ?? false,
             interactiveShell: resolvedSettings?.shellInteractive ?? false,
             initCommand: resolvedSettings?.shellInitCommand.trimmingCharacters(in: .whitespacesAndNewlines),
-            timeout: resolvedSettings?.commandTimeout ?? 0,
+            timeout: timeoutOverride ?? resolvedSettings?.commandTimeout ?? 0,
             sessionID: sessionID
         )
         let result = await backend.execute(request)
         appendResultOutput(result, settings: resolvedSettings)
+        recordDiagnostics(from: result, command: command, settings: resolvedSettings)
         lastExitCode = result.exitCode
         executionStatus = result.succeeded ? "Succeeded" : "Failed (\(result.exitCode))"
         isExecuting = false
@@ -553,6 +569,27 @@ final class WorkspaceModel: ObservableObject {
             let lines = result.stderr.components(separatedBy: "\n").filter(passesFilter)
             if !lines.isEmpty { console += "error: " + lines.joined(separator: "\n") + "\n" }
         }
+    }
+
+    /// Parses a command's output into structured diagnostics. `buildDiagnostics`
+    /// and `BuildDiagnosticParser` were both fully written but never used, so the
+    /// Problems panel could only ever show raw console text.
+    private func recordDiagnostics(from result: CommandResult, command: String, settings: AppSettings?) {
+        let tool = command.split(separator: " ").first.map(String.init) ?? "build"
+        var parsed = BuildDiagnosticParser.parse(result.stdout + "\n" + result.stderr, tool: tool)
+        if settings?.includeWarnings == false { parsed = parsed.filter { $0.severity != .warning } }
+        if settings?.includeNotes == false { parsed = parsed.filter { $0.severity != .note } }
+        let limit = max(1, settings?.maxProblems ?? 200)
+        if parsed.count > limit { parsed = Array(parsed.prefix(limit)) }
+        buildDiagnostics = parsed
+    }
+
+    /// The timeout for build/test/package actions: the dedicated "Build timeout"
+    /// when one is set, otherwise the general "Command timeout". `buildTimeout`
+    /// previously had a stepper in Settings that nothing read.
+    private func resolvedBuildTimeout(_ settings: AppSettings?) -> Int {
+        guard let settings else { return 0 }
+        return settings.buildTimeout > 0 ? settings.buildTimeout : settings.commandTimeout
     }
 
     private func commandEnvironment() -> [String: String] {
@@ -722,7 +759,7 @@ final class WorkspaceModel: ObservableObject {
             ? []
             : await Self.snapshotFilesOffMain(under: root)
 
-        let result = await executeCommand(command, settings: resolved)
+        let result = await executeCommand(command, settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved))
 
         guard result.succeeded, !artifactDir.isEmpty else { return result }
 
@@ -863,6 +900,33 @@ final class WorkspaceModel: ObservableObject {
         persistOpenDocuments()
     }
 
+    /// Renames on disk and repoints any open editor tab at the new path.
+    ///
+    /// The repointing has to happen here rather than in `FileManagerService`:
+    /// open documents live in `EditorSession`, and they carry their own `path`.
+    /// Without this, saving a renamed-but-open file would write the *old* name
+    /// back to disk, recreating the file that was just renamed away.
+    func renameFile(_ file: WorkspaceFile, to newName: String) {
+        let oldPath = file.path
+        files.rename(file, to: newName)
+        guard files.errorMessage == nil else { return }
+
+        let newPath = URL(fileURLWithPath: oldPath)
+            .deletingLastPathComponent()
+            .appendingPathComponent(newName)
+            .path
+
+        for index in editor.documents.indices {
+            let path = editor.documents[index].path
+            guard path == oldPath || path.hasPrefix(oldPath + "/") else { continue }
+            let suffix = String(path.dropFirst(oldPath.count))
+            editor.documents[index].path = newPath + suffix
+            if suffix.isEmpty { editor.documents[index].name = newName }
+        }
+        persistOpenDocuments()
+        console += "Renamed \(file.name) to \(newName)\n"
+    }
+
     func saveEditor() {
         autosaveTask?.cancel()
         guard let id = editor.selectedID else { return }
@@ -959,21 +1023,21 @@ final class WorkspaceModel: ObservableObject {
                 console += "Agent build blocked by permissions.\n"
                 return .noCommand
             }
-            let result = await executeCommand(command, settings: settings)
+            let result = await executeCommand(command, settings: settings, timeoutOverride: resolvedBuildTimeout(settings))
             return .command(succeeded: result.succeeded)
         case .clean:
             guard settings?.allowAgentBuilds != false else {
                 console += "Agent clean blocked by permissions.\n"
                 return .noCommand
             }
-            let result = await executeCommand(cleanCommand(), settings: settings)
+            let result = await executeCommand(cleanCommand(), settings: settings, timeoutOverride: resolvedBuildTimeout(settings))
             return .command(succeeded: result.succeeded)
         case .test:
             guard settings?.allowAgentBuilds != false else {
                 console += "Agent test blocked by permissions.\n"
                 return .noCommand
             }
-            let result = await executeCommand(testCommand(), settings: settings)
+            let result = await executeCommand(testCommand(), settings: settings, timeoutOverride: resolvedBuildTimeout(settings))
             return .command(succeeded: result.succeeded)
         case .package:
             guard settings?.allowAgentBuilds != false else {
@@ -1036,6 +1100,20 @@ final class WorkspaceModel: ObservableObject {
         pendingAgentPlan = []
         pendingAgentConfirmation = nil
         console += "Agent command plan cancelled.\n"
+    }
+
+    /// Dismisses the confirmation alert *without* discarding the plan.
+    ///
+    /// The alert is presented from a binding whose setter fires when SwiftUI
+    /// writes `false` — which can happen either before or after the tapped
+    /// button's action runs. When the setter called `cancelPendingAgentPlan()`,
+    /// the "Run Commands" path was only correct if the action happened to win
+    /// the race; otherwise the plan was cleared first and the agent did nothing,
+    /// silently. Making the setter drop only the presentation state makes the two
+    /// orderings behave identically, and both explicit buttons remain the only
+    /// places that consume the plan.
+    func pendingAgentPlanDismissed() {
+        pendingAgentConfirmation = nil
     }
 
     private func executeAgentPlan(_ plan: [AgentExecution]) {

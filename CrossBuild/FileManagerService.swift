@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 
-struct WorkspaceFile: Identifiable, Hashable {
+struct WorkspaceFile: Identifiable, Hashable, Sendable {
     var name: String
     var path: String
     var isDirectory: Bool
@@ -57,7 +57,13 @@ final class FileManagerService: ObservableObject {
     private var searchCaseSensitive = false
     private var searchFileContents = false
     private var maxRecentFiles = 20
-    private var excludedNames: Set<String> = [".git", "DerivedData", ".build", "node_modules", "Caches"]
+    private var excludedNames: Set<String> = alwaysExcludedFileNames
+
+    /// The in-flight tree build. `reload()` is asynchronous because the walk
+    /// covers the app bundle (vendored Python standard library, the Linux
+    /// fakefs image) and Library; doing it synchronously on the main actor
+    /// blocked the UI at launch and on every configuration toggle.
+    private var reloadTask: Task<Void, Never>?
 
     init() {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
@@ -145,6 +151,23 @@ final class FileManagerService: ObservableObject {
     func configure(showAppDirectories: Bool, showBundle: Bool, showLibrary: Bool,
                    showTemporary: Bool, showHidden: Bool, followSymlinks: Bool,
                    searchCaseSensitive: Bool, searchFileContents: Bool = false, maxRecentFiles: Int = 20, excludePatterns: String) {
+        let configured = excludePatterns
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let newExcludes = Set(configured).union(alwaysExcludedFileNames)
+
+        // Only a change that affects the traversal itself needs a rebuild. This
+        // is called from a screen with a dozen toggles, several of which (search
+        // case sensitivity, recent-file count) cannot change the tree at all.
+        let needsReload = includeAppDirectories != showAppDirectories
+            || self.showBundle != showBundle
+            || self.showLibrary != showLibrary
+            || self.showTemporary != showTemporary
+            || self.showHidden != showHidden
+            || self.followSymlinks != followSymlinks
+            || excludedNames != newExcludes
+
         includeAppDirectories = showAppDirectories
         self.showBundle = showBundle
         self.showLibrary = showLibrary
@@ -154,34 +177,70 @@ final class FileManagerService: ObservableObject {
         self.searchCaseSensitive = searchCaseSensitive
         self.searchFileContents = searchFileContents
         self.maxRecentFiles = max(5, maxRecentFiles)
-        let configured = excludePatterns
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        excludedNames = Set(configured).union([".git", "DerivedData", ".build", "node_modules"])
-        // reload() re-schedules content search itself.
-        reload()
+        excludedNames = newExcludes
+
+        if needsReload {
+            // reload() re-schedules content search itself.
+            reload()
+        } else {
+            scheduleContentSearch()
+        }
     }
 
+    /// Rebuilds the visible tree. The walk itself runs off the main actor, so the
+    /// call returns immediately and `roots` updates when the enumeration is done.
     func reload(from root: URL? = nil) {
         errorMessage = nil
-        // The visible tree changed, so previously computed content matches may
-        // point at files that moved or disappeared.
-        defer { scheduleContentSearch() }
+        reloadTask?.cancel()
+
+        var requests: [FileTreeRequest]
         if let root {
-            roots = [makeRoot(root, displayName: root.lastPathComponent)]
-            return
+            requests = [FileTreeRequest(root: root, displayName: root.lastPathComponent, skipWorkspaceChild: false)]
+        } else {
+            requests = [FileTreeRequest(root: workspaceRoot, displayName: "Workspace", skipWorkspaceChild: false)]
+            if includeAppDirectories {
+                requests.append(FileTreeRequest(root: documentsRoot, displayName: "App Documents", skipWorkspaceChild: true))
+                if showLibrary { requests.append(FileTreeRequest(root: libraryRoot, displayName: "App Library", skipWorkspaceChild: false)) }
+                if showTemporary { requests.append(FileTreeRequest(root: temporaryRoot, displayName: "Temporary Files", skipWorkspaceChild: false)) }
+                if showBundle { requests.append(FileTreeRequest(root: appBundleRoot, displayName: "App Bundle", skipWorkspaceChild: false)) }
+            }
         }
 
-        var loaded = [makeRoot(workspaceRoot, displayName: "Workspace")]
-        if includeAppDirectories {
-            loaded.append(makeRoot(documentsRoot, displayName: "App Documents", skipWorkspaceChild: true))
-            if showLibrary { loaded.append(makeRoot(libraryRoot, displayName: "App Library")) }
-            if showTemporary { loaded.append(makeRoot(temporaryRoot, displayName: "Temporary Files")) }
-            if showBundle { loaded.append(makeRoot(appBundleRoot, displayName: "App Bundle")) }
+        let options = FileTreeOptions(excludedNames: excludedNames,
+                                  showHidden: showHidden,
+                                  followSymlinks: followSymlinks,
+                                  favoritePaths: favoritePaths,
+                                  workspaceRootPath: workspaceRoot.standardizedFileURL.path)
+
+        reloadTask = Task { [weak self] in
+            let built = await FileManagerService.buildTree(requests, options: options)
+            guard !Task.isCancelled, let self else { return }
+            self.roots = built
+            self.refreshSelectedReference()
+            // The visible tree changed, so previously computed content matches
+            // may point at files that moved or disappeared.
+            self.scheduleContentSearch()
         }
-        roots = loaded
-        refreshSelectedReference()
+    }
+
+    /// Waits for the tree build currently in flight. Callers that need the tree
+    /// before they can do anything useful (project detection at launch) must
+    /// await this rather than reading `roots`, which starts empty.
+    func waitForTree() async {
+        await reloadTask?.value
+    }
+
+    private nonisolated static func buildTree(_ requests: [FileTreeRequest], options: FileTreeOptions) async -> [WorkspaceFile] {
+        await Task.detached(priority: .userInitiated) {
+            requests.map { request in
+                var visited = Set<String>()
+                return FileManagerService.node(for: request.root,
+                                               displayName: request.displayName,
+                                               skipWorkspaceChild: request.skipWorkspaceChild,
+                                               visited: &visited,
+                                               options: options)
+            }
+        }.value
     }
 
     func isReadOnly(_ file: WorkspaceFile) -> Bool {
@@ -239,7 +298,10 @@ final class FileManagerService: ObservableObject {
             return nil
         }
         reload()
-        return flattened.first { $0.path == url.path }
+        // Build the entry from the URL we just used rather than looking it up in
+        // `flattened`: the tree is rebuilt off the main actor, so the new file is
+        // not in it yet and a lookup here would return nil and strand the caller.
+        return entry(for: url)
     }
 
     @discardableResult
@@ -251,11 +313,24 @@ final class FileManagerService: ObservableObject {
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
             reload()
-            return flattened.first { $0.path == url.path }
+            return entry(for: url)
         } catch {
             errorMessage = error.localizedDescription
             return nil
         }
+    }
+
+    /// A `WorkspaceFile` for one URL, read straight off disk.
+    private func entry(for url: URL) -> WorkspaceFile {
+        let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey])
+        return WorkspaceFile(
+            name: url.lastPathComponent,
+            path: url.path,
+            isDirectory: values?.isDirectory == true,
+            size: Int64(values?.fileSize ?? 0),
+            modified: values?.contentModificationDate ?? .now,
+            isFavorite: favoritePaths.contains(url.path)
+        )
     }
 
     func importFiles(_ urls: [URL], into parentPath: String? = nil) {
@@ -330,13 +405,11 @@ final class FileManagerService: ObservableObject {
         reload()
     }
 
-    private func makeRoot(_ url: URL, displayName: String, skipWorkspaceChild: Bool = false) -> WorkspaceFile {
-        var visited = Set<String>()
-        return node(for: url, displayName: displayName, visited: &visited, skipWorkspaceChild: skipWorkspaceChild)
-    }
-
-    private func node(for url: URL, displayName: String? = nil, visited: inout Set<String>,
-                      skipWorkspaceChild: Bool = false) -> WorkspaceFile {
+    /// Builds one root. Pure file I/O + the collision bookkeeping for symlink
+    /// loops, so it is `nonisolated static`: the traversal runs on a detached
+    /// task and never touches main-actor state.
+    private nonisolated static func node(for url: URL, displayName: String? = nil, visited: inout Set<String>,
+                                          skipWorkspaceChild: Bool = false, options: FileTreeOptions) -> WorkspaceFile {
         let resolved = url.resolvingSymlinksInPath().standardizedFileURL.path
         let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey])
         let isDirectory = values?.isDirectory == true
@@ -344,22 +417,22 @@ final class FileManagerService: ObservableObject {
         let alreadyVisited = visited.contains(resolved)
 
         var children: [WorkspaceFile]? = nil
-        if isDirectory && !alreadyVisited && (!isSymlink || followSymlinks) {
+        if isDirectory && !alreadyVisited && (!isSymlink || options.followSymlinks) {
             visited.insert(resolved)
-            let options: FileManager.DirectoryEnumerationOptions = showHidden ? [] : [.skipsHiddenFiles]
+            let enumerationOptions: FileManager.DirectoryEnumerationOptions = options.showHidden ? [] : [.skipsHiddenFiles]
             var urls = (try? FileManager.default.contentsOfDirectory(
                 at: url,
                 includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey],
-                options: options
+                options: enumerationOptions
             )) ?? []
 
             urls = urls.filter { child in
-                if skipWorkspaceChild && child.standardizedFileURL.path == workspaceRoot.standardizedFileURL.path { return false }
-                return !excludedNames.contains(child.lastPathComponent)
+                if skipWorkspaceChild && child.standardizedFileURL.path == options.workspaceRootPath { return false }
+                return !options.excludedNames.contains(child.lastPathComponent)
             }
             children = urls
                 .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
-                .map { child in node(for: child, visited: &visited) }
+                .map { child in node(for: child, visited: &visited, options: options) }
         }
 
         return WorkspaceFile(
@@ -368,7 +441,7 @@ final class FileManagerService: ObservableObject {
             isDirectory: isDirectory,
             size: Int64(values?.fileSize ?? 0),
             modified: values?.contentModificationDate ?? .now,
-            isFavorite: favoritePaths.contains(url.path),
+            isFavorite: options.favoritePaths.contains(url.path),
             children: children
         )
     }

@@ -82,8 +82,18 @@ struct FeatureDiagnosticsView: View {
                 LabeledContent("Selected toolchain", value: workspace.selectedToolchain.rawValue)
                 LabeledContent("Execution backend", value: settings.executionBackend)
                 LabeledContent("Project", value: workspace.activeProjectRoot ?? "Not detected")
+                if let context = workspace.projectContext {
+                    LabeledContent("Build system", value: context.buildSystem)
+                    LabeledContent("Package format", value: context.packageFormat)
+                    LabeledContent("Architecture", value: context.architecture)
+                    LabeledContent("Deployment target", value: context.deploymentTarget)
+                }
                 LabeledContent("Execution status", value: workspace.executionStatus)
+                LabeledContent("Parsed diagnostics", value: "\(workspace.buildDiagnostics.count)")
             }
+
+            RuntimeToolchainSection(runtime: workspace.toolchainRuntime)
+
             Section {
                 Button {
                     Task { await probeHelpers() }

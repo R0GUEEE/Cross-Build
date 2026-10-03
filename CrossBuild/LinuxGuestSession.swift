@@ -71,6 +71,11 @@ final class LinuxGuestSession: ObservableObject {
     }
 
     /// Runs one command in the running shell and returns its combined output.
+    ///
+    /// `timeout` follows the app-wide convention: a value of 0 (or less) means
+    /// "no timeout", not "expire immediately". It must be handled here as well as
+    /// in the backend, because a bare `max(1, timeout)` would silently turn the
+    /// documented Unlimited setting into a one-second kill.
     func run(_ command: String, timeout: TimeInterval = 120) async -> (code: Int32, output: String) {
         await startIfNeeded()
         guard state == .running else {
@@ -83,14 +88,21 @@ final class LinuxGuestSession: ObservableObject {
         // Chain onto the queue so two commands cannot interleave their output,
         // then hop off the main actor because the guest does real work.
         let previous = queue
-        let milliseconds = Int32(max(1, timeout) * 1000)
+        let seconds = Self.effectiveTimeout(timeout)
+        let milliseconds = Int32(min(seconds, Self.maximumTimeoutSeconds) * 1000)
         let task = Task { () -> (Int32, String) in
             await previous?.value
             return await Task.detached(priority: .userInitiated) {
                 #if canImport(CrossBuildLinux)
                 var outPointer: UnsafeMutablePointer<CChar>?
                 let code = cblk_session_run(command, milliseconds, &outPointer)
-                return (code, outPointer.map { String(cString: $0) } ?? "")
+                let output = outPointer.map { String(cString: $0) } ?? ""
+                // cblk_session_run returns its internal scratch buffer on success,
+                // but strdup()s the message on its error paths (negative code).
+                // Those are the only ones we own, and leaking them leaks once per
+                // failure for the life of the process.
+                if code < 0, let outPointer { cblk_free(outPointer) }
+                return (code, output)
                 #else
                 return (Int32(-1), "The Linux engine was not linked into this build.")
                 #endif
@@ -98,5 +110,14 @@ final class LinuxGuestSession: ObservableObject {
         }
         queue = Task { _ = await task.value }
         return await task.value
+    }
+
+    /// Upper bound applied to the C poll loop. Large enough not to interfere with
+    /// a real build, small enough that `Int32` milliseconds cannot overflow.
+    private static let maximumTimeoutSeconds: TimeInterval = 3600
+
+    private static func effectiveTimeout(_ timeout: TimeInterval) -> TimeInterval {
+        guard timeout > 0 else { return maximumTimeoutSeconds }
+        return timeout
     }
 }

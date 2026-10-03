@@ -106,21 +106,6 @@ final class GitHubWorkspaceService: ObservableObject {
         return candidate
     }
 
-    func registerImportedRepository(url: String, branch: String) throws -> GitRepository {
-        let parsed = try parse(url)
-        let dest = destination(owner: parsed.owner, name: parsed.name)
-        let entry = GitRepository(
-            owner: parsed.owner,
-            name: parsed.name,
-            url: parsed.normalized,
-            branch: branch.isEmpty ? "default" : branch,
-            localPath: dest.path
-        )
-        upsert(entry)
-        status = "Repository destination prepared at \(dest.lastPathComponent)"
-        return entry
-    }
-
     func cloneArchive(url: String, branch: String) async {
         errorMessage = nil
         verboseLog.removeAll()

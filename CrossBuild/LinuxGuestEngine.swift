@@ -44,29 +44,6 @@ enum LinuxGuestEngine {
         #endif
     }
 
-    struct Result: Sendable {
-        var exitCode: Int32
-        var output: String
-        var error: String
-        var succeeded: Bool { exitCode == 0 }
-    }
-
-    /// Boots the guest from a fakefs root and runs one command to completion.
-    /// Must be called off the main thread: it blocks for as long as the command
-    /// takes, and the guest's own thread does the work.
-    static func run(command: String, fakefsRoot: String, workingDirectory: String? = nil) -> Result {
-        #if canImport(CrossBuildLinux)
-        var outPointer: UnsafeMutablePointer<CChar>?
-        var errPointer: UnsafeMutablePointer<CChar>?
-        let code = cblk_boot_and_run(fakefsRoot, workingDirectory, command, &outPointer, &errPointer)
-        let output = outPointer.map { String(cString: $0) } ?? ""
-        let errorText = errPointer.map { String(cString: $0) } ?? ""
-        return Result(exitCode: code, output: output, error: errorText)
-        #else
-        return Result(exitCode: -1, output: "", error: "Linux engine was not linked into this build.")
-        #endif
-    }
-
     enum GuestError: LocalizedError {
         case rootNotBundled
         var errorDescription: String? {
@@ -101,10 +78,5 @@ enum LinuxGuestEngine {
         try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         try fm.copyItem(atPath: bundled, toPath: destination.path)
         return destination.path
-    }
-
-    /// Where the guest should boot from: the writable copy, created on first use.
-    static var defaultRootPath: String? {
-        try? prepareWritableRoot()
     }
 }
