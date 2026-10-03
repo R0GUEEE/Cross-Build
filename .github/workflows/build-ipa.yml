@@ -127,7 +127,13 @@ jobs:
           test -x ./build-host/ish || { echo "::error::native ish was not built"; exit 1; }
 
           ROOT="$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root"
-          PACKAGES="bash coreutils findutils grep sed gawk make python3 py3-pip git build-base"
+          # Deliberately NOT build-base/gcc: the full compiler stack adds ~250 MB
+          # to the shipped root and takes the IPA past 150 MB, which is a lot to
+          # hand someone and slow to install. The guest keeps working shell,
+          # scripting, Python and git tooling; a compiler can be added inside the
+          # guest with apk when it is actually wanted, which is the same command
+          # the user would run anyway.
+          PACKAGES="bash coreutils findutils grep sed gawk make python3 py3-pip git tar gzip xz ca-certificates"
           echo "Installing: $PACKAGES"
 
           # The guest's emulated network stack does not resolve DNS, so apk fails
@@ -150,7 +156,7 @@ jobs:
             || echo "::warning::apk provisioning did not complete; see the output above"
 
           echo "=== what landed in the root ==="
-          for tool in bash make gcc python3 git; do
+          for tool in bash make python3 git tar; do
             if ./build-host/ish -f "$ROOT" /bin/sh -c "command -v $tool" >/dev/null 2>&1; then
               echo "  ok   $tool"
             else
