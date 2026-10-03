@@ -98,25 +98,13 @@ struct SettingsView: View {
                 }
 
                 Section("Execution Runtime") {
-                    Picker("Backend", selection: $settings.executionBackend) {
-                        Text("Automatic").tag("Automatic")
-                        Text("Sideload / Embedded").tag("Sideload / Embedded")
-                        Text("Jailbreak Local").tag("Jailbreak Local")
-                        Text("Linux Guest").tag("Linux Guest")
-                        Text("Remote / Helper").tag("Remote / Helper")
-                    }
+                    LabeledContent("Runtime", value: "Embedded / In-App")
+                    LabeledContent("POSIX environment", value: "ios-linuxkit")
+                    Text("Commands execute inside Cross Build. Native compiler/runtime engines are linked into the app; shell and POSIX workflows use the embedded Linux runtime. No remote or jailbreak helper is required.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Stepper(settings.commandTimeout == 0 ? "Command timeout: Unlimited" : "Command timeout: \(settings.commandTimeout)s",
                             value: $settings.commandTimeout, in: 0...3600, step: 15)
                     Toggle("Forward configured environment", isOn: $settings.forwardEnvironment)
-
-                    if settings.executionBackend == "Remote / Helper" {
-                        TextField("Remote host", text: $settings.remoteHost).textInputAutocapitalization(.never)
-                        Stepper("Helper port: \(settings.helperPort)", value: $settings.helperPort, in: 1...65535)
-                        TextField("Remote workspace path", text: $settings.remoteWorkspace)
-                        Stepper("Connection timeout: \(settings.connectionTimeout)s", value: $settings.connectionTimeout, in: 5...120, step: 5)
-                        Text("Cross Build talks to CrossBuild Helper over HTTP, not raw SSH. Run Tools/crossbuild-helper.py on the remote host and enter its token in App Configuration.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
                 }
 
                 Section("Files & Storage") {
