@@ -155,6 +155,26 @@ jobs:
           ./build-host/ish -f "$ROOT" /bin/sh -c "apk update >/dev/null && apk add --no-cache $PACKAGES" \
             || echo "::warning::apk provisioning did not complete; see the output above"
 
+          echo "=== trimming the root ==="
+          # Applies the rootfs-trimming checklist: drop documentation, non-English
+          # locales, the Python test suite, and both package caches. All of it is
+          # dead weight in a shipped image -- nothing in the guest reads /usr/share/
+          # doc, and the test suite is ~the largest single removable chunk of the
+          # standard library.
+          #
+          # Deliberately kept: __pycache__ (pre-compiled bytecode makes repeated
+          # Python starts faster in the guest, which matters a lot under an
+          # interpreter) and /usr/lib/gawk, bash builtins, etc.
+          ./build-host/ish -f "$ROOT" /bin/sh -c '
+            rm -rf /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale/??* 2>/dev/null
+            rm -rf /usr/lib/python3.*/test /usr/lib/python3.*/unittest /usr/lib/python3.*/idlelib 2>/dev/null
+            rm -rf /usr/lib/python3.*/config-3.* /usr/lib/python3.*/lib2to3 2>/dev/null
+            rm -rf /var/cache/apk /root/.cache /tmp/* 2>/dev/null
+            true
+          ' || echo "::warning::rootfs trimming did not run cleanly"
+          echo "  apk cache:  $(./build-host/ish -f "$ROOT" /bin/sh -c "du -sh /var/cache/apk 2>/dev/null | cut -f1" 2>/dev/null || echo 0)"
+          echo "  python lib: $(./build-host/ish -f "$ROOT" /bin/sh -c "du -sh /usr/lib/python3.14 2>/dev/null | cut -f1" 2>/dev/null || echo n/a)"
+
           echo "=== what landed in the root ==="
           for tool in bash make python3 git tar; do
             if ./build-host/ish -f "$ROOT" /bin/sh -c "command -v $tool" >/dev/null 2>&1; then
