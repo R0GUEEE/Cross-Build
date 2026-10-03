@@ -54,6 +54,23 @@ enum BundledResources {
             icon: "hammer"
         ))
 
+        let pythonEngine = PythonEmbeddedEngine()
+        let pythonStdlib = Bundle.main.resourceURL?
+            .appendingPathComponent("python/lib/python3.13", isDirectory: true)
+        let pythonStdlibPresent = pythonStdlib.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        items.append(BundledResource(
+            id: "python3",
+            name: "Python 3",
+            detail: pythonStdlibPresent
+                ? "Embedded CPython interpreter and standard library. Runs fully in-process — no helper, no host. Compiled extension modules in lib-dynload are loaded with dlopen, which iOS restricts to signed code inside the app bundle."
+                : "Interpreter is linked but the standard library was not found in the bundle.",
+            location: "Python.framework + python/ stdlib",
+            present: pythonEngine.isLinked && pythonStdlibPresent,
+            sizeBytes: pythonStdlib.map(directorySize) ?? 0,
+            execution: .inProcess,
+            icon: "chevron.left.forwardslash.chevron.right"
+        ))
+
         // Bundled support data.
         items.append(resourceItem(
             id: "helper",

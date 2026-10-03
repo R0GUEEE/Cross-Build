@@ -33,6 +33,7 @@ struct FeatureDiagnosticsView: View {
             .init(name: "Automatic Configuration", detail: "Toolchain, target, package and Theos configuration generation", ready: true, icon: "wand.and.stars"),
             .init(name: "Local Agent Planner", detail: "Sequenced IDE/build actions with permissions and retries", ready: true, icon: "sparkles"),
             .init(name: "JavaScriptCore", detail: "Embedded JavaScript evaluation with console output", ready: workspace.embeddedToolchains.isAvailable("javascriptcore"), icon: "curlybraces"),
+            .init(name: "Python 3", detail: "Embedded CPython interpreter and standard library, running in-process with no helper", ready: workspace.embeddedToolchains.isAvailable("python3"), icon: "chevron.left.forwardslash.chevron.right"),
             .init(name: "Embedded Clang", detail: "\(workspace.embeddedToolchains.clang.version) — bridge module linked; no vendored LLVM/clangDriver payload yet, so compile() reports a native but unimplemented failure", ready: false, icon: "hammer"),
             .init(name: "Remote Helper", detail: remoteDetail, ready: remoteProbe?.reachable ?? false, icon: "network"),
             .init(name: "Jailbreak Helper", detail: jailbreakDetail, ready: jailbreakProbe?.reachable ?? false, icon: "lock.open"),
