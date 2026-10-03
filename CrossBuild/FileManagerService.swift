@@ -152,31 +152,35 @@ final class FileManagerService: ObservableObject {
                           userInfo: [NSLocalizedDescriptionKey: "The app bundle is read-only."])
         }
         try text.write(toFile: file.path, atomically: true, encoding: .utf8)
-        reload()
     }
 
-    func createFile(named name: String, in parentPath: String? = nil) {
+    @discardableResult
+    func createFile(named name: String, in parentPath: String? = nil) -> WorkspaceFile? {
         errorMessage = nil
-        guard valid(name) else { errorMessage = "Invalid file name."; return }
+        guard valid(name) else { errorMessage = "Invalid file name."; return nil }
         let parent = URL(fileURLWithPath: parentPath ?? workspaceRoot.path)
         let url = uniqueURL(parent.appendingPathComponent(name))
         guard FileManager.default.createFile(atPath: url.path, contents: Data()) else {
             errorMessage = "Could not create \(url.lastPathComponent)."
-            return
+            return nil
         }
         reload()
+        return flattened.first { $0.path == url.path }
     }
 
-    func createFolder(named name: String, in parentPath: String? = nil) {
+    @discardableResult
+    func createFolder(named name: String, in parentPath: String? = nil) -> WorkspaceFile? {
         errorMessage = nil
-        guard valid(name) else { errorMessage = "Invalid folder name."; return }
+        guard valid(name) else { errorMessage = "Invalid folder name."; return nil }
         let parent = URL(fileURLWithPath: parentPath ?? workspaceRoot.path)
         let url = uniqueURL(parent.appendingPathComponent(name, isDirectory: true))
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
             reload()
+            return flattened.first { $0.path == url.path }
         } catch {
             errorMessage = error.localizedDescription
+            return nil
         }
     }
 
