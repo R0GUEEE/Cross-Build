@@ -27,7 +27,17 @@ struct SettingsView: View {
                     }
                     Toggle("Global autosave", isOn: $settings.autosave)
                     Toggle("Trim trailing whitespace", isOn: $settings.trimWhitespace)
-                    LabeledContent("Editor engine", value: "System TextEditor")
+                    Toggle("Line numbers", isOn: $settings.editorLineNumbers)
+                    Toggle("Highlight current line", isOn: $settings.editorHighlightCurrentLine)
+                    Toggle("Word wrap", isOn: $settings.editorWordWrap)
+                    Toggle("Auto-close brackets & quotes", isOn: $settings.editorAutoClosePairs)
+                    Toggle("Insert spaces for tabs", isOn: $settings.editorInsertSpaces)
+                    Picker("Tab width", selection: $settings.editorTabWidth) {
+                        Text("2").tag(2)
+                        Text("4").tag(4)
+                        Text("8").tag(8)
+                    }
+                    LabeledContent("Editor engine", value: "Cross Build Code Editor")
                 }
 
                 Section("Build Policy") {
