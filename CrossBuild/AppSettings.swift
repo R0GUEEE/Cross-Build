@@ -62,6 +62,11 @@ final class AppSettings: ObservableObject {
 
     @AppStorage("files.showHidden") var showHiddenFiles = false
 
+    // Full Setup
+    @AppStorage("setup.allowInstalls") var allowSetupInstalls = true
+    @AppStorage("setup.completedAt") var setupCompletedAt = ""
+    @AppStorage("setup.lastSummary") var setupLastSummary = ""
+
     @AppStorage("runtime.backend") var executionBackend = "Automatic"
     @AppStorage("runtime.remoteHost") var remoteHost = ""
     @AppStorage("runtime.remoteWorkspace") var remoteWorkspace = ""

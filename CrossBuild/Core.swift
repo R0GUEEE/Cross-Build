@@ -426,12 +426,9 @@ final class WorkspaceModel: ObservableObject {
     }
 
     @discardableResult
-    func executeCommand(_ command: String, settings: AppSettings? = nil, sessionID: String? = nil) async -> CommandResult {
-        guard !isExecuting else {
-            let result = CommandResult(exitCode: 75, stdout: "", stderr: "Another command is already running.", duration: 0)
-            console += "error: \(result.stderr)\n"
-            return result
-        }
+    /// Resolves "Automatic" to a concrete backend. Single source of truth so
+    /// execution and Full Setup cannot disagree about which backend is active.
+    func resolvedBackend(settings: AppSettings? = nil) -> (backend: any ExecutionBackend, mode: String) {
         let resolvedSettings = settings ?? appSettings
         var mode = resolvedSettings?.executionBackend ?? "Sideload / Embedded"
         if mode == "Automatic" {
@@ -443,7 +440,20 @@ final class WorkspaceModel: ObservableObject {
                 mode = "Sideload / Embedded"
             }
         }
-        let backend = ExecutionBackendFactory.make(mode: mode, settings: resolvedSettings)
+        return (ExecutionBackendFactory.make(mode: mode, settings: resolvedSettings), mode)
+    }
+
+    @discardableResult
+    func executeCommand(_ command: String, settings: AppSettings? = nil, sessionID: String? = nil) async -> CommandResult {
+        guard !isExecuting else {
+            let result = CommandResult(exitCode: 75, stdout: "", stderr: "Another command is already running.", duration: 0)
+            console += "error: \(result.stderr)\n"
+            return result
+        }
+        let resolvedSettings = settings ?? appSettings
+        let resolved = resolvedBackend(settings: resolvedSettings)
+        let mode = resolved.mode
+        let backend = resolved.backend
         let localWorkingDirectory = configuration.workingDirectory.isEmpty ? (activeProjectRoot ?? files.workspaceRoot.path) : configuration.workingDirectory
         let remoteWorkspace = resolvedSettings?.remoteWorkspace.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let workingDirectory = (mode == "Remote / Helper" || mode == "Remote / SSH") && !remoteWorkspace.isEmpty ? remoteWorkspace : localWorkingDirectory

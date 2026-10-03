@@ -8,6 +8,9 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section("Configuration") {
+                    NavigationLink("Full Setup") {
+                        FullSetupView(settings: settings).environmentObject(workspace)
+                    }
                     NavigationLink("App Configuration") {
                         AppConfigurationView(settings: settings)
                     }
