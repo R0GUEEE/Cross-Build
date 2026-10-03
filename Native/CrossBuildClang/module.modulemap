@@ -1,0 +1,13 @@
+// XcodeGen/Xcode do not auto-generate a module map for a static library the way
+// they do for a framework target (see yonaskolb/XcodeGen#350: "To support
+// modules a module.modulemap will need to be manually supplied. If it's included
+// in Sources it will be copied to the same location."). Without this file,
+// `import CrossBuildClang` from Swift fails with "no such module".
+//
+// Keep the module name identical to PRODUCT_NAME so `canImport(CrossBuildClang)`
+// resolves, and keep the umbrella header name identical to the file in this
+// directory.
+module CrossBuildClang {
+    umbrella header "CrossBuildClang.h"
+    export *
+}

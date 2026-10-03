@@ -39,14 +39,15 @@ protocol NativeCompilerBridge {
 }
 
 struct ClangEmbeddedBridge: NativeCompilerBridge {
-    // CrossBuildClang is a small, always-linked C ABI target (see
-    // Native/CrossBuildClang). It is real and callable in every app build, but
-    // it currently ships without a vendored LLVM/clangDriver implementation, so
-    // `compile` always reports a native-but-unimplemented failure rather than
-    // actually compiling anything. `isLinked` reflects whether the module itself
-    // built into this binary (always true once Xcode links the framework target),
-    // not whether a real LLVM payload is behind it -- see `version`/`compile` for
-    // the honest distinction.
+    // CrossBuildClang is a small static C ABI library (see Native/CrossBuildClang)
+    // compiled directly into the app binary -- there is no embedded bundle, so
+    // nothing to load at runtime and nothing for installd to validate.
+    //
+    // It is real and callable in every app build, but it currently ships without
+    // a vendored LLVM/clangDriver implementation, so `compile` always reports a
+    // native-but-unimplemented failure rather than actually compiling anything.
+    // `isLinked` means "the module was compiled in", not "a real LLVM payload is
+    // behind it" -- see `version`/`compile` for that distinction.
     var isLinked:Bool {
         #if canImport(CrossBuildClang)
         return true
