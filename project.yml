@@ -28,11 +28,6 @@ targets:
       - path: CrossBuild/Resources/Toolchains
         type: folder
         buildPhase: resources
-      # The execution helper is bundled straight from Tools/ rather than copied
-      # into the app tree, so there is exactly one copy of it and the two cannot
-      # drift apart. buildPhase is forced because a .py file has no default phase.
-      - path: Tools/crossbuild-helper.py
-        buildPhase: resources
       # Vendored CPython support package (see the "Vendor Python runtime" CI step).
       # Neither path exists in a clean checkout, so both are gitignored; the CI
       # step fails the build with a clear message if they are missing.
