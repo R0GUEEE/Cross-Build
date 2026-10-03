@@ -94,25 +94,7 @@ jobs:
           # passed via c_args: Meson applies those to assembly as well, and the
           # asbestos gadget .S files then fail with "unrecognized instruction
           # mnemonic" -- the same trap hit earlier with the dispatch header.
-          shim="$GITHUB_WORKSPACE/Tools/native-offload-shim.h"
-          test -f "$shim" || { echo "::error::native-offload-shim.h is missing"; exit 1; }
-          cat "$shim" kernel/native_offload.c > kernel/native_offload.c.patched
-          mv kernel/native_offload.c.patched kernel/native_offload.c
-          # The symbol does not exist in the runner's libSystem at all, so the call
-          # has to go, not just its declaration. It only sets the child's working
-          # directory on the native-offload fast path, which this CLI does not use
-          # (it is a build-time driver here, and the guest path is unaffected), so
-          # replacing it with a no-op preserves behaviour for us without inventing
-          # a symbol that is not there.
-          python3 - <<'PATCH'
-          import re, pathlib
-          f = pathlib.Path("kernel/native_offload.c")
-          t = f.read_text()
-          t = t.replace(
-              "if (host_cwd) SPAWN_CHECK(posix_spawn_file_actions_addchdir(&actions, host_cwd));",
-              "/* crossbuild: posix_spawn_file_actions_addchdir unavailable in this SDK;\\n               the native-offload fast path is unused by the build-time CLI, so this is a no-op. */")
-          f.write_text(t)
-          PATCH
+          python3 "$GITHUB_WORKSPACE/Tools/patch_linuxkit.py" "$PWD"
           meson setup build-host --buildtype=release -Dguest_arch=arm64 \
             -Dc_args="-D_XOPEN_SOURCE=600 -D_DARWIN_C_SOURCE"
           meson compile -C build-host fakefsify
