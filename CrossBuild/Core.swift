@@ -71,6 +71,7 @@ final class WorkspaceModel: ObservableObject {
     let configuration = WorkspaceConfiguration()
     let compilerConfiguration = CompilerConfiguration()
     let editor = EditorSession()
+    let embeddedToolchains = EmbeddedToolchainManager()
 
     var activeCompiler: CustomCompiler? { customCompilers.first { $0.id == selectedCustomCompilerID } }
 
@@ -115,6 +116,22 @@ final class WorkspaceModel: ObservableObject {
     func runBuild(settings: AppSettings? = nil) {
         let command = activeCompiler?.buildCommand ?? ToolchainRegistry.providers.first { $0.kind == selectedToolchain }?.buildCommands.first ?? "build"
         runCommand(command, settings: settings)
+    }
+
+    func runEmbedded(id: String, source: String? = nil) {
+        let input = source ?? editorText
+        isExecuting = true
+        executionStatus = "Running embedded \(id)"
+        Task {
+            let result = await embeddedToolchains.run(id: id, source: input)
+            await MainActor.run {
+                if !result.output.isEmpty { console += result.output + "\n" }
+                result.diagnostics.forEach { console += "embedded: \($0)\n" }
+                lastExitCode = result.succeeded ? 0 : 1
+                executionStatus = result.succeeded ? "Succeeded" : "Failed"
+                isExecuting = false
+            }
+        }
     }
 
     func runCommand(_ command: String, settings: AppSettings? = nil) {
