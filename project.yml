@@ -13,7 +13,13 @@ targets:
     type: application
     platform: iOS
     deploymentTarget: "16.0"
-    sources: [CrossBuild]
+    sources:
+      - path: CrossBuild
+        excludes:
+          - Resources/Toolchains
+    resources:
+      - path: CrossBuild/Resources/Toolchains
+        type: folder
     dependencies:
       - package: ZIPFoundation
     settings:
