@@ -7,30 +7,18 @@ struct IDEView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $selection) {
-                Section("Workspace") {
-                    Label("main.swift", systemImage: "swift")
-                    Label("Makefile", systemImage: "hammer")
-                    Label("control", systemImage: "shippingbox")
-                }
-                Section("Automation") {
-                    ForEach(workspace.tasks) { task in
-                        Label(task.title, systemImage: "bolt.badge.clock")
-                    }
-                }
-                Section("Compiler") {
+            VStack(spacing: 0) {
+                WorkspaceBrowserView(files: workspace.files)
+                Divider()
+                HStack {
                     Button(action: workspace.detectSampleProject) {
-                        Label("Auto Detect Project", systemImage: "waveform.badge.magnifyingglass")
+                        Label("Detect", systemImage: "waveform.badge.magnifyingglass")
                     }
-                    Button {
-                        showCompilerManager = true
-                    } label: {
-                        Label("Add / Select Compiler", systemImage: "plus.rectangle.on.folder")
+                    Spacer()
+                    Button { showCompilerManager = true } label: {
+                        Label("Compiler", systemImage: "cpu")
                     }
-                    if let compiler = workspace.activeCompiler {
-                        Label("Using: \(compiler.name)", systemImage: "checkmark.circle.fill")
-                    }
-                }
+                }.padding(8)
             }
             .navigationTitle("Cross Build")
         } detail: {
