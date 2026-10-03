@@ -36,7 +36,7 @@ struct CompilerCatalogView: View {
                                 HStack {
                                     Text(item.category.rawValue)
                                     Text("•")
-                                    Text(AppToolchainLibraries.item(item.id)?.availability.rawValue ?? "Integrated")
+                                    Text(workspace.embeddedToolchains.isAvailable(item.id) ? "Embedded • Ready" : (AppToolchainLibraries.item(item.id)?.availability.rawValue ?? "Integrated"))
                                 }.font(.caption2).foregroundStyle(.secondary)
                             }
                             Spacer()
@@ -77,7 +77,7 @@ struct CompilerCatalogDetailView: View {
                 Section("Capabilities") {
                     LabeledContent("Category", value: item.category.rawValue)
                     LabeledContent("Executable", value: item.executable)
-                    LabeledContent("App Library", value: AppToolchainLibraries.item(item.id)?.availability.rawValue ?? "Integrated")
+                    LabeledContent("App Library", value: workspace.embeddedToolchains.isAvailable(item.id) ? "Embedded Engine • Ready" : (AppToolchainLibraries.item(item.id)?.availability.rawValue ?? "Integrated"))
                     LabeledContent("Module", value: AppToolchainLibraries.item(item.id)?.module ?? item.id)
                     LabeledContent("Version", value: AppToolchainLibraries.item(item.id)?.version ?? "built-in")
                     LabeledContent("Process backend", value: AppToolchainLibraries.item(item.id)?.requiresProcessBackend == true ? "Required" : "Not required")
@@ -96,6 +96,12 @@ struct CompilerCatalogDetailView: View {
                     Section("Packages / Dependencies") { Text(item.packageNames.joined(separator: " • ")) }
                 }
                 Section("Compatibility") { Text(item.notes).font(.callout) }
+                if workspace.embeddedToolchains.isAvailable(item.id) {
+                    Section("Embedded Engine") {
+                        Label("Linked and available in this app build", systemImage: "checkmark.seal.fill")
+                        Button("Run Embedded Engine", systemImage: "play.fill") { workspace.runEmbedded(id: item.id) }
+                    }
+                }
                 Section {
                     Button("Use Built-in Toolchain", systemImage: "checkmark.circle") {
                         workspace.addCompiler(CustomCompiler(
