@@ -162,7 +162,7 @@ jobs:
           APP="$(find build/DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
           test -n "$APP"
           fail() { echo "::error::$1"; exit 1; }
-          test -f "$APP/crossbuild-helper.py" || fail "crossbuild-helper.py is missing from the app bundle"
+          test ! -e "$APP/crossbuild-helper.py" || fail "crossbuild-helper.py must not be bundled; Cross Build execution is entirely in-app"
           test -d "$APP/Toolchains" || fail "Toolchains folder is missing from the app bundle"
           test -f "$APP/Toolchains/LLVM/manifest.json" || fail "Toolchains/LLVM/manifest.json is missing from the app bundle"
           test -f "$APP/Info.plist" || fail "Info.plist is missing from the app bundle"
