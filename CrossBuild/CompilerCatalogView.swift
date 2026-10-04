@@ -28,12 +28,9 @@ struct CompilerCatalogView: View {
                 }
                 if filtered.isEmpty {
                     Section {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("No toolchains match").font(.headline)
-                            Text("Nothing in the catalogue matches the current search and category.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 4)
+                        ForgeEmptyState(icon: "magnifyingglass",
+                                        title: "No toolchains match",
+                                        message: "Nothing in the catalogue matches the current search and category.")
                     }
                 }
                 ForEach(filtered) { item in

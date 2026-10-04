@@ -82,13 +82,9 @@ struct AgentDashboardView: View {
                                 .disabled(workspace.agentActivity.isEmpty)
                         }
                         if workspace.agentActivity.isEmpty {
-                            VStack(spacing: 8) {
-                                Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(.secondary)
-                                Text("No Activity").font(.headline)
-                                Text("Run a task to see each planned action and result.").font(.caption).foregroundStyle(.secondary)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 24)
+                            ForgeEmptyState(icon: "sparkles",
+                                            title: "No Activity",
+                                            message: "Run a task to see each planned action and result.")
                         } else {
                             ForEach(Array(workspace.agentActivity.enumerated()), id: \.offset) { index, item in
                                 HStack(alignment: .top, spacing: 10) {
