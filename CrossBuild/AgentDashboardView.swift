@@ -54,7 +54,7 @@ struct AgentDashboardView: View {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], spacing: 12) {
                             ForgeMetric(title: "Toolchain", value: workspace.analysis?.primaryToolchain.rawValue ?? workspace.selectedToolchain.rawValue, icon: "cpu")
                             ForgeMetric(title: "Files", value: "\(workspace.projectFiles.count)", icon: "doc.on.doc")
-                            ForgeMetric(title: "Backend", value: settings.executionBackend, icon: "terminal")
+                            ForgeMetric(title: "Runtime", value: "Embedded", icon: "terminal")
                             ForgeMetric(title: "Status", value: workspace.executionStatus, icon: "waveform")
                         }
                         Divider()
