@@ -164,7 +164,37 @@ struct IDEView: View {
                 Button(action: workspace.saveEditor) { Image(systemName: "square.and.arrow.down") }
                     .buttonStyle(.bordered)
             }
-            Button(action: { workspace.runBuild(settings: settings) }) {
+            // A menu rather than a single button: the project build is one of
+            // several things worth asking for, and building one file or one
+            // target should not mean editing the project command first.
+            Menu {
+                Button("Build Project", systemImage: "hammer.fill") { workspace.runBuild(settings: settings) }
+                if let document = workspace.editor.selected {
+                    Button("Build \(document.name)", systemImage: "doc.badge.gearshape") {
+                        workspace.buildIndividual(.init(kind: .file(workspace.relativePath(document.path)),
+                                                        title: document.name,
+                                                        detail: "Compile this file on its own"),
+                                                  settings: settings)
+                    }
+                }
+                let targets = workspace.makefileTargets()
+                if !targets.isEmpty {
+                    Menu("Build Make Target") {
+                        ForEach(targets.prefix(20), id: \.self) { target in
+                            Button("make \(target)") {
+                                workspace.buildIndividual(.init(kind: .makeTarget(target),
+                                                                title: "make \(target)",
+                                                                detail: "Make target"),
+                                                          settings: settings)
+                            }
+                        }
+                    }
+                }
+                Divider()
+                Button("Copy Workspace into Guest", systemImage: "arrow.down.to.line") {
+                    workspace.syncWorkspaceToGuest(settings: settings)
+                }
+            } label: {
                 if workspace.isExecuting {
                     ProgressView().controlSize(.small)
                 } else {

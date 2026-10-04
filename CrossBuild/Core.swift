@@ -936,6 +936,209 @@ final class WorkspaceModel: ObservableObject {
     /// project tree, which is far too much synchronous file I/O to do while the
     /// UI is otherwise blocked.
     @discardableResult
+    // MARK: - Building individual items
+
+    let guestSync = GuestWorkspaceSync()
+
+    /// Something that can be built on its own rather than as part of the project.
+    struct IndividualBuildItem: Identifiable {
+        enum Kind { case file(String), makeTarget(String) }
+        let id = UUID()
+        let kind: Kind
+        let title: String
+        let detail: String
+    }
+
+    /// The path of `path` relative to the active project root.
+    func relativePath(_ path: String) -> String {
+        let root = activeProjectRoot ?? files.workspaceRoot.path
+        guard path.hasPrefix(root + "/") else { return (path as NSString).lastPathComponent }
+        return String(path.dropFirst(root.count + 1))
+    }
+
+    /// Source files under the active project that a compiler can take on their own.
+    func individualSourceFiles() -> [WorkspaceFile] {
+        let root = activeProjectRoot ?? files.workspaceRoot.path
+        let buildable: Set<String> = ["c", "cc", "cpp", "cxx", "m", "mm", "swift", "rs", "go", "zig", "py", "js", "ts"]
+        return files.flattened.filter { file in
+            guard !file.isDirectory,
+                  file.path.hasPrefix(root + "/"),
+                  buildable.contains((file.name as NSString).pathExtension.lowercased())
+            else { return false }
+            return true
+        }
+    }
+
+    /// Everything that could be built individually: the open file first, then the
+    /// project's own sources, then the make targets the project declares.
+    func individualBuildItems(limit: Int = 12) -> [IndividualBuildItem] {
+        var items: [IndividualBuildItem] = []
+        var seen = Set<String>()
+
+        func addFile(_ relative: String, _ title: String) {
+            guard seen.insert(relative).inserted else { return }
+            items.append(.init(kind: .file(relative), title: title, detail: "Compile this file on its own"))
+        }
+
+        if let document = editor.selected {
+            addFile(relativePath(document.path), document.name)
+        }
+        for file in individualSourceFiles().prefix(limit) {
+            addFile(relativePath(file.path), file.name)
+        }
+        for target in makefileTargets().prefix(limit) {
+            guard seen.insert("make:\(target)").inserted else { continue }
+            items.append(.init(kind: .makeTarget(target),
+                               title: "make \(target)",
+                               detail: "Target declared in the project's Makefile"))
+        }
+        return items
+    }
+
+    /// Targets declared in the project's Makefile.
+    ///
+    /// Deliberately shallow: a `name:` at the start of a line, skipping recipe
+    /// lines, comments, `.PHONY`-style specials, pattern rules and variable
+    /// assignments (`:=`, `::=`). Guessing deeper than that produces targets that
+    /// do not exist.
+    func makefileTargets() -> [String] {
+        let root = activeProjectRoot ?? files.workspaceRoot.path
+        let names = ["Makefile", "makefile", "GNUmakefile"]
+        guard let makefile = files.flattened.first(where: { file in
+            names.contains(file.name) && file.path.hasPrefix(root + "/")
+        }), let text = files.contents(of: makefile, encoding: editorEncoding) else { return [] }
+
+        var seen = Set<String>()
+        var targets: [String] = []
+        for line in text.components(separatedBy: .newlines) {
+            guard !line.hasPrefix("\t"), !line.hasPrefix("#") else { continue }
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let name = line[..<colon].trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, !name.hasPrefix(".") else { continue }
+            let rest = line[line.index(after: colon)...]
+            guard !rest.hasPrefix("="), !rest.hasPrefix(":=") else { continue }
+            guard name.range(of: #"^[A-Za-z0-9_][A-Za-z0-9_./-]*$"#, options: .regularExpression) != nil else { continue }
+            guard seen.insert(name).inserted else { continue }
+            targets.append(name)
+        }
+        return targets
+    }
+
+    /// The command that builds one file on its own.
+    ///
+    /// The project build gets its flags from CFLAGS/LDFLAGS in the environment,
+    /// which only make ever reads -- a direct compiler invocation would get none
+    /// of them. So the same flags are placed on this command line, which is what
+    /// makes an individual build equivalent to the one make would have run.
+    func singleFileBuildCommand(for relativePath: String) -> String? {
+        guard !relativePath.isEmpty else { return nil }
+        let flags = (commandEnvironment()["CFLAGS"] ?? "").trimmingCharacters(in: .whitespaces)
+        let path = GuestWorkspaceSync.guestRoot + "/" + relativePath
+        let stem = (relativePath as NSString).lastPathComponent
+        let object = "/tmp/crossbuild-\(stem).o"
+        let quote = GuestWorkspaceSync.quoted
+        let extra = flags.isEmpty ? "" : " " + flags
+
+        switch (relativePath as NSString).pathExtension.lowercased() {
+        case "c": return "clang\(extra) -c \(quote(path)) -o \(quote(object))"
+        case "m": return "clang\(extra) -fobjc-arc -c \(quote(path)) -o \(quote(object))"
+        case "cc", "cpp", "cxx", "mm": return "clang++\(extra) -c \(quote(path)) -o \(quote(object))"
+        case "swift": return "swiftc -typecheck \(quote(path))"
+        case "rs": return "rustc --emit=obj \(quote(path)) -o \(quote(object))"
+        case "go": return "go vet \(quote(path))"
+        case "zig": return "zig build-obj \(quote(path)) -femit-bin=\(quote(object))"
+        case "py": return "python3 -m py_compile \(quote(path))"
+        case "js", "ts": return "node --check \(quote(path))"
+        default: return nil
+        }
+    }
+
+    /// Every non-hidden file under `root`, ready to be copied into the guest.
+    func projectSyncItems(under root: String) -> [GuestWorkspaceSync.Item] {
+        files.flattened.compactMap { file in
+            guard !file.isDirectory,
+                  file.path.hasPrefix(root + "/"),
+                  !file.name.hasPrefix("."),
+                  !file.path.contains("/.git/"),
+                  let text = files.contents(of: file, encoding: editorEncoding)
+            else { return nil }
+            return .init(relativePath: relativePath(file.path), data: Data(text.utf8))
+        }
+    }
+
+    /// Builds one item instead of the whole project.
+    ///
+    /// Two steps, and the first is the part that was missing entirely: the guest
+    /// boots from its own filesystem image, so the item has to be copied into it
+    /// before anything in there can compile it.
+    func buildIndividual(_ item: IndividualBuildItem, settings: AppSettings? = nil) {
+        let resolved = settings ?? appSettings
+        guard !isExecuting else {
+            console += "error: Another command is already running.\n"
+            return
+        }
+        let root = activeProjectRoot ?? files.workspaceRoot.path
+
+        Task {
+            beginProgress(label: "Build \(item.title)", detail: "Copying into the guest", stepCount: 2)
+            defer { endProgress() }
+
+            // Push what the item needs: the one file for a file build, the whole
+            // project for a target, whose recipe may touch anything in the tree.
+            let items: [GuestWorkspaceSync.Item]
+            switch item.kind {
+            case .file(let relative):
+                guard let file = files.flattened.first(where: { relativePath($0.path) == relative }),
+                      let text = files.contents(of: file, encoding: editorEncoding) else {
+                    console += "error: \(relative) could not be read.\n"
+                    return
+                }
+                items = [.init(relativePath: relative, data: Data(text.utf8))]
+            case .makeTarget:
+                items = projectSyncItems(under: root)
+            }
+
+            let synced = await guestSync.push(items, session: .shared)
+            if !synced.output.isEmpty { console += synced.output }
+            console += "Guest sync: \(guestSync.lastSummary)\n"
+            guard synced.pushed > 0 else {
+                console += "error: nothing reached the guest, so there is nothing to build.\n"
+                return
+            }
+
+            let command: String
+            switch item.kind {
+            case .file(let relative):
+                guard let built = singleFileBuildCommand(for: relative) else {
+                    console += "error: Cross Build has no single-file build for \(relative). Use the project build.\n"
+                    return
+                }
+                command = "cd \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.guestRoot)) && \(built)"
+            case .makeTarget(let target):
+                let flags = compilerConfiguration.theosMakeFlags.trimmingCharacters(in: .whitespacesAndNewlines)
+                command = "cd \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.guestRoot)) && make \(target)"
+                    + (flags.isEmpty ? "" : " " + flags)
+            }
+
+            setProgress(step: 1, detail: command)
+            _ = await executeCommand(command, settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved))
+            setProgress(step: 2)
+        }
+    }
+
+    /// Copies the project into the guest, explicitly.
+    func syncWorkspaceToGuest(settings: AppSettings? = nil) {
+        let root = activeProjectRoot ?? files.workspaceRoot.path
+        Task {
+            beginProgress(label: "Sync to guest", detail: "Copying project files", stepCount: 1)
+            defer { endProgress() }
+            let result = await guestSync.push(projectSyncItems(under: root), session: .shared)
+            if !result.output.isEmpty { console += result.output }
+            console += "Guest sync: \(guestSync.lastSummary)\n"
+            setProgress(step: 1)
+        }
+    }
+
     func runPackage(settings: AppSettings? = nil) async -> CommandResult {
         let resolved = settings ?? appSettings
         let command = packageCommand()

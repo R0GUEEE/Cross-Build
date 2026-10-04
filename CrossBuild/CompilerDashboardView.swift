@@ -6,6 +6,9 @@ struct CompilerDashboardView: View {
     @State private var showManager = false
     @State private var showCatalog = false
     @State private var showConfiguration = false
+    /// Computed off the render path: it walks the file tree and reads the
+    /// Makefile, which must not happen every time the body is evaluated.
+    @State private var buildItems: [WorkspaceModel.IndividualBuildItem] = []
 
     var body: some View {
         NavigationStack {
@@ -126,9 +129,44 @@ struct CompilerDashboardView: View {
                         RunProgressBar(progress: workspace.runProgress)
                             .padding(.top, 8)
                     }
+
+                    GroupBox("Build Individual Items") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if buildItems.isEmpty {
+                                Text("Open a source file, or add a Makefile, to build something on its own.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                Text("The project build compiles everything. These compile one file or one make target, and copy it into the guest first — the guest has its own filesystem, so it cannot read the project until it is copied in.")
+                                    .font(.caption2).foregroundStyle(.tertiary)
+                            } else {
+                                ForEach(buildItems.prefix(10)) { item in
+                                    Button {
+                                        workspace.buildIndividual(item, settings: settings)
+                                    } label: {
+                                        HStack(spacing: 10) {
+                                            Image(systemName: "hammer")
+                                            VStack(alignment: .leading, spacing: 1) {
+                                                Text(item.title).font(.subheadline)
+                                                Text(item.detail).font(.caption2).foregroundStyle(.secondary)
+                                            }
+                                            Spacer()
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(workspace.isExecuting)
+                                }
+                            }
+                            Button("Copy Workspace into Guest", systemImage: "arrow.down.to.line") {
+                                workspace.syncWorkspaceToGuest(settings: settings)
+                            }
+                            .font(.caption)
+                            .disabled(workspace.isExecuting)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }.padding()
             }
             .navigationTitle("Compiler")
+            .task(id: workspace.files.roots.count) { buildItems = workspace.individualBuildItems() }
             .sheet(isPresented: $showManager) { CompilerManagerView().environmentObject(workspace) }
             .sheet(isPresented: $showCatalog) { CompilerCatalogView().environmentObject(workspace) }
             .sheet(isPresented: $showConfiguration) {
