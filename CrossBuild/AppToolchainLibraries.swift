@@ -13,7 +13,6 @@ struct AppToolchainLibrary: Identifiable, Codable, Hashable {
     let availability: AppToolchainAvailability
     let version: String
     let languages: [String]
-    let requiresProcessBackend: Bool
     let resourcePath: String?
 }
 
@@ -27,24 +26,24 @@ struct AppToolchainScan: Identifiable {
 
 enum AppToolchainLibraries {
     static let all: [AppToolchainLibrary] = [
-        .init(id:"clang",name:"LLVM / Clang",module:"CrossBuildClang",availability:.nativeLibrary,version:"native",languages:["C","C++","Objective-C","Objective-C++","Assembly"],requiresProcessBackend:false,resourcePath:"Toolchains/LLVM"),
-        .init(id:"swift",name:"Swift / SwiftPM",module:"CrossBuildSwift",availability:.nativeLibrary,version:"native",languages:["Swift"],requiresProcessBackend:false,resourcePath:"Toolchains/Swift"),
-        .init(id:"theos",name:"Theos / Logos",module:"CrossBuildTheos",availability:.bundledSupport,version:"bundled",languages:["Logos","Objective-C","Objective-C++"],requiresProcessBackend:false,resourcePath:"Toolchains/Theos"),
-        .init(id:"rust",name:"Rust / Cargo",module:"CrossBuildRust",availability:.nativeLibrary,version:"native",languages:["Rust"],requiresProcessBackend:false,resourcePath:"Toolchains/Rust"),
-        .init(id:"go",name:"Go",module:"CrossBuildGo",availability:.nativeLibrary,version:"native",languages:["Go"],requiresProcessBackend:false,resourcePath:"Toolchains/Go"),
-        .init(id:"zig",name:"Zig",module:"CrossBuildZig",availability:.nativeLibrary,version:"native",languages:["Zig","C","C++"],requiresProcessBackend:false,resourcePath:"Toolchains/Zig"),
-        .init(id:"python",name:"Python",module:"CrossBuildPython",availability:.embedded,version:"3.13",languages:["Python"],requiresProcessBackend:false,resourcePath:"Toolchains/Python"),
-        .init(id:"node",name:"Node.js",module:"CrossBuildNode",availability:.nativeLibrary,version:"native",languages:["JavaScript"],requiresProcessBackend:false,resourcePath:"Toolchains/JavaScript"),
-        .init(id:"javascriptcore",name:"JavaScriptCore",module:"JavaScriptCore",availability:.embedded,version:"system",languages:["JavaScript"],requiresProcessBackend:false,resourcePath:"Toolchains/JavaScript"),
-        .init(id:"typescript",name:"TypeScript",module:"CrossBuildTypeScript",availability:.bundledSupport,version:"bundled",languages:["TypeScript"],requiresProcessBackend:false,resourcePath:"Toolchains/TypeScript"),
-        .init(id:"java",name:"OpenJDK / Java",module:"CrossBuildJava",availability:.nativeLibrary,version:"native",languages:["Java"],requiresProcessBackend:false,resourcePath:"Toolchains/Java"),
-        .init(id:"kotlin",name:"Kotlin",module:"CrossBuildKotlin",availability:.nativeLibrary,version:"native",languages:["Kotlin"],requiresProcessBackend:false,resourcePath:"Toolchains/Kotlin"),
-        .init(id:"cmake",name:"CMake",module:"CrossBuildCMake",availability:.nativeLibrary,version:"native",languages:[],requiresProcessBackend:false,resourcePath:"Toolchains/CMake"),
-        .init(id:"ninja",name:"Ninja",module:"CrossBuildNinja",availability:.nativeLibrary,version:"native",languages:[],requiresProcessBackend:false,resourcePath:"Toolchains/Ninja"),
-        .init(id:"meson",name:"Meson",module:"CrossBuildMeson",availability:.bundledSupport,version:"bundled",languages:[],requiresProcessBackend:false,resourcePath:"Toolchains/Meson"),
-        .init(id:"make",name:"GNU Make",module:"CrossBuildMake",availability:.nativeLibrary,version:"native",languages:[],requiresProcessBackend:false,resourcePath:"Toolchains/Make"),
-        .init(id:"dpkg",name:"dpkg Tooling",module:"CrossBuildDPKG",availability:.nativeLibrary,version:"native",languages:[],requiresProcessBackend:false,resourcePath:"Toolchains/dpkg"),
-        .init(id:"ldid",name:"ldid",module:"CrossBuildSigning",availability:.nativeLibrary,version:"native",languages:[],requiresProcessBackend:false,resourcePath:"Toolchains/Signing")
+        .init(id:"clang",name:"LLVM / Clang",module:"CrossBuildClang",availability:.nativeLibrary,version:"native",languages:["C","C++","Objective-C","Objective-C++","Assembly"],resourcePath:"Toolchains/LLVM"),
+        .init(id:"swift",name:"Swift / SwiftPM",module:"CrossBuildSwift",availability:.nativeLibrary,version:"native",languages:["Swift"],resourcePath:"Toolchains/Swift"),
+        .init(id:"theos",name:"Theos / Logos",module:"CrossBuildTheos",availability:.bundledSupport,version:"bundled",languages:["Logos","Objective-C","Objective-C++"],resourcePath:"Toolchains/Theos"),
+        .init(id:"rust",name:"Rust / Cargo",module:"CrossBuildRust",availability:.nativeLibrary,version:"native",languages:["Rust"],resourcePath:"Toolchains/Rust"),
+        .init(id:"go",name:"Go",module:"CrossBuildGo",availability:.nativeLibrary,version:"native",languages:["Go"],resourcePath:"Toolchains/Go"),
+        .init(id:"zig",name:"Zig",module:"CrossBuildZig",availability:.nativeLibrary,version:"native",languages:["Zig","C","C++"],resourcePath:"Toolchains/Zig"),
+        .init(id:"python",name:"Python",module:"CrossBuildPython",availability:.embedded,version:"3.13",languages:["Python"],resourcePath:"Toolchains/Python"),
+        .init(id:"node",name:"Node.js",module:"CrossBuildNode",availability:.nativeLibrary,version:"native",languages:["JavaScript"],resourcePath:"Toolchains/JavaScript"),
+        .init(id:"javascriptcore",name:"JavaScriptCore",module:"JavaScriptCore",availability:.embedded,version:"system",languages:["JavaScript"],resourcePath:"Toolchains/JavaScript"),
+        .init(id:"typescript",name:"TypeScript",module:"CrossBuildTypeScript",availability:.bundledSupport,version:"bundled",languages:["TypeScript"],resourcePath:"Toolchains/TypeScript"),
+        .init(id:"java",name:"OpenJDK / Java",module:"CrossBuildJava",availability:.nativeLibrary,version:"native",languages:["Java"],resourcePath:"Toolchains/Java"),
+        .init(id:"kotlin",name:"Kotlin",module:"CrossBuildKotlin",availability:.nativeLibrary,version:"native",languages:["Kotlin"],resourcePath:"Toolchains/Kotlin"),
+        .init(id:"cmake",name:"CMake",module:"CrossBuildCMake",availability:.nativeLibrary,version:"native",languages:[],resourcePath:"Toolchains/CMake"),
+        .init(id:"ninja",name:"Ninja",module:"CrossBuildNinja",availability:.nativeLibrary,version:"native",languages:[],resourcePath:"Toolchains/Ninja"),
+        .init(id:"meson",name:"Meson",module:"CrossBuildMeson",availability:.bundledSupport,version:"bundled",languages:[],resourcePath:"Toolchains/Meson"),
+        .init(id:"make",name:"GNU Make",module:"CrossBuildMake",availability:.nativeLibrary,version:"native",languages:[],resourcePath:"Toolchains/Make"),
+        .init(id:"dpkg",name:"dpkg Tooling",module:"CrossBuildDPKG",availability:.nativeLibrary,version:"native",languages:[],resourcePath:"Toolchains/dpkg"),
+        .init(id:"ldid",name:"ldid",module:"CrossBuildSigning",availability:.nativeLibrary,version:"native",languages:[],resourcePath:"Toolchains/Signing")
     ]
 
     static func item(_ id: String) -> AppToolchainLibrary? { all.first { $0.id == id } }
