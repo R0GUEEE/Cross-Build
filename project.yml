@@ -70,6 +70,14 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: "Cross Build"
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        # The workspace the app edits lives in the app's Documents directory. No
+        # one can see it -- or drop files into it -- from Files.app unless these
+        # two are set, which made an otherwise complete workbench a dead end for
+        # getting code in and builds out. UIFileSharingEnabled exposes Documents
+        # under "On My iPhone"; LSSupportsOpeningDocumentsInPlace lets the app be
+        # handed a file that lives outside its container instead of forcing a copy.
+        INFOPLIST_KEY_UIFileSharingEnabled: YES
+        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
         ENABLE_USER_SCRIPT_SANDBOXING: NO

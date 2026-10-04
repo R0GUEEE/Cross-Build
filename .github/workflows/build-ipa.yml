@@ -173,6 +173,14 @@ jobs:
           test -d "$APP/Toolchains" || fail "Toolchains folder is missing from the app bundle"
           test -f "$APP/Toolchains/LLVM/manifest.json" || fail "Toolchains/LLVM/manifest.json is missing from the app bundle"
           test -f "$APP/Info.plist" || fail "Info.plist is missing from the app bundle"
+          # INFOPLIST_KEY_* settings are silently ignored when the build system
+          # does not recognise the key, which is exactly how a "declared but not
+          # actually in the plist" bug survives. Assert the result, not the input.
+          plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$APP/Info.plist" 2>/dev/null; }
+          test "$(plist UIFileSharingEnabled)" = "true" \
+            || fail "UIFileSharingEnabled is not set in the built Info.plist, so the workspace is invisible in Files.app"
+          test "$(plist LSSupportsOpeningDocumentsInPlace)" = "true" \
+            || fail "LSSupportsOpeningDocumentsInPlace is not set in the built Info.plist"
           test -f "$APP/python/lib/python3.13/os.py" || fail "Python standard library is missing from the app bundle"
           test -d "$APP/fakefs-root" || fail "Linux rootfs (fakefs-root) is missing from the app bundle"
           test -d "$APP/app" || fail "Python PYTHONPATH 'app' folder is missing from the app bundle"

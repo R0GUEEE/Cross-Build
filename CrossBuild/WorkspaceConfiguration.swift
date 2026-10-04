@@ -3,7 +3,6 @@ import SwiftUI
 
 @MainActor
 final class WorkspaceConfiguration: ObservableObject {
-    @AppStorage("workspace.projectName") var projectName = "Cross Build Project"
     @AppStorage("workspace.buildTarget") var buildTarget = "Debug"
     @AppStorage("workspace.deploymentTarget") var deploymentTarget = "16.0"
     @AppStorage("workspace.architecture") var architecture = "arm64"
