@@ -80,7 +80,9 @@ struct CompilerCatalogDetailView: View {
                     LabeledContent("App Library", value: workspace.embeddedToolchains.isAvailable(item.id) ? "Embedded Engine • Ready" : (AppToolchainLibraries.item(item.id)?.availability.rawValue ?? "Integrated"))
                     LabeledContent("Module", value: AppToolchainLibraries.item(item.id)?.module ?? item.id)
                     LabeledContent("Version", value: AppToolchainLibraries.item(item.id)?.version ?? "built-in")
-                    LabeledContent("Process backend", value: AppToolchainLibraries.item(item.id)?.requiresProcessBackend == true ? "Required" : "Not required")
+                    let scan = AppToolchainLibraries.scanBundle().first { $0.id == item.id }
+                    LabeledContent("In-app payload", value: scan?.present == true ? "Ready" : "Missing")
+                    if let detail = scan?.detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
                     if !item.languages.isEmpty { LabeledContent("Languages", value: item.languages.joined(separator: ", ")) }
                 }
                 Section("Project Detection") {
