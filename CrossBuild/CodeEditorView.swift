@@ -50,6 +50,17 @@ struct CodeEditorView: UIViewRepresentable {
             uiView.textView.selectedRange = NSRange(location: min(selected.location, text.utf16.count), length: 0)
             context.coordinator.highlight(text: text, fileName: fileName)
         }
+        // The text view reports selection changes upward but never accepts them,
+        // so a caret set from outside -- Go to Line, Find Next -- has to be pushed
+        // in. After a tap the two already agree, so this is a no-op then.
+        let target = selection.range
+        if target.location != NSNotFound,
+           target.location + target.length <= uiView.textView.text.utf16.count,
+           target.location != uiView.textView.selectedRange.location
+            || target.length != uiView.textView.selectedRange.length {
+            uiView.textView.selectedRange = target
+            uiView.textView.scrollRangeToVisible(target)
+        }
         uiView.updateGutter()
         uiView.updateCurrentLine()
     }
@@ -76,6 +87,26 @@ struct CodeEditorView: UIViewRepresentable {
         }
 
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText replacement: String) -> Bool {
+            // A newline carries the current line's indentation. Without it every
+            // line in a block drifts back to column 0 and has to be re-indented
+            // by hand, which is the single most-typed correction in a code editor.
+            if replacement == "\n" {
+                let ns = textView.text as NSString
+                let caret = min(range.location, ns.length)
+                let lineStart = ns.lineRange(for: NSRange(location: caret, length: 0)).location
+                let indent = String(ns.substring(from: lineStart).prefix { $0 == " " || $0 == "\t" })
+                guard !indent.isEmpty else { return true }
+                let insertion = "\n" + indent
+                if let start = textView.position(from: textView.beginningOfDocument, offset: range.location),
+                   let end = textView.position(from: start, offset: range.length),
+                   let textRange = textView.textRange(from: start, to: end) {
+                    textView.replace(textRange, withText: insertion)
+                    if let caretPosition = textView.position(from: start, offset: (insertion as NSString).length) {
+                        textView.selectedTextRange = textView.textRange(from: caretPosition, to: caretPosition)
+                    }
+                    return false
+                }
+            }
             if replacement == "\t" {
                 let unit = parent.options.insertSpaces ? String(repeating: " ", count: max(1, parent.options.tabWidth)) : "\t"
                 textView.replace(textView.selectedTextRange ?? UITextRange(), withText: unit)
@@ -259,8 +290,42 @@ final class CodeEditorContainer: UIView {
     }
 }
 
-private enum EditorLanguage: Equatable {
+/// Shared rather than file-private: the edit commands need the language too, so
+/// that "Toggle Comment" writes the marker this language actually uses.
+enum EditorLanguage: Equatable {
     case swift, objc, cpp, c, logos, rust, go, zig, python, javascript, typescript, java, kotlin, shell, json, yaml, generic
+
+    /// The marker a line comment starts with, or "" when there is none.
+    var lineComment: String {
+        switch self {
+        case .python, .shell, .yaml: return "#"
+        case .json, .generic: return ""
+        default: return "//"
+        }
+    }
+
+    /// For the editor status bar, which used to show a bare file extension.
+    var displayName: String {
+        switch self {
+        case .swift: return "Swift"
+        case .objc: return "Objective-C"
+        case .cpp: return "C++"
+        case .c: return "C"
+        case .logos: return "Logos"
+        case .rust: return "Rust"
+        case .go: return "Go"
+        case .zig: return "Zig"
+        case .python: return "Python"
+        case .javascript: return "JavaScript"
+        case .typescript: return "TypeScript"
+        case .java: return "Java"
+        case .kotlin: return "Kotlin"
+        case .shell: return "Shell"
+        case .json: return "JSON"
+        case .yaml: return "YAML"
+        case .generic: return "Plain Text"
+        }
+    }
 
     init(fileName: String) {
         switch URL(fileURLWithPath: fileName).pathExtension.lowercased() {

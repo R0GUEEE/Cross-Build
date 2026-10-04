@@ -12,6 +12,8 @@ struct IDEView: View {
     @State private var bottomExpanded = true
     @State private var pendingCloseDocument: EditorDocument?
     @State private var editorSelection = CodeEditorSelection()
+    @State private var showGoToLine = false
+    @State private var goToLine = 1
 
     var body: some View {
         NavigationSplitView {
@@ -22,6 +24,13 @@ struct IDEView: View {
                 .navigationSplitViewColumnWidth(min: 220, ideal: settings.navigatorWidth, max: 480)
         } detail: {
             editorWorkspace
+        }
+        .alert("Go to Line", isPresented: $showGoToLine) {
+            TextField("Line", value: $goToLine, format: .number)
+            Button("Go") { jumpToLine(goToLine) }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("1 to \(max(1, workspace.editorText.components(separatedBy: "\n").count))")
         }
         .sheet(isPresented: $showCompilerManager) {
             CompilerManagerView().environmentObject(workspace)
@@ -105,10 +114,29 @@ struct IDEView: View {
             Divider()
             detectionBar
             if workspace.editor.showFind {
-                HStack {
+                // Matches are computed here rather than stored, so the count is
+                // always about the text on screen. The bar only exists while
+                // searching, which is what keeps this off the render path the
+                // rest of the time.
+                let matches = findMatches()
+                HStack(spacing: 6) {
                     TextField("Find", text: Binding(get: { workspace.editor.findText }, set: { workspace.editor.findText = $0 })).textFieldStyle(.roundedBorder)
+                    Text(matches.isEmpty ? "no matches" : "\(matchIndex(matches) + 1) of \(matches.count)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                    Button { stepMatch(matches, by: -1) } label: { Image(systemName: "chevron.up") }
+                        .disabled(matches.isEmpty)
+                    Button { stepMatch(matches, by: 1) } label: { Image(systemName: "chevron.down") }
+                        .disabled(matches.isEmpty)
                     TextField("Replace", text: Binding(get: { workspace.editor.replaceText }, set: { workspace.editor.replaceText = $0 })).textFieldStyle(.roundedBorder)
-                    Button("Replace All") { workspace.editor.replaceAll(); if let doc = workspace.editor.selected { workspace.updateEditorText(doc.text) } }
+                    Button("Replace") { replaceCurrentMatch(matches) }
+                        .disabled(matches.isEmpty)
+                    Button("All") {
+                        workspace.editor.replaceAll()
+                        if let doc = workspace.editor.selected { workspace.updateEditorText(doc.text) }
+                    }
+                    .disabled(matches.isEmpty)
                     Button { workspace.editor.showFind = false } label: { Image(systemName: "xmark") }
                 }.padding(8).background(.secondary.opacity(0.04))
             }
@@ -323,6 +351,12 @@ struct IDEView: View {
                 Divider()
                 Button("Trim Trailing Whitespace", systemImage: "eraser") { trimTrailingWhitespace() }
                 Button("Sort Lines (Selection or File)", systemImage: "arrow.up.arrow.down") { sortSelectedLines() }
+                Divider()
+                Button("Toggle Comment", systemImage: "text.bubble") { toggleComment() }
+                Button("Go to Line…", systemImage: "arrow.right.to.line") {
+                    goToLine = editorSelection.line
+                    showGoToLine = true
+                }
             } label: {
                 Label("Edit", systemImage: "text.cursor")
             }
@@ -347,7 +381,7 @@ struct IDEView: View {
 
             Spacer()
             if let doc = workspace.editor.selected {
-                Text(URL(fileURLWithPath: doc.path).pathExtension.uppercased())
+                Text(EditorLanguage(fileName: doc.name).displayName)
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
@@ -389,6 +423,91 @@ struct IDEView: View {
         guard current == line else { return nil }
         let end = text[start...].firstIndex(of: "\n") ?? text.endIndex
         return start..<end
+    }
+
+    /// Every match of the find string, in document order.
+    private func findMatches() -> [NSRange] {
+        let needle = workspace.editor.findText
+        guard !needle.isEmpty else { return [] }
+        let text = workspace.editorText as NSString
+        var ranges: [NSRange] = []
+        var cursor = 0
+        while cursor <= text.length {
+            let found = text.range(of: needle, options: [], range: NSRange(location: cursor, length: text.length - cursor))
+            if found.location == NSNotFound { break }
+            ranges.append(found)
+            cursor = found.location + max(1, found.length)
+        }
+        return ranges
+    }
+
+    /// Which match the caret is on, so the bar can say "3 of 9".
+    private func matchIndex(_ matches: [NSRange]) -> Int {
+        matches.firstIndex {
+            $0.location == editorSelection.range.location && $0.length == editorSelection.range.length
+        } ?? 0
+    }
+
+    private func stepMatch(_ matches: [NSRange], by offset: Int) {
+        guard !matches.isEmpty else { return }
+        let count = matches.count
+        let next = ((matchIndex(matches) + offset) % count + count) % count
+        editorSelection.range = matches[next]
+    }
+
+    private func replaceCurrentMatch(_ matches: [NSRange]) {
+        guard !matches.isEmpty else { return }
+        let range = matches[matchIndex(matches)]
+        let text = workspace.editorText as NSString
+        guard range.location + range.length <= text.length else { return }
+        let replacement = workspace.editor.replaceText
+        workspace.updateEditorText(text.replacingCharacters(in: range, with: replacement))
+        editorSelection.range = NSRange(location: range.location + (replacement as NSString).length, length: 0)
+    }
+
+    /// Moves the caret to a 1-based line.
+    private func jumpToLine(_ line: Int) {
+        let lines = workspace.editorText.components(separatedBy: "\n")
+        guard !lines.isEmpty else { return }
+        let clamped = max(1, min(line, lines.count))
+        let location = lines.prefix(clamped - 1).reduce(0) { $0 + ($1 as NSString).length + 1 }
+        editorSelection.range = NSRange(location: location, length: 0)
+    }
+
+    /// Comments or uncomments the selected lines, or the caret's line.
+    ///
+    /// It uncomments only when every covered line is already commented, which is
+    /// what makes it a toggle rather than a one-way switch.
+    private func toggleComment() {
+        let marker = EditorLanguage(fileName: workspace.editor.selected?.name ?? "").lineComment
+        guard !marker.isEmpty else { return }
+        var lines = workspace.editorText.components(separatedBy: "\n")
+
+        var bounds: (lower: Int, upper: Int)?
+        if let selection = selectedLineBounds() {
+            bounds = selection
+        } else {
+            let index = editorSelection.line - 1
+            bounds = lines.indices.contains(index) ? (lower: index, upper: index + 1) : nil
+        }
+        guard let bounds, bounds.lower < bounds.upper, bounds.upper <= lines.count else { return }
+
+        let allCommented = lines[bounds.lower..<bounds.upper].allSatisfy { line in
+            line.drop { $0 == " " || $0 == "\t" }.hasPrefix(marker)
+        }
+        for index in bounds.lower..<bounds.upper {
+            let line = lines[index]
+            let indent = String(line.prefix { $0 == " " || $0 == "\t" })
+            var body = String(line.dropFirst(indent.count))
+            if allCommented {
+                if body.hasPrefix(marker + " ") { body.removeFirst(marker.count + 1) }
+                else if body.hasPrefix(marker) { body.removeFirst(marker.count) }
+            } else if !body.hasPrefix(marker) {
+                body = marker + " " + body
+            }
+            lines[index] = indent + body
+        }
+        workspace.updateEditorText(lines.joined(separator: "\n"))
     }
 
     private func duplicateCurrentLine() {
