@@ -7,12 +7,12 @@ struct CompilerConfigurationView: View {
     var body: some View {
         Form {
             Section("Automatic Configuration") {
-                Button("Detect & Generate Settings", systemImage: "wand.and.stars") {
+                Button("Scan System & Generate Settings", systemImage: "wand.and.stars") {
                     workspace.detectSampleProject()
                 }
                 .buttonStyle(.borderedProminent)
                 if workspace.generatedConfigurationSummary.isEmpty {
-                    Text("Infer toolchain, architecture, deployment target, package format and Theos scheme from the active project.")
+                    Text("Scan the active project and installed app components, then infer toolchain, architecture, deployment target, package format and Theos scheme.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
                     ForEach(workspace.generatedConfigurationSummary, id: \.self) {
@@ -32,8 +32,11 @@ struct CompilerConfigurationView: View {
                     Text("Release").tag("Release")
                     Text("Size").tag("Size")
                 }
-                LabeledContent("Embedded Clang", value: workspace.embeddedToolchains.clang.isLinked ? workspace.embeddedToolchains.clang.version : "Bridge payload missing")
+                let toolchainScan = AppToolchainLibraries.scanBundle()
+                LabeledContent("Compiler libraries", value: "\(toolchainScan.filter(\.present).count)/\(toolchainScan.count) ready")
+                LabeledContent("Embedded Clang", value: toolchainScan.first { $0.id == "clang" }?.present == true ? workspace.embeddedToolchains.clang.version : "Native payload missing")
                 LabeledContent("Bundled iOS SDKs", value: "\(IOSSDKDiscovery.bundledSDKs().count)")
+                LabeledContent("POSIX runtime", value: LinuxGuestEngine.isRootBundled ? "ios-linuxkit ready" : "rootfs missing")
             }
 
             Section("Language & Code Generation") {
