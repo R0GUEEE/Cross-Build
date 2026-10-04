@@ -181,6 +181,17 @@ jobs:
             || fail "UIFileSharingEnabled is not set in the built Info.plist, so the workspace is invisible in Files.app"
           test "$(plist LSSupportsOpeningDocumentsInPlace)" = "true" \
             || fail "LSSupportsOpeningDocumentsInPlace is not set in the built Info.plist"
+          # The plist is generated, so a switch away from INFOPLIST_KEY_* could
+          # drop keys that have nothing to do with what was being changed. Pin the
+          # ones the system needs to launch and identify the app at all.
+          for key in CFBundleExecutable CFBundleIdentifier CFBundleVersion CFBundleShortVersionString; do
+            value="$(plist "$key")"
+            test -n "$value" || fail "Info.plist is missing $key"
+          done
+          /usr/libexec/PlistBuddy -c "Print :UILaunchScreen" "$APP/Info.plist" >/dev/null 2>&1 \
+            || fail "Info.plist has no UILaunchScreen; the app would be presented letterboxed"
+          test "$(plist CFBundleDisplayName)" = "Cross Build" \
+            || fail "CFBundleDisplayName is not the expected value"
           test -f "$APP/python/lib/python3.13/os.py" || fail "Python standard library is missing from the app bundle"
           test -d "$APP/fakefs-root" || fail "Linux rootfs (fakefs-root) is missing from the app bundle"
           test -d "$APP/app" || fail "Python PYTHONPATH 'app' folder is missing from the app bundle"
