@@ -1060,7 +1060,12 @@ final class WorkspaceModel: ObservableObject {
         let names = ["Makefile", "makefile", "GNUmakefile"]
         guard let makefile = files.flattened.first(where: { file in
             names.contains(file.name) && file.path.hasPrefix(root + "/")
-        }), let text = files.contents(of: makefile, encoding: editorEncoding) else { return [] }
+        }) else { return [] }
+        // Read directly rather than through `files.contents(of:)`, which reports a
+        // failure through a published message: looking at a Makefile to offer its
+        // targets is not the same as opening it, and a project whose Makefile is
+        // not UTF-8 text should not announce that as an error.
+        guard let text = try? String(contentsOfFile: makefile.path, encoding: editorEncoding) else { return [] }
 
         var seen = Set<String>()
         var targets: [String] = []
