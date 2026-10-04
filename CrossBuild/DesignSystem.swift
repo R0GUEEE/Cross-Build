@@ -42,6 +42,54 @@ struct IDESectionHeader: View {
 }
 
 
+/// The one progress indicator for anything the app runs.
+///
+/// Determinate when the run announced a step count, indeterminate otherwise --
+/// never a percentage nobody measured. Command output arrives all at once, so
+/// there is nothing to stream a real percentage from.
+struct RunProgressBar: View {
+    let progress: WorkspaceModel.RunProgress
+    var compact = false
+
+    var body: some View {
+        if progress.isRunning {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Text(progress.label).font(.caption.weight(.medium)).lineLimit(1)
+                    if progress.stepCount > 1 {
+                        Text("step \(progress.currentStep) of \(progress.stepCount)")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 4)
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        Text(Self.clock(progress.elapsed))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let fraction = progress.fraction {
+                    ProgressView(value: fraction).progressViewStyle(.linear)
+                } else {
+                    ProgressView().progressViewStyle(.linear)
+                }
+                if !compact, !progress.detail.isEmpty {
+                    Text(progress.detail)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    static func clock(_ seconds: TimeInterval) -> String {
+        let total = Int(max(0, seconds))
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
 struct ForgeCard<Content: View>: View {
     let title:String
     var subtitle:String? = nil

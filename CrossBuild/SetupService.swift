@@ -47,6 +47,12 @@ final class SetupService: ObservableObject {
     @Published private(set) var didPrepare = false
     @Published private(set) var statusLine = "Not scanned yet."
 
+    /// Steps that have finished, one way or another -- what the setup progress
+    /// bar counts.
+    var completedStepCount: Int {
+        steps.filter { $0.status == .succeeded || $0.status == .failed || $0.status == .skipped }.count
+    }
+
     var presentTools: [AppToolchainScan] { environment.toolchains.filter(\.present) }
     var missingTools: [AppToolchainScan] { environment.toolchains.filter { !$0.present } }
 

@@ -43,7 +43,10 @@ struct AgentDashboardView: View {
                                 .buttonStyle(.bordered)
                                 .disabled(instruction.isEmpty)
                             Spacer()
-                            if workspace.isExecuting {
+                            if workspace.runProgress.isRunning {
+                                RunProgressBar(progress: workspace.runProgress)
+                                    .frame(maxWidth: 240)
+                            } else if workspace.isExecuting {
                                 ProgressView()
                                 Text(workspace.executionStatus).font(.caption).foregroundStyle(.secondary)
                             }

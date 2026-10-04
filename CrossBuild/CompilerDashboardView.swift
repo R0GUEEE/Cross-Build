@@ -123,6 +123,8 @@ struct CompilerDashboardView: View {
                             action("Test", "checkmark.seal") { workspace.runWorkflowCommand(workspace.testCommand(), settings: settings) }
                             action("Package", "shippingbox.fill") { Task { _ = await workspace.runPackage(settings: settings) } }
                         }
+                        RunProgressBar(progress: workspace.runProgress)
+                            .padding(.top, 8)
                     }
                 }.padding()
             }

@@ -84,6 +84,43 @@ final class WorkspaceModel: ObservableObject {
     @Published var isExecuting = false
     @Published var lastExitCode: Int32?
     @Published var executionStatus = "Idle"
+
+    /// Progress for whatever is currently running.
+    ///
+    /// A command here runs to completion and hands back its whole output at once,
+    /// so there is no byte stream to derive a percentage from -- and inventing one
+    /// would be a lie. What the app does know is how many steps a workflow has, so
+    /// a multi-step run reports a real fraction and a single command reports an
+    /// indeterminate bar with elapsed time.
+    struct RunProgress: Equatable {
+        enum Phase: Equatable {
+            case idle
+            /// `fraction` is nil when the run has no known length.
+            case running(fraction: Double?)
+        }
+        var phase: Phase = .idle
+        var label: String = ""
+        var detail: String = ""
+        /// Steps finished so far.
+        var step: Int = 0
+        var stepCount: Int = 0
+        var startedAt: Date?
+
+        var isRunning: Bool { if case .running = phase { return true }; return false }
+        var fraction: Double? {
+            if case .running(let fraction) = phase { return fraction }
+            return nil
+        }
+        var elapsed: TimeInterval { startedAt.map { Date().timeIntervalSince($0) } ?? 0 }
+        /// 1-based step being worked on, for "step 2 of 3".
+        var currentStep: Int { min(step + 1, max(1, stepCount)) }
+    }
+
+    @Published private(set) var runProgress = RunProgress()
+    /// Nesting depth, so a workflow that announced its own steps is not
+    /// overwritten by the individual commands it runs.
+    private var progressDepth = 0
+
     @Published var generatedConfigurationSummary: [String] = []
     @Published var activeProjectRoot: String?
     @Published var recommendedBuildCommand: String?
@@ -296,6 +333,13 @@ final class WorkspaceModel: ObservableObject {
     func runBuild(settings: AppSettings? = nil) {
         let resolved = settings ?? appSettings
         Task {
+            // Clean plus build is two steps. A build on its own has no known
+            // length, so it reports an indeterminate bar rather than a made-up
+            // percentage.
+            let stepCount = resolved?.cleanBeforeBuild == true ? 2 : 1
+            beginProgress(label: "Build", detail: buildCommand(), stepCount: stepCount)
+            defer { endProgress() }
+
             if resolved?.clearDiagnosticsOnBuild == true {
                 console = "Build started.\n"
                 buildDiagnostics = []
@@ -310,10 +354,13 @@ final class WorkspaceModel: ObservableObject {
                     console += "Build stopped after clean failed (Settings → Build Policy → Stop workflow on first failure).\n"
                     return
                 }
+                setProgress(step: 1, detail: "Cleaned; compiling")
             }
 
             let command = configuredBuildCommand(settings: resolved)
+            setProgress(step: stepCount - 1, detail: "Compiling")
             _ = await executeCommand(command, settings: resolved, timeoutOverride: timeout)
+            setProgress(step: stepCount)
         }
     }
 
@@ -437,6 +484,8 @@ final class WorkspaceModel: ObservableObject {
         isExecuting = true
         executionStatus = "Running embedded \(id)"
         Task {
+            beginProgress(label: "Running \(id)", detail: "Embedded engine", stepCount: 1)
+            defer { endProgress() }
             let result = await embeddedToolchains.run(id: id, source: input)
             if !result.output.isEmpty { console += result.output + "\n" }
             result.diagnostics.forEach { console += "embedded: \($0)\n" }
@@ -465,6 +514,38 @@ final class WorkspaceModel: ObservableObject {
         // executes inside the embedded ios-linuxkit runtime.
         let mode = "Embedded Runtime"
         return (ExecutionBackendFactory.make(mode: mode, settings: resolvedSettings), mode)
+    }
+
+    /// Announces a run. Nested calls are counted: the outermost caller owns the
+    /// label and the step count, and the commands it drives cannot clobber them.
+    func beginProgress(label: String, detail: String = "", stepCount: Int = 1) {
+        progressDepth += 1
+        guard progressDepth == 1 else { return }
+        runProgress = RunProgress(phase: .running(fraction: stepCount > 1 ? 0 : nil),
+                                  label: label,
+                                  detail: detail,
+                                  step: 0,
+                                  stepCount: max(1, stepCount),
+                                  startedAt: Date())
+    }
+
+    /// Records `step` finished steps. Only the owning workflow (the outermost
+    /// caller) may do this, so a nested command cannot move its parent's bar.
+    func setProgress(step: Int, detail: String = "") {
+        guard progressDepth == 1, runProgress.isRunning else { return }
+        var updated = runProgress
+        updated.step = max(0, min(step, runProgress.stepCount))
+        if !detail.isEmpty { updated.detail = detail }
+        updated.phase = .running(fraction: runProgress.stepCount > 1
+                                 ? Double(updated.step) / Double(runProgress.stepCount)
+                                 : nil)
+        runProgress = updated
+    }
+
+    func endProgress() {
+        progressDepth = max(0, progressDepth - 1)
+        guard progressDepth == 0 else { return }
+        runProgress = RunProgress()
     }
 
     /// Runs a command through the resolved backend. `timeoutOverride` lets the
@@ -496,6 +577,9 @@ final class WorkspaceModel: ObservableObject {
         }
         isExecuting = true
         executionStatus = "Running"
+        // Indeterminate, unless a workflow above us announced its own steps.
+        beginProgress(label: "Running command", detail: command)
+        defer { endProgress() }
         var environment = resolvedSettings?.forwardEnvironment == false ? [:] : commandEnvironment()
         // Commands run inside ios-linuxkit, so never inject host/jailbreak paths
         // that cannot exist in the guest namespace.
@@ -782,11 +866,18 @@ final class WorkspaceModel: ObservableObject {
         let artifactDir = configuration.artifactDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
         let root = activeProjectRoot ?? files.workspaceRoot.path
 
+        // Packaging is the package command plus, when an artifact directory is
+        // configured, the copy that follows it.
+        let stepCount = artifactDir.isEmpty ? 1 : 2
+        beginProgress(label: "Package", detail: command, stepCount: stepCount)
+        defer { endProgress() }
+
         let beforePaths: Set<String> = artifactDir.isEmpty
             ? []
             : await Self.snapshotFilesOffMain(under: root)
 
         let result = await executeCommand(command, settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved))
+        setProgress(step: 1, detail: "Collecting artifacts")
 
         guard result.succeeded, !artifactDir.isEmpty else { return result }
 
@@ -1159,7 +1250,10 @@ final class WorkspaceModel: ObservableObject {
     private func executeAgentPlan(_ plan: [AgentExecution]) {
         guard !plan.isEmpty else { return }
         Task {
-            for execution in plan {
+            beginProgress(label: "Agent plan", detail: plan.first?.summary ?? "", stepCount: plan.count)
+            defer { endProgress() }
+            for (index, execution) in plan.enumerated() {
+                setProgress(step: index, detail: execution.summary)
                 var attempt = 0
                 let maxRetries = appSettings?.agentAutoRetry == true ? max(0, appSettings?.agentMaxRetries ?? 0) : 0
                 var outcome: AgentActionOutcome = .noCommand

@@ -27,7 +27,10 @@ struct BottomWorkbenchView: View {
                 }.buttonStyle(.plain)
             }
             Spacer()
-            if workspace.isExecuting {
+            if workspace.runProgress.isRunning {
+                RunProgressBar(progress: workspace.runProgress, compact: true)
+                    .frame(maxWidth: 240)
+            } else if workspace.isExecuting {
                 ProgressView().controlSize(.small)
                 Text(workspace.executionStatus).font(.caption2).foregroundStyle(.secondary)
             }

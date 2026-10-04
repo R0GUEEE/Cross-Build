@@ -70,6 +70,15 @@ struct FullSetupView: View {
                     .buttonStyle(.plain)
                 }
 
+                if service.isRunning || service.completedStepCount > 0 {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(service.completedStepCount) of \(service.steps.count) checks")
+                            .font(.caption).foregroundStyle(.secondary)
+                        ProgressView(value: Double(service.completedStepCount),
+                                     total: Double(max(1, service.steps.count)))
+                            .progressViewStyle(.linear)
+                    }
+                }
                 Button {
                     Task { await service.run(workspace: workspace, settings: settings) }
                 } label: {
