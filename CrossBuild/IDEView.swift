@@ -4,7 +4,9 @@ import UIKit
 struct IDEView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
     @ObservedObject var settings: AppSettings
-    @Environment(\.horizontalSizeClass) private var sizeClass
+    // Deliberately no size-class branching: the panel height used to change with
+    // the window, so the same app looked like a different app when the window
+    // moved. A fixed height that the user collapses is predictable.
     @State private var showCompilerManager = false
     @State private var showGitHub = false
     @State private var showWorkspaceConfiguration = false
@@ -155,7 +157,7 @@ struct IDEView: View {
             if bottomExpanded {
                 BottomWorkbenchView(panel: $bottomPanel)
                     .environmentObject(workspace)
-                    .frame(height: sizeClass == .compact ? 210 : 260)
+                    .frame(height: 240)
             } else {
                 collapsedPanelBar
             }

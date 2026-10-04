@@ -35,25 +35,32 @@ struct RootView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
     @ObservedObject var settings: AppSettings
     @State private var section: AppSection = .workspace
+    @State private var showAbout = false
 
     var body: some View {
-        TabView(selection: $section) {
-            IDEView(settings: settings)
-                .tabItem { Label("Workspace", systemImage: AppSection.workspace.icon) }
-                .tag(AppSection.workspace)
-
-            CompilerDashboardView(settings: settings)
-                .tabItem { Label("Compiler", systemImage: AppSection.compiler.icon) }
-                .tag(AppSection.compiler)
-
-            AgentDashboardView(settings: settings)
-                .tabItem { Label("Agent", systemImage: AppSection.agent.icon) }
-                .tag(AppSection.agent)
-
-            SettingsView(settings: settings)
-                .tabItem { Label("Settings", systemImage: AppSection.settings.icon) }
-                .tag(AppSection.settings)
+        // A fixed application shell: menu bar, content, tab bar.
+        //
+        // This used to be a `TabView`, which on iPad reshapes its own bar as the
+        // content scrolls -- the window appearing to change size under your
+        // finger rather than the app navigating. Fixed heights and a plain switch
+        // mean the chrome is the same shape on every device and every scroll
+        // position.
+        VStack(spacing: 0) {
+            AppMenuBar(section: $section, settings: settings, showAbout: $showAbout)
+            Divider()
+            Group {
+                switch section {
+                case .workspace: IDEView(settings: settings)
+                case .compiler: CompilerDashboardView(settings: settings)
+                case .agent: AgentDashboardView(settings: settings)
+                case .settings: SettingsView(settings: settings)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Divider()
+            RootTabBar(section: $section)
         }
+        .background(ForgeTheme.Surface.background)
         .alert("Allow Agent Commands?", isPresented: Binding(
             get: { workspace.pendingAgentConfirmation != nil },
             set: { if !$0 { workspace.pendingAgentPlanDismissed() } }
@@ -63,5 +70,123 @@ struct RootView: View {
         } message: {
             Text(workspace.pendingAgentConfirmation ?? "")
         }
+        .alert("About Cross Build", isPresented: $showAbout) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+            let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+            Text("Cross Build \(version) (build \(build))\n\nAn on-device compiler workbench. Commands run in the embedded Linux guest, and the guest has its own filesystem -- so the project is copied into it before anything is built there.")
+        }
+    }
+}
+
+/// The application menu bar.
+///
+/// Every entry acts on the workspace model directly, so the bar needs no view
+/// state of its own and cannot get out of step with the screen below it.
+private struct AppMenuBar: View {
+    @Binding var section: AppSection
+    @ObservedObject var settings: AppSettings
+    @Binding var showAbout: Bool
+    @EnvironmentObject private var workspace: WorkspaceModel
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Text("Cross Build")
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, ForgeTheme.Space.sm + 2)
+
+            menu("Project") {
+                Button("Refresh Files", systemImage: "arrow.clockwise") { workspace.files.reload() }
+                Button("Detect Project & Compiler", systemImage: "waveform.badge.magnifyingglass") { workspace.detectSampleProject() }
+                Divider()
+                Button("Save Current File", systemImage: "square.and.arrow.down") { workspace.saveEditor() }
+            }
+            menu("Build") {
+                Button("Build Project", systemImage: "hammer.fill") { workspace.runBuild(settings: settings) }
+                if let document = workspace.editor.selected {
+                    Button("Build \(document.name)", systemImage: "doc.badge.gearshape") {
+                        workspace.buildIndividual(.init(kind: .file(workspace.relativePath(document.path)),
+                                                        title: document.name,
+                                                        detail: "Compile this file on its own"),
+                                                  settings: settings)
+                    }
+                }
+                Button("Compile All Sources", systemImage: "square.stack.3d.down.right") {
+                    workspace.compileAllIndividualSources(settings: settings)
+                }
+                Divider()
+                Button("Clean", systemImage: "trash") { workspace.runWorkflowCommand(workspace.cleanCommand(), settings: settings) }
+                Button("Test", systemImage: "checkmark.seal") { workspace.runWorkflowCommand(workspace.testCommand(), settings: settings) }
+                Button("Package", systemImage: "shippingbox.fill") { Task { _ = await workspace.runPackage(settings: settings) } }
+                Divider()
+                Button("Copy Workspace into Guest", systemImage: "arrow.down.to.line") {
+                    workspace.syncWorkspaceToGuest(settings: settings)
+                }
+            }
+            menu("View") {
+                Toggle("Word Wrap", isOn: $settings.editorWordWrap)
+                Toggle("Line Numbers", isOn: $settings.editorLineNumbers)
+                Toggle("Highlight Current Line", isOn: $settings.editorHighlightCurrentLine)
+                Toggle("Show Invisible Characters", isOn: $settings.editorShowInvisibles)
+                Divider()
+                Toggle("Compact Layout", isOn: $settings.compactUI)
+            }
+            menu("Window") {
+                ForEach(AppSection.allCases) { item in
+                    Button(item.rawValue, systemImage: item.icon) { section = item }
+                }
+            }
+            menu("Help") {
+                Button("About Cross Build", systemImage: "info.circle") { showAbout = true }
+            }
+
+            Spacer(minLength: ForgeTheme.Space.sm)
+            BuildStatusBar(progress: workspace.runProgress, last: workspace.lastRun)
+                .padding(.trailing, ForgeTheme.Space.md)
+        }
+        .frame(height: 40)
+        .background(ForgeTheme.Surface.raised)
+    }
+
+    private func menu<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        Menu { content() } label: {
+            HStack(spacing: 3) {
+                Text(title).font(.caption)
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
+            }
+            .padding(.horizontal, ForgeTheme.Space.sm)
+            .padding(.vertical, ForgeTheme.Space.xs + 1)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+    }
+}
+
+/// The tab bar. A plain row with a fixed height -- it is chrome, so it should
+/// not move, resize or fade in response to what the content is doing.
+private struct RootTabBar: View {
+    @Binding var section: AppSection
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(AppSection.allCases) { item in
+                Button { section = item } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: item.icon).font(.system(size: 17))
+                        Text(item.rawValue).font(.system(size: 10, weight: .medium))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .foregroundStyle(section == item ? Color.accentColor : Color.secondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(item.rawValue)
+            }
+        }
+        .frame(height: 52)
+        .background(ForgeTheme.Surface.raised)
+        .overlay(alignment: .top) { Divider() }
     }
 }

@@ -2,7 +2,8 @@ import SwiftUI
 
 struct WorkspaceHomeView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
-    @Environment(\.horizontalSizeClass) private var sizeClass
+    // Fixed padding, so the home screen does not re-flow when the window size
+    // class changes.
     let clone:()->Void
     let configure:()->Void
 
@@ -68,7 +69,7 @@ struct WorkspaceHomeView: View {
                     }
                 }
             }
-            .padding(sizeClass == .compact ? 16 : 24)
+            .padding(ForgeTheme.Space.xl)
             .frame(maxWidth:900)
             .frame(maxWidth:.infinity)
         }
