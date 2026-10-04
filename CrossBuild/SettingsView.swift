@@ -26,9 +26,6 @@ struct SettingsView: View {
                     NavigationLink("Compiler, SDK & Toolchain") {
                         CompilerConfigurationView(config: workspace.compilerConfiguration).environmentObject(workspace)
                     }
-                    NavigationLink("Custom Compilers") {
-                        CompilerManagerView().environmentObject(workspace)
-                    }
                     NavigationLink("Feature Diagnostics") {
                         FeatureDiagnosticsView(settings: settings).environmentObject(workspace)
                     }
@@ -77,34 +74,6 @@ struct SettingsView: View {
                     Toggle("Include warnings", isOn: $settings.includeWarnings)
                     Toggle("Include notes", isOn: $settings.includeNotes)
                     Stepper("Maximum problems: \(settings.maxProblems)", value: $settings.maxProblems, in: 25...1000, step: 25)
-                }
-
-                Section("Agent Permissions") {
-                    LabeledContent("Engine", value: "Local project planner")
-                    Toggle("Allow source edits", isOn: $settings.allowAgentEdits)
-                    Toggle("Allow compiler/build control", isOn: $settings.allowAgentBuilds)
-                    Toggle("Allow dependency changes", isOn: $settings.allowAgentDependencies)
-                    Toggle("Allow destructive actions", isOn: $settings.allowAgentDestructiveActions)
-                    Toggle("Confirm command execution", isOn: $settings.confirmAgentCommands)
-                }
-
-                Section("Agent Workflow") {
-                    Stepper("Maximum steps: \(settings.agentMaxSteps)", value: $settings.agentMaxSteps, in: 1...50)
-                    Toggle("Auto-retry failed steps", isOn: $settings.agentAutoRetry)
-                    if settings.agentAutoRetry {
-                        Stepper("Maximum retries: \(settings.agentMaxRetries)", value: $settings.agentMaxRetries, in: 0...5)
-                    }
-                    Toggle("Stop on build failure", isOn: $settings.agentStopOnBuildFailure)
-                }
-
-                Section("Execution Runtime") {
-                    LabeledContent("Runtime", value: "Embedded / In-App")
-                    LabeledContent("POSIX environment", value: "ios-linuxkit")
-                    Text("Commands execute inside Cross Build. Native compiler/runtime engines are linked into the app; shell and POSIX workflows use the embedded Linux runtime. No remote or jailbreak helper is required.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Stepper(settings.commandTimeout == 0 ? "Command timeout: Unlimited" : "Command timeout: \(settings.commandTimeout)s",
-                            value: $settings.commandTimeout, in: 0...3600, step: 15)
-                    Toggle("Forward configured environment", isOn: $settings.forwardEnvironment)
                 }
 
                 Section("Files & Storage") {
