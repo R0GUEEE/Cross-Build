@@ -924,18 +924,6 @@ final class WorkspaceModel: ObservableObject {
         Task { _ = await executeCommand(command, settings: settings) }
     }
 
-    /// Runs the package command and, if it succeeds and an artifact directory is
-    /// configured, copies anything new the command produced under the project
-    /// root into that directory (optionally clearing it first). Cross Build has
-    /// no structured knowledge of what a given toolchain's package step
-    /// produces, so this works by diffing the project root's file list before
-    /// and after the command runs -- simple, but accurate for the common case of
-    /// a build dropping a .deb/.ipa/.zip/binary next to the sources.
-    ///
-    /// Both the diff and the copy run off the main actor: each walks the entire
-    /// project tree, which is far too much synchronous file I/O to do while the
-    /// UI is otherwise blocked.
-    @discardableResult
     // MARK: - Building individual items
 
     let guestSync = GuestWorkspaceSync()
@@ -1139,6 +1127,18 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
+    /// Runs the package command and, if it succeeds and an artifact directory is
+    /// configured, copies anything new the command produced under the project
+    /// root into that directory (optionally clearing it first). Cross Build has
+    /// no structured knowledge of what a given toolchain's package step
+    /// produces, so this works by diffing the project root's file list before
+    /// and after the command runs -- simple, but accurate for the common case of
+    /// a build dropping a .deb/.ipa/.zip/binary next to the sources.
+    ///
+    /// Both the diff and the copy run off the main actor: each walks the entire
+    /// project tree, which is far too much synchronous file I/O to do while the
+    /// UI is otherwise blocked.
+    @discardableResult
     func runPackage(settings: AppSettings? = nil) async -> CommandResult {
         let resolved = settings ?? appSettings
         let command = packageCommand()
