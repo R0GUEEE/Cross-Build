@@ -57,22 +57,13 @@ final class AppSettings: ObservableObject {
 
     @AppStorage("files.showHidden") var showHiddenFiles = false
 
-    // Full Setup
-    @AppStorage("setup.allowInstalls") var allowSetupInstalls = true
+    // In-app setup records only scan/configuration state. Toolchains ship with the app.
     @AppStorage("setup.completedAt") var setupCompletedAt = ""
     @AppStorage("setup.lastSummary") var setupLastSummary = ""
 
-    @AppStorage("runtime.backend") var executionBackend = "Automatic"
-    @AppStorage("runtime.remoteHost") var remoteHost = ""
-    @AppStorage("runtime.remoteWorkspace") var remoteWorkspace = ""
-    @AppStorage("runtime.connectTimeout") var connectionTimeout = 15
     @AppStorage("runtime.commandTimeout") var commandTimeout = 0
     @AppStorage("runtime.forwardEnvironment") var forwardEnvironment = true
-    @AppStorage("runtime.helperScheme") var helperScheme = "http"
-    @AppStorage("runtime.helperPort") var helperPort = 8765
-    @AppStorage("runtime.jailbreakHost") var jailbreakHelperHost = "127.0.0.1"
-    @AppStorage("runtime.jailbreakPort") var jailbreakHelperPort = 8765
-    @AppStorage("runtime.shell") var shellPath = "Auto"
+    @AppStorage("runtime.shell") var shellPath = "/bin/sh"
     @AppStorage("runtime.shellLogin") var shellLogin = false
     @AppStorage("runtime.shellInteractive") var shellInteractive = false
     @AppStorage("runtime.shellInit") var shellInitCommand = ""
