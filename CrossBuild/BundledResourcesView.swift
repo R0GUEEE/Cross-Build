@@ -1,12 +1,7 @@
 import SwiftUI
 
-/// Reports what actually ships inside this app build, by inspecting the bundle at
-/// runtime, and states plainly what cannot be bundled and why.
 struct BundledResourcesView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
-
-    @State private var exportedHelper: URL?
-    @State private var exportError: String?
     @State private var items: [BundledResource] = []
     @State private var pythonSelfTestOutput: String?
     @State private var isRunningSelfTest = false
@@ -25,82 +20,47 @@ struct BundledResourcesView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(item.name).font(.subheadline.weight(.medium))
                             Text(item.detail).font(.caption).foregroundStyle(.secondary)
-                            HStack(spacing: 6) {
-                                Text(item.location)
-                                if item.sizeBytes > 0 {
-                                    Text("•")
-                                    Text(ByteCountFormatter.string(fromByteCount: item.sizeBytes, countStyle: .file))
-                                }
-                                Text("•")
-                                Text(item.execution.rawValue)
-                            }
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            Text("\(item.location) • \(item.execution.rawValue)")
+                                .font(.caption2).foregroundStyle(.tertiary)
                         }
                         Spacer()
-                        Text(item.present ? "Included" : "Missing")
+                        Text(item.present ? "Ready" : "Missing")
                             .font(.caption)
                             .foregroundStyle(item.present ? .green : .red)
                     }
                     .padding(.vertical, 3)
                 }
             } header: {
-                Text("Included in this build")
+                Text("Installed app components")
             } footer: {
-                Text("Read from the app bundle at launch, so this reflects the build you are running rather than a fixed list.")
+                Text("This is a live scan of the installed app bundle. A manifest or catalogue entry does not count as a compiler library.")
                     .font(.caption)
             }
 
             Section {
-                Button {
-                    exportHelper()
-                } label: {
-                    Label("Export helper to Documents", systemImage: "square.and.arrow.down")
-                }
-                if let exportedHelper {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Written to \(exportedHelper.path)")
-                            .font(.caption)
-                            .textSelection(.enabled)
-                        Text(BundledResources.runCommand(for: exportedHelper))
-                            .font(.system(.caption2, design: .monospaced))
-                            .textSelection(.enabled)
+                let missing = items.filter { !$0.present }
+                if missing.isEmpty {
+                    Label("All declared in-app components were discovered.", systemImage: "checkmark.seal.fill")
+                        .foregroundStyle(.green)
+                } else {
+                    ForEach(missing) { item in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(item.name).font(.subheadline.weight(.medium))
+                            Text(item.detail).font(.caption).foregroundStyle(.secondary)
+                        }
                     }
-                }
-                if let exportError {
-                    Text(exportError).font(.caption).foregroundStyle(.red)
                 }
             } header: {
-                Text("Run the bundled helper")
+                Text("Bundle scan")
             } footer: {
-                Text("The helper does the process execution Cross Build cannot do itself. Export it, then run the printed command on the host — or from a terminal app on a jailbroken device — and point Settings → App Configuration at it.")
+                Text("Missing components must be linked or bundled into the IPA; setup no longer offers host package installation or helper workarounds.")
                     .font(.caption)
             }
 
             Section {
-                ForEach(BundledResources.unavailable, id: \.name) { entry in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(entry.name).font(.subheadline.weight(.medium))
-                        Text(entry.reason).font(.caption).foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 3)
-                }
-            } header: {
-                Text("Cannot be bundled")
-            } footer: {
-                Text("Listed so the app never implies it ships something it cannot. These run on a build host or jailbroken device through the helper.")
-                    .font(.caption)
-            }
-
-            Section {
-                Button {
-                    runPythonSelfTest()
-                } label: {
-                    if isRunningSelfTest {
-                        ProgressView()
-                    } else {
-                        Label("Run Python self-test", systemImage: "checklist")
-                    }
+                Button { runPythonSelfTest() } label: {
+                    if isRunningSelfTest { ProgressView() }
+                    else { Label("Run Python self-test", systemImage: "checklist") }
                 }
                 .disabled(isRunningSelfTest)
                 if let pythonSelfTestOutput {
@@ -109,43 +69,26 @@ struct BundledResourcesView: View {
                         .textSelection(.enabled)
                 }
             } header: {
-                Text("Verify the embedded interpreter")
-            } footer: {
-                Text("Runs a real probe inside the embedded interpreter and reports which modules import. Compiled extensions (math, ssl, sqlite3, …) load with dlopen, so this is the quickest way to confirm they are working on your install rather than assuming.")
-                    .font(.caption)
+                Text("Verify Python")
             }
 
             Section {
-                Button {
-                    runGuestTest()
-                } label: {
-                    if isRunningGuestTest {
-                        ProgressView()
-                    } else {
-                        Label("Boot the Linux guest", systemImage: "play.circle")
-                    }
+                Button { runGuestTest() } label: {
+                    if isRunningGuestTest { ProgressView() }
+                    else { Label("Boot embedded Linux runtime", systemImage: "play.circle") }
                 }
                 .disabled(isRunningGuestTest)
-                HStack {
-                    Text("Guest")
-                    Spacer()
-                    Text(guestStateDescription).font(.caption).foregroundStyle(.secondary)
-                }
+                LabeledContent("Guest", value: guestStateDescription)
                 if let guestTestOutput {
                     Text(guestTestOutput)
                         .font(.system(.caption2, design: .monospaced))
                         .textSelection(.enabled)
                 }
             } header: {
-                Text("Verify the Linux guest")
-            } footer: {
-                Text(LinuxGuestEngine.isRootBundled
-                     ? "Boots the emulated Linux userland and runs a real command inside it, capturing stdout. This is the one step that cannot be verified without a device: if it prints output, the guest booted."
-                     : "The rootfs image is missing from this build, so the guest has nothing to boot from.")
-                    .font(.caption)
+                Text("Verify ios-linuxkit")
             }
         }
-        .navigationTitle("Bundled with the app")
+        .navigationTitle("Bundled Components")
         .onAppear { items = BundledResources.inventory() }
     }
 
@@ -158,22 +101,16 @@ struct BundledResourcesView: View {
             if !result.diagnostics.isEmpty {
                 text += (text.isEmpty ? "" : "\n") + result.diagnostics.joined(separator: "\n")
             }
-            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                text = result.succeeded ? "Ran, but produced no output." : "Did not run."
-            }
-            pythonSelfTestOutput = text
+            pythonSelfTestOutput = text.isEmpty ? (result.succeeded ? "Passed." : "Did not run.") : text
             isRunningSelfTest = false
         }
     }
 
-    /// Boots the guest and runs one real command inside it. Deliberately routed
-    /// through the same backend the app would use, so a pass here means the
-    /// execution path works end to end, not just that the library is present.
     private var guestStateDescription: String {
         switch session.state {
         case .idle: return "not started"
         case .starting: return "starting…"
-        case .running: return "running (root is up)"
+        case .running: return "running"
         case .unavailable(let message): return "unavailable — \(message)"
         case .failed(let message): return "failed — \(message)"
         }
@@ -181,32 +118,13 @@ struct BundledResourcesView: View {
 
     private func runGuestTest() {
         isRunningGuestTest = true
-        guestTestOutput = "Booting the guest — this runs an emulated Linux kernel, so expect it to take a moment…"
+        guestTestOutput = "Booting…"
         Task {
-            let backend = LinuxGuestExecutionBackend()
-            let request = CommandRequest(command: LinuxGuestSmokeTest.command)
-            let result = await backend.execute(request)
+            let result = await LinuxGuestExecutionBackend().execute(CommandRequest(command: LinuxGuestSmokeTest.command))
             var text = result.stdout
-            if !result.stderr.isEmpty {
-                text += (text.isEmpty ? "" : "\n") + "--- stderr ---\n" + result.stderr
-            }
-            text += "\n(raw exit \(result.exitCode), \(String(format: "%.1f", result.duration))s)"
-            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                text = "The guest produced no output (exit \(result.exitCode)). If it also did not crash, the boot path may need the exit_hook fix checked."
-            } else {
-                text = "exit \(result.exitCode) in \(String(format: "%.1f", result.duration))s\n\n" + text
-            }
-            guestTestOutput = text
+            if !result.stderr.isEmpty { text += (text.isEmpty ? "" : "\n") + result.stderr }
+            guestTestOutput = "exit \(result.exitCode) in \(String(format: "%.1f", result.duration))s\n\n" + text
             isRunningGuestTest = false
-        }
-    }
-
-    private func exportHelper() {
-        exportError = nil
-        do {
-            exportedHelper = try BundledResources.exportHelper()
-        } catch {
-            exportError = error.localizedDescription
         }
     }
 }
