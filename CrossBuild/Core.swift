@@ -124,6 +124,14 @@ final class WorkspaceModel: ObservableObject {
         var label: String = ""
         var seconds: TimeInterval = 0
         var succeeded = true
+        /// True when nothing was compiled because the file and the flags that
+        /// produced its object are unchanged. Reported rather than hidden, so a
+        /// zero-second row reads as "reused", not as "did nothing".
+        var cached = false
+        /// False when the run compiled several files at once, so `seconds` is not
+        /// this file's time. Shown as nothing rather than as a number that would
+        /// be the batch's time wearing this file's name.
+        var timed = true
     }
 
     @Published private(set) var runProgress = RunProgress()
@@ -137,6 +145,15 @@ final class WorkspaceModel: ObservableObject {
     /// Keys already reported as unusable, so the note is printed once rather than
     /// on every command.
     private var reportedEnvironmentKeys = Set<String>()
+    /// What has compiled successfully, per source: the digest of the file's bytes,
+    /// the project's header stamp and the exact command, joined. A source whose
+    /// token is unchanged is not compiled again; a failure is never recorded, so a
+    /// file that did not compile is always tried again.
+    ///
+    /// Held by `GuestStateStore` because the objects it describes outlive the
+    /// process: the guest's filesystem is reused across launches, so a cache that
+    /// died with the app made every launch recompile the whole project.
+    private var compileCache: GuestStateStore { GuestStateStore.shared }
 
     @Published var generatedConfigurationSummary: [String] = []
     @Published var activeProjectRoot: String?
@@ -347,14 +364,32 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
+    /// Builds the project: copy it into the guest, then run the toolchain.
+    ///
+    /// The copy is not optional and never was. The guest boots from its own
+    /// filesystem image, so the project only exists inside it because something
+    /// put it there -- and this function did not, which meant "Build Project" ran
+    /// the toolchain in the guest's HOME against whatever happened to be there.
+    /// The separate "Sync to guest" button existed to paper over that, and
+    /// pressing Build without it first compiled nothing at all.
+    ///
+    /// It is also the step that costs the most, and the reason a build used to
+    /// pay for the whole project again on every press: `GuestWorkspaceSync` now
+    /// sends only what changed, so the second build pays for the edit rather than
+    /// for the project.
     func runBuild(settings: AppSettings? = nil) {
         let resolved = settings ?? appSettings
+        guard !isExecuting else {
+            console += "error: Another command is already running.\n"
+            return
+        }
+        let root = activeProjectRoot ?? files.workspaceRoot.path
         Task {
-            // Clean plus build is two steps. A build on its own has no known
-            // length, so it reports an indeterminate bar rather than a made-up
-            // percentage.
-            let stepCount = resolved?.cleanBeforeBuild == true ? 2 : 1
-            beginProgress(label: "Build", detail: buildCommand(), stepCount: stepCount)
+            // Copy, clean (when asked) and compile. A build on its own has no
+            // known length, so it reports an indeterminate bar rather than a
+            // made-up percentage.
+            let stepCount = resolved?.cleanBeforeBuild == true ? 3 : 2
+            beginProgress(label: "Build", detail: "Copying into the guest", stepCount: stepCount)
             defer { endProgress() }
 
             if resolved?.clearDiagnosticsOnBuild == true {
@@ -364,21 +399,40 @@ final class WorkspaceModel: ObservableObject {
 
             let timeout = resolvedBuildTimeout(resolved)
 
+            let synced = await guestSync.push(await projectSyncItems(under: root),
+                                              session: .shared,
+                                              removingStale: true)
+            if !synced.output.isEmpty { console += synced.output }
+            console += "Guest sync: \(guestSync.lastSummary)\n"
+            setProgress(step: 1, detail: "Copied into the guest")
+
             if resolved?.cleanBeforeBuild == true {
-                let cleaned = await executeCommand(cleanCommand(), settings: resolved, timeoutOverride: timeout)
+                let cleaned = await executeCommand(inGuestProject(cleanCommand()), settings: resolved, timeoutOverride: timeout)
                 let stopOnFailure = resolved?.stopOnFirstError ?? true
                 if !cleaned.succeeded && stopOnFailure {
                     console += "Build stopped after clean failed (Settings → Build Policy → Stop workflow on first failure).\n"
                     return
                 }
-                setProgress(step: 1, detail: "Cleaned; compiling")
+                setProgress(step: 2, detail: "Cleaned; compiling")
             }
 
-            let command = configuredBuildCommand(settings: resolved)
+            let command = inGuestProject(configuredBuildCommand(settings: resolved))
             setProgress(step: stepCount - 1, detail: "Compiling")
             _ = await executeCommand(command, settings: resolved, timeoutOverride: timeout)
             setProgress(step: stepCount)
         }
+    }
+
+    /// A command that has to run against the project, which lives at
+    /// `GuestWorkspaceSync.guestRoot` inside the guest.
+    ///
+    /// `make`, `swift build` and `cargo build` all read the tree they are run in,
+    /// and the guest starts every command in its HOME, which holds none of the
+    /// project. Without this they run against an empty directory and report a
+    /// missing Makefile -- which reads like a broken project rather than a
+    /// command run in the wrong place.
+    func inGuestProject(_ command: String) -> String {
+        "cd \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.guestRoot)) && " + command
     }
 
     private func configuredBuildCommand(settings: AppSettings?) -> String {
@@ -573,6 +627,10 @@ final class WorkspaceModel: ObservableObject {
     func endProgress() {
         progressDepth = max(0, progressDepth - 1)
         guard progressDepth == 0 else { return }
+        // A run just ended, so what the guest now holds is worth writing down:
+        // leaving it to the store's debounce would lose the whole record of a
+        // build if the app were killed in the second afterwards.
+        GuestStateStore.shared.saveNow()
         if runProgress.isRunning {
             lastRun = RunRecord(label: runProgress.label,
                                 seconds: runProgress.elapsed,
@@ -584,8 +642,16 @@ final class WorkspaceModel: ObservableObject {
     /// Runs a command through the resolved backend. `timeoutOverride` lets the
     /// build/test/package paths apply the dedicated "Build timeout" setting
     /// instead of the general command timeout; a value of 0 means unlimited.
+    ///
+    /// `silent` runs the command without echoing it or its raw output into the
+    /// console. A caller that drives many commands and parses their output (the
+    /// compile sweep) prints its own summary instead; without this, every file's
+    /// markers and the compiler command behind them would be dumped verbatim.
     @discardableResult
-    func executeCommand(_ command: String, settings: AppSettings? = nil, timeoutOverride: Int? = nil) async -> CommandResult {
+    func executeCommand(_ command: String,
+                        settings: AppSettings? = nil,
+                        timeoutOverride: Int? = nil,
+                        silent: Bool = false) async -> CommandResult {
         guard !isExecuting else {
             let result = CommandResult(exitCode: 75, stdout: "", stderr: "Another command is already running.", duration: 0)
             console += "error: \(result.stderr)\n"
@@ -603,10 +669,12 @@ final class WorkspaceModel: ObservableObject {
         let workingDirectoryOverride = configuration.workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
         let workingDirectory: String? = workingDirectoryOverride.isEmpty ? nil : workingDirectoryOverride
         let startedAt = Date()
-        if resolvedSettings?.timestampBuildOutput == true {
-            console += "[\(Self.timestampFormatter.string(from: startedAt))] $ \(command)\nBackend: \(backend.name)\n"
-        } else {
-            console += "$ \(command)\nBackend: \(backend.name)\n"
+        if !silent {
+            if resolvedSettings?.timestampBuildOutput == true {
+                console += "[\(Self.timestampFormatter.string(from: startedAt))] $ \(command)\nBackend: \(backend.name)\n"
+            } else {
+                console += "$ \(command)\nBackend: \(backend.name)\n"
+            }
         }
         isExecuting = true
         executionStatus = "Running"
@@ -617,7 +685,7 @@ final class WorkspaceModel: ObservableObject {
         // Commands run inside ios-linuxkit, so never inject host/jailbreak paths
         // that cannot exist in the guest namespace.
         environment["PATH"] = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        if resolvedSettings?.captureEnvironment == true && !environment.isEmpty {
+        if !silent, resolvedSettings?.captureEnvironment == true && !environment.isEmpty {
             let summary = environment.keys.sorted().joined(separator: ", ")
             console += "env: \(summary)\n"
         }
@@ -634,7 +702,7 @@ final class WorkspaceModel: ObservableObject {
             persistentSession: resolvedSettings?.terminalPersistentSession ?? true
         )
         let result = await backend.execute(request)
-        appendResultOutput(result, settings: resolvedSettings)
+        if !silent { appendResultOutput(result, settings: resolvedSettings) }
         recordDiagnostics(from: result, command: command, settings: resolvedSettings)
         lastExitCode = result.exitCode
         executionStatus = result.succeeded ? "Succeeded" : "Failed (\(result.exitCode))"
@@ -932,7 +1000,8 @@ final class WorkspaceModel: ObservableObject {
             return
         }
         let resolved = settings ?? appSettings
-        Task { _ = await executeCommand(command, settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved)) }
+        let project = inGuestProject(command)
+        Task { _ = await executeCommand(project, settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved)) }
     }
 
     func runCommand(_ command: String, settings: AppSettings? = nil) {
@@ -1013,7 +1082,12 @@ final class WorkspaceModel: ObservableObject {
         let names = ["Makefile", "makefile", "GNUmakefile"]
         guard let makefile = files.flattened.first(where: { file in
             names.contains(file.name) && file.path.hasPrefix(root + "/")
-        }), let text = files.contents(of: makefile, encoding: editorEncoding) else { return [] }
+        }) else { return [] }
+        // Read directly rather than through `files.contents(of:)`, which reports a
+        // failure through a published message: looking at a Makefile to offer its
+        // targets is not the same as opening it, and a project whose Makefile is
+        // not UTF-8 text should not announce that as an error.
+        guard let text = try? String(contentsOfFile: makefile.path, encoding: editorEncoding) else { return [] }
 
         var seen = Set<String>()
         var targets: [String] = []
@@ -1041,8 +1115,7 @@ final class WorkspaceModel: ObservableObject {
         guard !relativePath.isEmpty else { return nil }
         let flags = (commandEnvironment()["CFLAGS"] ?? "").trimmingCharacters(in: .whitespaces)
         let path = GuestWorkspaceSync.guestRoot + "/" + relativePath
-        let stem = (relativePath as NSString).lastPathComponent
-        let object = "/tmp/crossbuild-\(stem).o"
+        let object = GuestWorkspaceSync.objectPath(for: relativePath)
         let quote = GuestWorkspaceSync.quoted
         let extra = flags.isEmpty ? "" : " " + flags
 
@@ -1061,17 +1134,107 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
-    /// Every non-hidden file under `root`, ready to be copied into the guest.
-    func projectSyncItems(under root: String) -> [GuestWorkspaceSync.Item] {
-        files.flattened.compactMap { file in
-            guard !file.isDirectory,
-                  file.path.hasPrefix(root + "/"),
-                  !file.name.hasPrefix("."),
-                  !file.path.contains("/.git/"),
-                  let text = files.contents(of: file, encoding: editorEncoding)
-            else { return nil }
-            return .init(relativePath: relativePath(file.path), data: Data(text.utf8))
+    /// The command that compiles one file inside the guest, ready to run: in the
+    /// project, with the object directory made first.
+    ///
+    /// Everything that compiles one file goes through here, so the object name
+    /// and the directory it lands in cannot drift between the sweep and a single
+    /// build -- which is what makes the two share a cache.
+    func singleFileBuildCommandLine(for relativePath: String) -> String? {
+        guard let built = singleFileBuildCommand(for: relativePath) else { return nil }
+        let prepare = "mkdir -p \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.objectDirectory))"
+        return inGuestProject("\(prepare) && \(built)")
+    }
+
+    /// The identity of a compile: the bytes of the source, the state of every
+    /// header in the project, and the exact command that would run. Anything that
+    /// changes any of them -- the file, a header, a flag, the object path --
+    /// produces a different token and therefore a real compile.
+    ///
+    /// The headers are in there because nothing here parses `#include`: without
+    /// them, editing `foo.h` would leave `bar.c` looking unchanged and its object
+    /// would be reused, which is a wrong answer rather than a slow one. The stamp
+    /// is size and modification time per header, not content -- the same thing
+    /// make keys on -- so it costs a stat, not a read.
+    ///
+    /// It under-approximates on purpose: a header that is not in the project
+    /// (a system header in the guest, or a file with an unlisted extension) is not
+    /// seen. Recompiling too much costs time; reusing a stale object costs
+    /// correctness, so the check is deliberately the whole project's headers
+    /// rather than the source's own.
+    private func projectHeaderStamp() -> String {
+        let headerExtensions: Set<String> = ["h", "hh", "hpp", "hxx", "h++", "inc", "ipp", "tcc"]
+        let root = activeProjectRoot ?? files.workspaceRoot.path
+        let rootPrefix = root.hasSuffix("/") ? root : root + "/"
+        var parts: [String] = []
+        for file in files.flattened where !file.isDirectory && file.path.hasPrefix(rootPrefix) {
+            guard headerExtensions.contains((file.name as NSString).pathExtension.lowercased()) else { continue }
+            let relative = String(file.path.dropFirst(rootPrefix.count))
+            let values = try? URL(fileURLWithPath: file.path)
+                .resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            let size = values?.fileSize ?? -1
+            let modified = values?.contentModificationDate?.timeIntervalSince1970 ?? -1
+            parts.append("\(relative):\(size):\(modified)")
         }
+        guard !parts.isEmpty else { return "no-headers" }
+        return GuestWorkspaceSync.digest(Data(parts.sorted().joined(separator: "\n").utf8))
+    }
+
+    /// The identity of a compile: the bytes of the source, the state of every
+    /// header in the project, and the exact command that would run.
+    private func compileToken(for relativePath: String, command: String, headers: String) -> String {
+        (guestSync.digest(for: relativePath) ?? "unknown") + "\n" + headers + "\n" + command
+    }
+
+    /// Records the outcome of one single-file compile.
+    private func recordCompile(_ relative: String,
+                               label: String,
+                               token: String,
+                               result: CommandResult,
+                               seconds: TimeInterval) {
+        individualResults[relative] = RunRecord(label: label, seconds: seconds, succeeded: result.succeeded)
+        if result.succeeded {
+            compileCache.recordCompile(relative, token: token)
+        } else {
+            compileCache.forgetCompile(relative)
+        }
+    }
+
+    /// Every non-hidden file under `root`, ready to be copied into the guest.
+    ///
+    /// Reading a project is local I/O, but it is not free: a few hundred files is
+    /// tens of megabytes, and it used to happen on the main actor inside the
+    /// build path, so the UI paid for it too. The file *list* is taken from the
+    /// model here and the bytes are read in a detached task -- which is also why
+    /// the model's own `contents(of:)` is not used: it writes a published error
+    /// message, and one unreadable file in a project should not be reported as the
+    /// project's problem.
+    ///
+    /// Files larger than what the guest sync will carry are skipped without being
+    /// read. That matters on a default install, where the guest's own rootfs image
+    /// lives under the workspace: the old text-decode read it (and failed) rather
+    /// than noticing it was hundreds of megabytes that could never be source.
+    func projectSyncItems(under root: String) async -> [GuestWorkspaceSync.Item] {
+        let rootPrefix = root.hasSuffix("/") ? root : root + "/"
+        let paths = files.flattened.compactMap { file -> String? in
+            guard !file.isDirectory,
+                  file.path.hasPrefix(rootPrefix),
+                  !file.name.hasPrefix("."),
+                  !file.path.contains("/.git/")
+            else { return nil }
+            return file.path
+        }
+        let encoding = editorEncoding
+        let limit = GuestWorkspaceSync.maximumItemBytes
+        return await Task.detached(priority: .userInitiated) {
+            paths.compactMap { path -> GuestWorkspaceSync.Item? in
+                let url = URL(fileURLWithPath: path)
+                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                guard size <= limit else { return nil }
+                guard let text = try? String(contentsOf: url, encoding: encoding) else { return nil }
+                return .init(relativePath: String(path.dropFirst(rootPrefix.count)), data: Data(text.utf8))
+            }
+        }.value
     }
 
     /// Builds one item instead of the whole project.
@@ -1086,6 +1249,12 @@ final class WorkspaceModel: ObservableObject {
             return
         }
         let root = activeProjectRoot ?? files.workspaceRoot.path
+        // A target's recipe may touch anything in the tree, so a target build
+        // syncs the whole project and can therefore prune what the project no
+        // longer has. A single-file build pushes one file and must not: pruning
+        // there would delete the rest of the project out of the guest.
+        var pruneGuest = false
+        if case .makeTarget = item.kind { pruneGuest = true }
 
         Task {
             beginProgress(label: "Build \(item.title)", detail: "Copying into the guest", stepCount: 2)
@@ -1103,41 +1272,128 @@ final class WorkspaceModel: ObservableObject {
                 }
                 items = [.init(relativePath: relative, data: Data(text.utf8))]
             case .makeTarget:
-                items = projectSyncItems(under: root)
+                items = await projectSyncItems(under: root)
             }
 
-            let synced = await guestSync.push(items, session: .shared)
+            let synced = await guestSync.push(items, session: .shared, removingStale: pruneGuest)
             if !synced.output.isEmpty { console += synced.output }
             console += "Guest sync: \(guestSync.lastSummary)\n"
-            guard synced.pushed > 0 else {
+            guard synced.pushed > 0 || synced.unchanged > 0 else {
                 console += "error: nothing reached the guest, so there is nothing to build.\n"
                 return
             }
 
             let command: String
+            var token: String?
             switch item.kind {
             case .file(let relative):
-                guard let built = singleFileBuildCommand(for: relative) else {
+                guard let built = singleFileBuildCommandLine(for: relative) else {
                     console += "error: Cross Build has no single-file build for \(relative). Use the project build.\n"
                     return
                 }
-                command = "cd \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.guestRoot)) && \(built)"
+                let current = compileToken(for: relative, command: built, headers: projectHeaderStamp())
+                if compilerConfiguration.incrementalBuild, compileCache.compileToken(for: relative) == current {
+                    individualResults[relative] = RunRecord(label: item.title, seconds: 0, succeeded: true, cached: true)
+                    console += "\(relative) is unchanged since it last compiled; reusing its object (Settings \u{2192} Compiler \u{2192} Incremental build turns this off).\n"
+                    setProgress(step: 2)
+                    return
+                }
+                token = current
+                command = built
             case .makeTarget(let target):
                 let flags = compilerConfiguration.theosMakeFlags.trimmingCharacters(in: .whitespacesAndNewlines)
-                command = "cd \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.guestRoot)) && make \(target)"
+                command = inGuestProject("make \(target)")
                     + (flags.isEmpty ? "" : " " + flags)
             }
 
             setProgress(step: 1, detail: command)
             let started = Date()
             let result = await executeCommand(command, settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved))
-            if case .file(let relative) = item.kind {
-                individualResults[relative] = RunRecord(label: item.title,
-                                                        seconds: Date().timeIntervalSince(started),
-                                                        succeeded: result.succeeded)
+            if case .file(let relative) = item.kind, let token {
+                recordCompile(relative, label: item.title, token: token, result: result,
+                              seconds: Date().timeIntervalSince(started))
             }
             setProgress(step: 2)
         }
+    }
+
+    /// Marker the guest prints for one file's result: `@@CB <index> <exit code>`.
+    private static let compileMarker = "@@CB "
+    /// Marker introducing one file's captured compiler output.
+    private static let compileLogMarker = "@@CBLOG "
+
+    /// One guest command that compiles several files, all at once.
+    ///
+    /// Every file's output goes to its own file and is replayed afterwards, in
+    /// order, and only if there is something in it. Without that, four compilers
+    /// writing to one stream would interleave their diagnostics into text that
+    /// names files it no longer belongs to -- the output would be *less* accurate
+    /// than a sequential run, which is the reason this had not been done.
+    ///
+    /// The only output the host has to read on the way is one short line per file.
+    private func guestCompileBatch(_ jobs: [(index: Int, command: String)]) -> String {
+        let logDirectory = "/tmp/crossbuild-log"
+        let quote = GuestWorkspaceSync.quoted
+        var lines: [String] = [
+            "cd \(quote(GuestWorkspaceSync.guestRoot)) || exit 1",
+            "mkdir -p \(quote(GuestWorkspaceSync.objectDirectory)) \(quote(logDirectory))",
+        ]
+        for job in jobs {
+            let log = "\(logDirectory)/\(job.index).log"
+            lines.append("( \(job.command) > \(quote(log)) 2>&1; rc=$?; "
+                + "printf '\(Self.compileMarker)%d %s\\n' \(job.index) \"$rc\" ) &")
+        }
+        lines.append("wait")
+        lines.append("for i in \(jobs.map { String($0.index) }.joined(separator: " ")); do")
+        lines.append("  if [ -s \(quote(logDirectory))/\"$i\".log ]; then "
+            + "printf '\(Self.compileLogMarker)%s\\n' \"$i\"; cat \(quote(logDirectory))/\"$i\".log; fi")
+        lines.append("done")
+        return lines.joined(separator: "\n")
+    }
+
+    /// One file's outcome, as the guest reported it.
+    struct GuestCompileOutcome {
+        var exitCode: Int32
+        var log: String
+    }
+
+    /// Reads the markers out of a sweep's output.
+    ///
+    /// A line that does not parse is dropped rather than guessed at, and the
+    /// caller treats a missing file as failed -- reporting success for a file the
+    /// guest never mentioned is the one outcome worth avoiding here.
+    private func parseGuestCompileOutput(_ text: String) -> [Int: GuestCompileOutcome] {
+        var results: [Int: GuestCompileOutcome] = [:]
+        var logOwner: Int?
+        var logLines: [String] = []
+
+        func flushLog() {
+            if let owner = logOwner, !logLines.isEmpty, var entry = results[owner] {
+                entry.log = logLines.joined(separator: "\n")
+                results[owner] = entry
+            }
+            logOwner = nil
+            logLines = []
+        }
+
+        for line in text.components(separatedBy: "\n") {
+            if line.hasPrefix(Self.compileLogMarker) {
+                flushLog()
+                logOwner = Int(line.dropFirst(Self.compileLogMarker.count).trimmingCharacters(in: .whitespaces))
+                continue
+            }
+            if line.hasPrefix(Self.compileMarker) {
+                flushLog()
+                let fields = line.dropFirst(Self.compileMarker.count).split(separator: " ").map(String.init)
+                if fields.count >= 2, let index = Int(fields[0]), let code = Int32(fields[1]) {
+                    results[index] = GuestCompileOutcome(exitCode: code, log: "")
+                }
+                continue
+            }
+            if logOwner != nil { logLines.append(line) }
+        }
+        flushLog()
+        return results
     }
 
     /// Compiles every source file in the project, one after another.
@@ -1162,43 +1418,110 @@ final class WorkspaceModel: ObservableObject {
             beginProgress(label: "Compile \(sources.count) source(s)", detail: "Copying into the guest", stepCount: sources.count + 1)
             defer { endProgress() }
 
-            let synced = await guestSync.push(projectSyncItems(under: root), session: .shared)
+            let synced = await guestSync.push(await projectSyncItems(under: root), session: .shared, removingStale: true)
             if !synced.output.isEmpty { console += synced.output }
             console += "Guest sync: \(guestSync.lastSummary)\n"
-            guard synced.pushed > 0 else {
+            guard synced.pushed > 0 || synced.unchanged > 0 else {
                 console += "error: nothing reached the guest, so there is nothing to compile.\n"
                 return
             }
             setProgress(step: 1, detail: "Guest synchronised")
 
+            let incremental = compilerConfiguration.incrementalBuild
+            // Stamped once: it is a stat per header in the project, and it cannot
+            // change while the sweep runs.
+            let headers = projectHeaderStamp()
+            // The same knob the project build uses for `make -j`: "Parallel
+            // builds" and "Build jobs" describe how much of the machine a build
+            // may use, and a sweep of single files is a build.
+            let parallelJobs = resolved?.parallelBuilds == true ? max(1, resolved?.buildJobs ?? 1) : 1
+
+            var toCompile: [(index: Int, relative: String, command: String, token: String)] = []
             for (index, relative) in sources.enumerated() {
                 guard let built = singleFileBuildCommand(for: relative) else {
                     console += "skipped \(relative): no single-file compile for that language.\n"
                     setProgress(step: index + 2, detail: "Skipped \(relative)")
                     continue
                 }
-                setProgress(step: index + 2, detail: relative)
+                // Nothing changed, so nothing has to be compiled: the object the
+                // last successful run produced is still in the guest.
+                let token = compileToken(for: relative, command: built, headers: headers)
+                if incremental, compileCache.compileToken(for: relative) == token {
+                    individualResults[relative] = RunRecord(label: relative, seconds: 0, succeeded: true, cached: true)
+                    setProgress(step: index + 2, detail: "Unchanged: \(relative)")
+                    continue
+                }
+                toCompile.append((index, relative, built, token))
+            }
+
+            // One guest command per group instead of one per file, with the group
+            // running at once inside the guest. This is what decides whether the
+            // machine's other cores are used at all.
+            var cursor = 0
+            while cursor < toCompile.count {
+                let group = Array(toCompile[cursor..<min(cursor + parallelJobs, toCompile.count)])
+                cursor += group.count
+                setProgress(step: min(cursor + 1, sources.count + 1),
+                            detail: group.count == 1 ? group[0].relative : "Compiling \(group.count) files")
                 let started = Date()
-                let result = await executeCommand("cd \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.guestRoot)) && \(built)",
+                let result = await executeCommand(guestCompileBatch(group.map { (index: $0.index, command: $0.command) }),
                                                    settings: resolved,
-                                                   timeoutOverride: resolvedBuildTimeout(resolved))
-                individualResults[relative] = RunRecord(label: relative,
-                                                        seconds: Date().timeIntervalSince(started),
-                                                        succeeded: result.succeeded)
+                                                   timeoutOverride: resolvedBuildTimeout(resolved),
+                                                   silent: true)
+                let elapsed = Date().timeIntervalSince(started)
+                let outcomes = parseGuestCompileOutput(result.stdout)
+                if outcomes.isEmpty {
+                    console += "error: the guest reported no result for \(group.count) file(s); they are marked failed.\n"
+                    if !result.stdout.isEmpty { console += result.stdout }
+                }
+                // A group of one is timed exactly -- the batch is the file. A
+                // group of several is not: the host can only time the group, and
+                // giving each file the group's time would be a number that means
+                // something else.
+                let perFile = group.count == 1 ? elapsed : 0
+                for job in group {
+                    guard let outcome = outcomes[job.index] else {
+                        individualResults[job.relative] = RunRecord(label: job.relative, seconds: 0,
+                                                                    succeeded: false, timed: group.count == 1)
+                        compileCache.forgetCompile(job.relative)
+                        continue
+                    }
+                    individualResults[job.relative] = RunRecord(label: job.relative,
+                                                                seconds: perFile,
+                                                                succeeded: outcome.exitCode == 0,
+                                                                timed: group.count == 1)
+                    if outcome.exitCode == 0 {
+                        compileCache.recordCompile(job.relative, token: job.token)
+                    } else {
+                        compileCache.forgetCompile(job.relative)
+                    }
+                    if !outcome.log.isEmpty { console += outcome.log + "\n" }
+                }
+                if group.count > 1 {
+                    console += "Compiled \(group.count) file(s) in \(String(format: "%.1f", elapsed))s (\(parallelJobs) at a time).\n"
+                }
             }
             setProgress(step: sources.count + 1)
-            let failed = individualResults.filter { !$0.value.succeeded }.count
-            console += "Individual compile finished: \(sources.count - failed) ok, \(failed) failed.\n"
+            let failed = sources.filter { individualResults[$0]?.succeeded == false }.count
+            let reused = sources.filter { individualResults[$0]?.cached == true }.count
+            console += "Individual compile finished: \(sources.count - failed) ok, \(failed) failed"
+            if reused > 0 { console += ", \(reused) unchanged and reused" }
+            console += ".\n"
         }
     }
 
     /// Copies the project into the guest, explicitly.
+    ///
+    /// Unlike a build, this asks for the whole project rather than for what
+    /// changed: it is the escape hatch for a `/workspace` that has been emptied or
+    /// edited from inside the guest, where "already current" would be a lie.
     func syncWorkspaceToGuest(settings: AppSettings? = nil) {
         let root = activeProjectRoot ?? files.workspaceRoot.path
+        guestSync.forgetPushedState()
         Task {
             beginProgress(label: "Sync to guest", detail: "Copying project files", stepCount: 1)
             defer { endProgress() }
-            let result = await guestSync.push(projectSyncItems(under: root), session: .shared)
+            let result = await guestSync.push(await projectSyncItems(under: root), session: .shared, removingStale: true)
             if !result.output.isEmpty { console += result.output }
             console += "Guest sync: \(guestSync.lastSummary)\n"
             setProgress(step: 1)
@@ -1219,13 +1542,15 @@ final class WorkspaceModel: ObservableObject {
     @discardableResult
     func runPackage(settings: AppSettings? = nil) async -> CommandResult {
         let resolved = settings ?? appSettings
-        let command = packageCommand()
-        guard !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let configuredCommand = packageCommand()
+        guard !configuredCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             console += "error: No package command is configured.\n"
             return .init(exitCode: 1, stdout: "", stderr: "No package command configured.", duration: 0)
         }
         let artifactDir = configuration.artifactDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
         let root = activeProjectRoot ?? files.workspaceRoot.path
+        // Packaging reads the project tree too, so it runs beside the sources.
+        let command = inGuestProject(configuredCommand)
 
         // Packaging is the package command plus, when an artifact directory is
         // configured, the copy that follows it.

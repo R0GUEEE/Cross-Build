@@ -16,6 +16,12 @@ struct IDEView: View {
     @State private var editorSelection = CodeEditorSelection()
     @State private var showGoToLine = false
     @State private var goToLine = 1
+    /// The project's make targets, for the Build menu.
+    ///
+    /// Held rather than computed in the body: `makefileTargets()` reads the
+    /// Makefile, and a synchronous file read inside a view body runs on *every*
+    /// update -- one read per keystroke in the editor, on the main actor.
+    @State private var makefileTargets: [String] = []
 
     var body: some View {
         NavigationSplitView {
@@ -51,6 +57,12 @@ struct IDEView: View {
         .onAppear {
             if let configured = ForgePanel(rawValue: settings.defaultBottomPanel) { bottomPanel = configured }
             bottomExpanded = settings.defaultBottomPanelExpanded
+        }
+        // Re-read when the tree or the active project changes, not on every
+        // render. Keyed on both because a project is chosen by detecting it, not
+        // by loading a different workspace.
+        .task(id: "\(workspace.activeProjectRoot ?? "")/\(workspace.files.roots.count)") {
+            makefileTargets = workspace.makefileTargets()
         }
         .alert(item: $pendingCloseDocument) { doc in
             Alert(
@@ -213,10 +225,9 @@ struct IDEView: View {
                                                   settings: settings)
                     }
                 }
-                let targets = workspace.makefileTargets()
-                if !targets.isEmpty {
+                if !makefileTargets.isEmpty {
                     Menu("Build Make Target") {
-                        ForEach(targets.prefix(20), id: \.self) { target in
+                        ForEach(makefileTargets.prefix(20), id: \.self) { target in
                             Button("make \(target)") {
                                 workspace.buildIndividual(.init(kind: .makeTarget(target),
                                                                 title: "make \(target)",

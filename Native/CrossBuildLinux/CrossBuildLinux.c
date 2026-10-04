@@ -518,7 +518,16 @@ int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombi
     // Read until the sentinel appears or the deadline passes. The deadline is
     // read from the monotonic clock (see cblk_monotonic_ms), never inferred from
     // the number of iterations.
-    char chunk[4096];
+    //
+    // The sentinel is looked for incrementally rather than over the whole buffer.
+    // Scanning everything on every read is quadratic in the size of the output,
+    // and a build log is exactly the kind of output that reaches a megabyte --
+    // `apk add` alone prints far more. Only the newly appended bytes can hold a
+    // sentinel that was not there before, plus an overlap of one sentinel so one
+    // split across two reads is still seen. The read chunk is larger than a pipe
+    // segment so the loop wakes less often for the same bytes.
+    char chunk[16384];
+    const size_t markerLength = strlen(marker);
     int found = 0;
     int guest_gone = 0;
     int64_t deadline = cblk_monotonic_ms() + (int64_t)timeoutMs;
@@ -547,8 +556,10 @@ int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombi
             if (errno == EINTR) { continue; }
             break;
         }
+        size_t previouslyRead = g_session_scratch_len;
         if (scratch_append(chunk, (size_t)got) != 0) { break; }
-        if (strstr(g_session_scratch, marker) != NULL) { found = 1; break; }
+        size_t from = previouslyRead > markerLength - 1 ? previouslyRead - (markerLength - 1) : 0;
+        if (strstr(g_session_scratch + from, marker) != NULL) { found = 1; break; }
     }
 
     // Trim the sentinel and the echoed command tail from the captured text.

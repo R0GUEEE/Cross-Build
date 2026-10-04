@@ -68,6 +68,19 @@ final class AppSettings: ObservableObject {
     @AppStorage("runtime.shellInteractive") var shellInteractive = false
     @AppStorage("runtime.shellInit") var shellInitCommand = ""
     @AppStorage("runtime.terminalPersistent") var terminalPersistentSession = true
+
+    init() {
+        // "Build jobs" is the guest's parallelism: each job is a separate process
+        // inside the interpreter, so the useful ceiling is the number of cores the
+        // device actually has. The stored default of 4 predates that meaning --
+        // it only ever sized `make -j`, and it now also decides how many files a
+        // compile sweep runs at once, where on an eight-core device it left half
+        // the machine idle. Set once, only when nothing has been chosen, so a
+        // value the user picked is never overwritten.
+        if UserDefaults.standard.object(forKey: "build.jobs") == nil {
+            buildJobs = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8)
+        }
+    }
 }
 
 enum AppSection: String, CaseIterable, Identifiable {

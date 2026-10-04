@@ -69,14 +69,22 @@ enum LinuxGuestEngine {
     /// is used, and the guest boots from that copy.
     static func prepareWritableRoot() throws -> String {
         guard let bundled = bundledRootPath else { throw GuestError.rootNotBundled }
+        guard let destination = writableRootURL else { throw GuestError.rootNotBundled }
         let fm = FileManager.default
-        guard let documents = fm.urls(for: .documentDirectory, in: .userDomainMask).first else {
-            throw GuestError.rootNotBundled
-        }
-        let destination = documents.appendingPathComponent("CrossBuild/linux-root", isDirectory: true)
         if fm.fileExists(atPath: destination.path) { return destination.path }
         try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         try fm.copyItem(atPath: bundled, toPath: destination.path)
         return destination.path
+    }
+
+    /// Where the writable copy lives, inside the app's Documents.
+    ///
+    /// Shared because something other than the boot has to be able to *recognise*
+    /// the root without creating one: the state store decides whether what it
+    /// remembers is still about the guest that is present, and asking
+    /// `prepareWritableRoot()` would copy a whole filesystem image to find out.
+    static var writableRootURL: URL? {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("CrossBuild/linux-root", isDirectory: true)
     }
 }

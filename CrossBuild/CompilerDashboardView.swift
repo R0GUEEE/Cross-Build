@@ -194,7 +194,11 @@ struct CompilerDashboardView: View {
             HStack(spacing: 4) {
                 Image(systemName: record.succeeded ? "checkmark.circle.fill" : "xmark.circle.fill")
                     .foregroundStyle(record.succeeded ? .green : .red)
-                Text(RunProgressBar.clock(record.seconds)).monospacedDigit()
+                if record.cached {
+                    Text("unchanged")
+                } else if record.timed {
+                    Text(RunProgressBar.clock(record.seconds)).monospacedDigit()
+                }
             }
             .font(.caption2)
             .foregroundStyle(.secondary)
