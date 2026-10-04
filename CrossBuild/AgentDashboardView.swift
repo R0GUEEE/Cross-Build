@@ -105,6 +105,7 @@ struct AgentDashboardView: View {
                 .frame(maxWidth: .infinity)
             }
             .navigationTitle("Agent")
+            .toolbar { ToolbarItem(placement: .topBarLeading) { AppMenuButton(settings: settings) } }
             .sheet(isPresented: $showConfiguration) {
                 NavigationStack {
                     AgentConfigurationView(settings: settings)

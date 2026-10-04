@@ -176,6 +176,7 @@ struct CompilerDashboardView: View {
                 }.padding()
             }
             .navigationTitle("Compiler")
+            .toolbar { ToolbarItem(placement: .topBarLeading) { AppMenuButton(settings: settings) } }
             .task(id: workspace.files.roots.count) { buildItems = workspace.individualBuildItems() }
             .sheet(isPresented: $showManager) { CompilerManagerView().environmentObject(workspace) }
             .sheet(isPresented: $showCatalog) { CompilerCatalogView().environmentObject(workspace) }

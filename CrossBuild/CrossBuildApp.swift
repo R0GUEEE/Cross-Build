@@ -35,7 +35,6 @@ struct RootView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
     @ObservedObject var settings: AppSettings
     @State private var section: AppSection = .workspace
-    @State private var showAbout = false
 
     var body: some View {
         // A fixed application shell: menu bar, content, tab bar.
@@ -46,8 +45,6 @@ struct RootView: View {
         // mean the chrome is the same shape on every device and every scroll
         // position.
         VStack(spacing: 0) {
-            AppMenuBar(section: $section, settings: settings, showAbout: $showAbout)
-            Divider()
             Group {
                 switch section {
                 case .workspace: IDEView(settings: settings)
@@ -70,39 +67,30 @@ struct RootView: View {
         } message: {
             Text(workspace.pendingAgentConfirmation ?? "")
         }
-        .alert("About Cross Build", isPresented: $showAbout) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-            let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
-            Text("Cross Build \(version) (build \(build))\n\nAn on-device compiler workbench. Commands run in the embedded Linux guest, and the guest has its own filesystem -- so the project is copied into it before anything is built there.")
-        }
     }
 }
 
-/// The application menu bar.
+/// The app's menus, as a menu in the navigation bar.
 ///
-/// Every entry acts on the workspace model directly, so the bar needs no view
-/// state of its own and cannot get out of step with the screen below it.
-private struct AppMenuBar: View {
-    @Binding var section: AppSection
+/// This is where iOS puts them. A strip of menus across the top of the window is
+/// desktop chrome: it costs a permanent row of height, it competes with the tab
+/// bar for meaning, and it is the one piece of a phone app that tells the user
+/// they are looking at a ported program rather than an app.
+///
+/// Every entry acts on the workspace model directly, so the menu needs no view
+/// state of its own and cannot get out of step with the screen behind it.
+struct AppMenuButton: View {
     @ObservedObject var settings: AppSettings
-    @Binding var showAbout: Bool
     @EnvironmentObject private var workspace: WorkspaceModel
 
     var body: some View {
-        HStack(spacing: 2) {
-            Text("Cross Build")
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, ForgeTheme.Space.sm + 2)
-
-            menu("Project") {
+        Menu {
+            Section("Project") {
                 Button("Refresh Files", systemImage: "arrow.clockwise") { workspace.files.reload() }
                 Button("Detect Project & Compiler", systemImage: "waveform.badge.magnifyingglass") { workspace.detectSampleProject() }
-                Divider()
                 Button("Save Current File", systemImage: "square.and.arrow.down") { workspace.saveEditor() }
             }
-            menu("Build") {
+            Section("Build") {
                 Button("Build Project", systemImage: "hammer.fill") { workspace.runBuild(settings: settings) }
                 if let document = workspace.editor.selected {
                     Button("Build \(document.name)", systemImage: "doc.badge.gearshape") {
@@ -124,43 +112,15 @@ private struct AppMenuBar: View {
                     workspace.syncWorkspaceToGuest(settings: settings)
                 }
             }
-            menu("View") {
+            Section("View") {
                 Toggle("Word Wrap", isOn: $settings.editorWordWrap)
                 Toggle("Line Numbers", isOn: $settings.editorLineNumbers)
                 Toggle("Highlight Current Line", isOn: $settings.editorHighlightCurrentLine)
                 Toggle("Show Invisible Characters", isOn: $settings.editorShowInvisibles)
-                Divider()
-                Toggle("Compact Layout", isOn: $settings.compactUI)
             }
-            menu("Window") {
-                ForEach(AppSection.allCases) { item in
-                    Button(item.rawValue, systemImage: item.icon) { section = item }
-                }
-            }
-            menu("Help") {
-                Button("About Cross Build", systemImage: "info.circle") { showAbout = true }
-            }
-
-            Spacer(minLength: ForgeTheme.Space.sm)
-            BuildStatusBar(progress: workspace.runProgress, last: workspace.lastRun)
-                .padding(.trailing, ForgeTheme.Space.md)
+        } label: {
+            Image(systemName: "ellipsis.circle")
         }
-        .frame(height: 40)
-        .background(ForgeTheme.Surface.raised)
-    }
-
-    private func menu<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        Menu { content() } label: {
-            HStack(spacing: 3) {
-                Text(title).font(.caption)
-                Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
-            }
-            .padding(.horizontal, ForgeTheme.Space.sm)
-            .padding(.vertical, ForgeTheme.Space.xs + 1)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .fixedSize()
     }
 }
 
@@ -185,8 +145,10 @@ private struct RootTabBar: View {
                 .accessibilityLabel(item.rawValue)
             }
         }
-        .frame(height: 52)
-        .background(ForgeTheme.Surface.raised)
+        // The standard iOS tab bar proportions, with the system's own material
+        // so it blurs the content behind it rather than sitting on top as a slab.
+        .frame(height: 49)
+        .background(.bar)
         .overlay(alignment: .top) { Divider() }
     }
 }
