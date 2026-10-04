@@ -184,6 +184,11 @@ struct CodeEditorView: UIViewRepresentable {
             apply(pattern: #"\b\d+(?:\.\d+)?\b"#, color: .systemOrange, to: attributed)
             apply(pattern: language.keywordPattern, color: .systemPurple, to: attributed)
             apply(pattern: language.typePattern, color: .systemTeal, to: attributed)
+            // The two things that make a text view read as a code editor: where
+            // else the name under the caret is used, and which bracket closes the
+            // one beside it.
+            highlightOccurrences(of: wordAtCaret(in: textView), in: attributed)
+            highlightMatchingBracket(in: attributed)
             if language == .logos {
                 apply(pattern: #"%\w+"#, color: .systemBlue, to: attributed)
             }
@@ -205,6 +210,87 @@ struct CodeEditorView: UIViewRepresentable {
             regex.enumerateMatches(in: text.string, range: NSRange(location: 0, length: text.length)) { match, _, _ in
                 guard let range = match?.range else { return }
                 text.addAttribute(.backgroundColor, value: UIColor.systemFill, range: range)
+            }
+        }
+
+        /// The identifier the caret sits in or next to, if any.
+        private func wordAtCaret(in textView: UITextView) -> String? {
+            let text = textView.text as NSString
+            guard text.length > 0 else { return nil }
+            let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_"))
+            let caret = min(max(0, textView.selectedRange.location), text.length)
+            var start = caret
+            while start > 0, let scalar = UnicodeScalar(text.character(at: start - 1)), allowed.contains(scalar) {
+                start -= 1
+            }
+            var end = caret
+            while end < text.length, let scalar = UnicodeScalar(text.character(at: end)), allowed.contains(scalar) {
+                end += 1
+            }
+            guard end > start else { return nil }
+            return text.substring(with: NSRange(location: start, length: end - start))
+        }
+
+        /// A subtle background on every other place the caret's word appears --
+        /// the fastest way to see where else a name is used, and the reason an
+        /// editor feels like it understands the code rather than just colouring it.
+        private func highlightOccurrences(of word: String?, in text: NSMutableAttributedString) {
+            guard let word, word.count > 1 else { return }
+            let pattern = "\\b" + NSRegularExpression.escapedPattern(for: word) + "\\b"
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
+            regex.enumerateMatches(in: text.string, range: NSRange(location: 0, length: text.length)) { match, _, _ in
+                guard let range = match?.range else { return }
+                text.addAttribute(.backgroundColor,
+                                  value: UIColor.systemYellow.withAlphaComponent(0.18),
+                                  range: range)
+            }
+        }
+
+        /// Highlights the pair around the caret. Only the two brackets are marked;
+        /// an unmatched one is left alone rather than guessed at.
+        private func highlightMatchingBracket(in text: NSMutableAttributedString) {
+            guard let textView = container?.textView else { return }
+            let text = textView.text as NSString
+            guard text.length > 0 else { return }
+
+            let opens = Array("([{".utf16)
+            let closes = Array(")]}".utf16)
+            let caret = min(max(0, textView.selectedRange.location), text.length)
+
+            // The bracket just before the caret, else the one under it.
+            var candidates: [Int] = []
+            if caret > 0 { candidates.append(caret - 1) }
+            if caret < text.length { candidates.append(caret) }
+
+            for index in candidates {
+                let character = text.character(at: index)
+                let isOpen = opens.firstIndex(of: character)
+                let isClose = closes.firstIndex(of: character)
+                guard let side = isOpen ?? isClose else { continue }
+                let opening = isOpen != nil
+                let target = opening ? closes[side] : opens[side]
+                let step = opening ? 1 : -1
+                var depth = 0
+                var cursor = index
+                while cursor >= 0, cursor < text.length {
+                    let current = text.character(at: cursor)
+                    if current == character {
+                        depth += 1
+                    } else if current == target {
+                        depth -= 1
+                        if depth == 0 {
+                            let attributes: [NSAttributedString.Key: Any] = [
+                                .backgroundColor: UIColor.systemBlue.withAlphaComponent(0.25),
+                                .foregroundColor: UIColor.label
+                            ]
+                            text.addAttributes(attributes, range: NSRange(location: index, length: 1))
+                            text.addAttributes(attributes, range: NSRange(location: cursor, length: 1))
+                            return
+                        }
+                    }
+                    cursor += step
+                }
+                return
             }
         }
 

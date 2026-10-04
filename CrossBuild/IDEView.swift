@@ -168,7 +168,13 @@ struct IDEView: View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(workspace.editor.selected?.name ?? "Workspace").font(.headline)
-                Text(workspace.editor.selected == nil ? "Cross Build" : workspace.selectedToolchain.rawValue).font(.caption2).foregroundStyle(.secondary)
+                // Where the open file actually is, rather than repeating the
+                // toolchain the detection strip already shows.
+                Text(workspace.editor.selected.map { workspace.relativePath($0.path) } ?? "No file open")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
             }
             Spacer()
             Menu {
@@ -243,7 +249,11 @@ struct IDEView: View {
                             workspace.selectDocument(doc.id)
                         } label: {
                             HStack(spacing: 6) {
-                                Image(systemName: "doc.text")
+                                // The same icon the navigator shows for this file,
+                                // so a tab is identifiable at a glance instead of
+                                // every tab wearing the same document glyph.
+                                Image(systemName: WorkspaceFileIcon.symbol(for: doc.name))
+                                    .foregroundStyle(WorkspaceFileIcon.tint(for: doc.name))
                                 Text(doc.name)
                                 if doc.isDirty { Circle().frame(width: 6, height: 6) }
                             }

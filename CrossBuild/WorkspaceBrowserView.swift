@@ -158,7 +158,8 @@ struct WorkspaceBrowserView: View {
                     }
                 }
             } icon: {
-                Image(systemName: file.isDirectory ? "folder.fill" : icon(for: file.name))
+                Image(systemName: file.isDirectory ? "folder.fill" : WorkspaceFileIcon.symbol(for: file.name))
+                    .foregroundStyle(file.isDirectory ? Color.accentColor : WorkspaceFileIcon.tint(for: file.name))
             }
         }
         .buttonStyle(.plain)
