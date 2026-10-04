@@ -25,17 +25,20 @@ struct FullSetupView: View {
             Section {
                 ForEach(service.environment.toolchains) { tool in
                     HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: tool.present ? "checkmark.circle.fill" : "xmark.circle")
-                            .foregroundStyle(tool.present ? .green : .red)
+                        // A catalogue entry with no in-app payload is not an
+                        // error, so it is not painted red and does not read as an
+                        // error either.
+                        Image(systemName: tool.present ? "checkmark.circle.fill" : "minus.circle")
+                            .foregroundStyle(tool.present ? .green : .secondary)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(tool.name).font(.subheadline.weight(.medium))
                             Text(tool.detail).font(.caption).foregroundStyle(.secondary)
                             Text(tool.location).font(.caption2).foregroundStyle(.tertiary)
                         }
                         Spacer()
-                        Text(tool.present ? "Ready" : "Missing")
+                        Text(tool.present ? "Ready" : "Not bundled")
                             .font(.caption)
-                            .foregroundStyle(tool.present ? .green : .red)
+                            .foregroundStyle(tool.present ? .green : .secondary)
                     }
                 }
             } header: {
@@ -58,7 +61,9 @@ struct FullSetupView: View {
                                 Text(step.detail).font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Text(step.status.rawValue).font(.caption)
+                            Text(step.status.rawValue)
+                                .font(.caption)
+                                .foregroundStyle(statusColor(step.status))
                         }
                     }
                     .buttonStyle(.plain)
@@ -103,6 +108,15 @@ struct FullSetupView: View {
                 }
                 .navigationTitle(step.title)
             }
+        }
+    }
+
+    private func statusColor(_ status: SetupStepStatus) -> Color {
+        switch status {
+        case .succeeded: return .green
+        case .failed: return .red
+        case .running: return .accentColor
+        case .pending, .notBundled, .skipped: return .secondary
         }
     }
 }

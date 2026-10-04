@@ -12,6 +12,10 @@ enum SetupStepStatus: String {
     case running = "Running"
     case succeeded = "Done"
     case failed = "Failed"
+    /// Absent by design rather than broken. A catalogue entry with no in-app
+    /// payload, or the SDK count on a build that ships no SDK, is the normal
+    /// state of a sideloaded install and must not be reported as a fault.
+    case notBundled = "Not Bundled"
     case skipped = "Skipped"
 }
 
@@ -56,23 +60,24 @@ final class SetupService: ObservableObject {
         env.sdkCount = IOSSDKDiscovery.bundledSDKs().count
         env.toolchains = AppToolchainLibraries.scanBundle()
 
+        // Only a missing rootfs is a real fault. The other two conditions used to
+        // land in "Issues Found" on every healthy install:
+        //   - a catalogue component with no in-app payload is not missing from the
+        //     IPA, it was never shipped in it -- the components that need a full
+        //     toolchain run through the embedded runtime instead;
+        //   - the Apple SDK is not redistributable, so a bundled-SDK count of zero
+        //     is the normal value, not a problem to be fixed.
         if !env.rootfsPresent {
-            env.notes.append("Embedded ios-linuxkit rootfs is missing.")
-        }
-        if env.sdkCount == 0 {
-            env.notes.append("No bundled SDK payload was discovered.")
+            env.notes.append("Embedded ios-linuxkit rootfs is missing; the in-app runtime cannot start.")
         }
         let missing = env.toolchains.filter { !$0.present }
-        if !missing.isEmpty {
-            env.notes.append("\(missing.count) declared toolchain component(s) are missing from the installed IPA.")
-        }
 
         environment = env
         steps = makeSteps(env)
         didPrepare = true
-        statusLine = missing.isEmpty && env.rootfsPresent
-            ? "In-app runtime scan complete."
-            : "Scan complete with missing components."
+        statusLine = env.rootfsPresent
+            ? "In-app runtime scan complete. \(env.toolchains.count - missing.count) of \(env.toolchains.count) catalogue components ship as in-app libraries."
+            : "The embedded runtime is unavailable."
     }
 
     func run(workspace: WorkspaceModel, settings: AppSettings) async {
@@ -90,17 +95,27 @@ final class SetupService: ObservableObject {
             case "toolchains":
                 let missing = environment.toolchains.filter { !$0.present }
                 steps[index].output = environment.toolchains
-                    .map { "\($0.present ? "READY" : "MISSING")  \($0.name)  \($0.location)\n\($0.detail)" }
+                    .map { "\($0.present ? "READY" : "NOT BUNDLED")  \($0.name)  \($0.location)\n\($0.detail)" }
                     .joined(separator: "\n\n")
-                steps[index].status = missing.isEmpty ? .succeeded : .failed
+                // This is a scan, and the scan itself always succeeds. A component
+                // without an in-app payload is a catalogue entry, not an
+                // installation fault, so it no longer marks the step failed. Only
+                // a build that ships no usable component at all is a failure.
+                let presentCount = environment.toolchains.count - missing.count
+                steps[index].status = presentCount > 0 ? .succeeded : .failed
+                if presentCount < environment.toolchains.count {
+                    steps[index].output += "\n\n\(environment.toolchains.count - presentCount) catalogue component(s) have no in-app library in this build. That is expected: a component is only READY when an in-app engine or library actually ships, and the toolchains that need a full compiler run through the embedded runtime instead."
+                }
             case "linux":
                 steps[index].output = environment.rootfsPresent
                     ? "ios-linuxkit engine and fakefs-root are bundled."
                     : "ios-linuxkit engine/rootfs is incomplete."
                 steps[index].status = environment.rootfsPresent ? .succeeded : .failed
             case "sdk":
-                steps[index].output = "\(environment.sdkCount) bundled SDK(s) discovered."
-                steps[index].status = environment.sdkCount > 0 ? .succeeded : .failed
+                steps[index].output = environment.sdkCount > 0
+                    ? "\(environment.sdkCount) bundled SDK(s) discovered."
+                    : "No SDK payload is bundled with this build. The Apple SDK is not redistributable, so this is the normal state for a sideloaded install, not a fault; point a project at an SDK of your own when one is needed."
+                steps[index].status = environment.sdkCount > 0 ? .succeeded : .notBundled
             case "project":
                 workspace.detectSampleProject()
                 steps[index].output = workspace.generatedConfigurationSummary.joined(separator: "\n")
