@@ -32,4 +32,4 @@ CI uploads an **unsigned** IPA — iOS will refuse to install it as-is. Cross Bu
 - **Free Apple ID / development certificate**: re-sign with `zsign` or install through SideStore/AltStore. Re-signed builds expire after about a week and need re-signing.
 - **LiveContainer**: load the IPA inside it; some entitlements may not apply there.
 
-For the "Jailbreak Local" and "Remote / Helper" execution backends (used to actually spawn compiler processes, since a sandboxed sideload install can't), run `Tools/crossbuild-helper.py` on the target host — see `Tools/README.md`.
+Cross Build no longer uses an external execution helper. Shell/POSIX workflows run through the embedded ios-linuxkit runtime, while compiler/runtime components are discovered from libraries and resources bundled in the IPA. Settings → Setup & System Scan reports the components that are actually present; catalogue metadata is not treated as proof that a compiler is installed.
