@@ -58,6 +58,9 @@ struct SettingsView: View {
                     Toggle("Parallel builds", isOn: $settings.parallelBuilds)
                     if settings.parallelBuilds {
                         Stepper("Build jobs: \(settings.buildJobs)", value: $settings.buildJobs, in: 1...32)
+                        Text("This device has \(ProcessInfo.processInfo.activeProcessorCount) cores. Jobs run inside the guest, which is an interpreter: past the core count they compete for the same ones.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     Toggle("Clean before build", isOn: $settings.cleanBeforeBuild)
                     Toggle("Verbose build output", isOn: $settings.verboseBuild)

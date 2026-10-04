@@ -29,6 +29,36 @@ The guest boots **once per launch** with `/bin/sh` and stays up; commands are st
 
 The command timeout is measured with the monotonic clock, not by counting poll iterations: the loop used to advance its own budget by 100 ms per 4 KB read, which capped output at about 40 KB/s and reported a *timeout* for any command that printed more than that. A guest shell that exits (a command ran `exit`) is now reported as such and closes the session, instead of being indistinguishable from a deadline.
 
+### How a build reaches the guest
+
+The guest boots from its own filesystem image, so nothing the iOS workspace holds
+exists inside it until it is copied there. Every build is therefore
+**copy, then run**, and the copy is the part that decides whether the app or the
+compiler is the slow one:
+
+- `GuestWorkspaceSync` copies the project to `/workspace`. Only files whose bytes
+  changed are sent at all (SHA-256 per file, recorded in `GuestStateStore`), text
+  travels as a quoted here-document rather than base64, and one `mkdir -p` covers
+  the whole push. Files the project no longer has are removed, so a rename cannot
+  leave an old translation unit behind for the compiler to pick up.
+- Everything that reads the project tree -- `make`, `swift build`, `cargo build`,
+  the package step -- runs through `WorkspaceModel.inGuestProject(_:)`, which is
+  the only place that knows where the project lives inside the guest.
+- A single source compiles to an object named after its whole relative path under
+  `/tmp/crossbuild-obj`, so two files with the same base name cannot collide and
+  an unchanged file's object can be reused.
+- `compileAllIndividualSources` compiles in groups, all at once inside the guest,
+  with each file's output captured separately and replayed in order. The group size
+  is the "Build jobs" setting, the same one `make -j` uses.
+
+`GuestStateStore` persists what the guest already holds, beside the guest root it
+describes (`Documents/CrossBuild/guest-state.json`). Because the guest's image is
+reused across launches, so are the copied files and the objects; without that
+record every launch copied the whole project into a guest that already had it and
+then recompiled it. The record stores its guest root's file id and creation date
+and is discarded when they no longer match, because a root that has been deleted
+and recreated holds none of it.
+
 ## AOT policy
 
 The target configuration is ios-linuxkit native AOT with runtime native-code emission disabled:
