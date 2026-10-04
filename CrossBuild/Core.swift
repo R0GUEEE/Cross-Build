@@ -145,11 +145,15 @@ final class WorkspaceModel: ObservableObject {
     /// Keys already reported as unusable, so the note is printed once rather than
     /// on every command.
     private var reportedEnvironmentKeys = Set<String>()
-    /// What has compiled successfully, per source: the digest of the file's bytes
-    /// and the exact command that produced its object, joined. A source whose pair
-    /// is unchanged is not compiled again; a failure is never recorded, so a file
-    /// that did not compile is always tried again.
-    private var compiledSources: [String: String] = [:]
+    /// What has compiled successfully, per source: the digest of the file's bytes,
+    /// the project's header stamp and the exact command, joined. A source whose
+    /// token is unchanged is not compiled again; a failure is never recorded, so a
+    /// file that did not compile is always tried again.
+    ///
+    /// Held by `GuestStateStore` because the objects it describes outlive the
+    /// process: the guest's filesystem is reused across launches, so a cache that
+    /// died with the app made every launch recompile the whole project.
+    private var compileCache: GuestStateStore { GuestStateStore.shared }
 
     @Published var generatedConfigurationSummary: [String] = []
     @Published var activeProjectRoot: String?
@@ -623,6 +627,10 @@ final class WorkspaceModel: ObservableObject {
     func endProgress() {
         progressDepth = max(0, progressDepth - 1)
         guard progressDepth == 0 else { return }
+        // A run just ended, so what the guest now holds is worth writing down:
+        // leaving it to the store's debounce would lose the whole record of a
+        // build if the app were killed in the second afterwards.
+        GuestStateStore.shared.saveNow()
         if runProgress.isRunning {
             lastRun = RunRecord(label: runProgress.label,
                                 seconds: runProgress.elapsed,
@@ -1186,9 +1194,9 @@ final class WorkspaceModel: ObservableObject {
                                seconds: TimeInterval) {
         individualResults[relative] = RunRecord(label: label, seconds: seconds, succeeded: result.succeeded)
         if result.succeeded {
-            compiledSources[relative] = token
+            compileCache.recordCompile(relative, token: token)
         } else {
-            compiledSources.removeValue(forKey: relative)
+            compileCache.forgetCompile(relative)
         }
     }
 
@@ -1284,7 +1292,7 @@ final class WorkspaceModel: ObservableObject {
                     return
                 }
                 let current = compileToken(for: relative, command: built, headers: projectHeaderStamp())
-                if compilerConfiguration.incrementalBuild, compiledSources[relative] == current {
+                if compilerConfiguration.incrementalBuild, compileCache.compileToken(for: relative) == current {
                     individualResults[relative] = RunRecord(label: item.title, seconds: 0, succeeded: true, cached: true)
                     console += "\(relative) is unchanged since it last compiled; reusing its object (Settings \u{2192} Compiler \u{2192} Incremental build turns this off).\n"
                     setProgress(step: 2)
@@ -1438,7 +1446,7 @@ final class WorkspaceModel: ObservableObject {
                 // Nothing changed, so nothing has to be compiled: the object the
                 // last successful run produced is still in the guest.
                 let token = compileToken(for: relative, command: built, headers: headers)
-                if incremental, compiledSources[relative] == token {
+                if incremental, compileCache.compileToken(for: relative) == token {
                     individualResults[relative] = RunRecord(label: relative, seconds: 0, succeeded: true, cached: true)
                     setProgress(step: index + 2, detail: "Unchanged: \(relative)")
                     continue
@@ -1475,7 +1483,7 @@ final class WorkspaceModel: ObservableObject {
                     guard let outcome = outcomes[job.index] else {
                         individualResults[job.relative] = RunRecord(label: job.relative, seconds: 0,
                                                                     succeeded: false, timed: group.count == 1)
-                        compiledSources.removeValue(forKey: job.relative)
+                        compileCache.forgetCompile(job.relative)
                         continue
                     }
                     individualResults[job.relative] = RunRecord(label: job.relative,
@@ -1483,9 +1491,9 @@ final class WorkspaceModel: ObservableObject {
                                                                 succeeded: outcome.exitCode == 0,
                                                                 timed: group.count == 1)
                     if outcome.exitCode == 0 {
-                        compiledSources[job.relative] = job.token
+                        compileCache.recordCompile(job.relative, token: job.token)
                     } else {
-                        compiledSources.removeValue(forKey: job.relative)
+                        compileCache.forgetCompile(job.relative)
                     }
                     if !outcome.log.isEmpty { console += outcome.log + "\n" }
                 }

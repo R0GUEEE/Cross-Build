@@ -65,21 +65,21 @@ final class GuestWorkspaceSync: ObservableObject {
     @Published private(set) var lastSyncedAt: Date?
     @Published private(set) var lastSummary = "Not synced yet."
 
-    /// Digest of every file this session has put in the guest, by path relative
-    /// to `guestRoot`. A file whose digest is unchanged is not sent again.
-    private var pushedDigests: [String: String] = [:]
-    /// Every path this session has ever pushed, so a stale one can be removed.
-    private var pushedPaths: Set<String> = []
+    /// What the guest already holds, by path relative to `guestRoot`.
+    ///
+    /// Kept by `GuestStateStore` rather than here, because it outlives this
+    /// object: the guest is booted once per process but its filesystem is reused
+    /// across launches, so a record that died with the process made every launch
+    /// copy the whole project into a guest that already had it.
+    private var state: GuestStateStore { GuestStateStore.shared }
 
     /// Forgets what has been pushed, so the next `push` sends everything again.
     ///
-    /// The record describes a guest that this process booted and that nothing
-    /// else is expected to touch, so it is only needed to answer an explicit
+    /// The record describes a guest, so this is only needed to answer an explicit
     /// "copy it all again" -- which is what the Sync button does, and which is how
     /// a `/workspace` emptied from inside the guest is repaired.
     func forgetPushedState() {
-        pushedDigests.removeAll()
-        pushedPaths.removeAll()
+        state.forgetPushed()
     }
 
     /// Pushes `items` under `guestRoot`, creating directories as needed.
@@ -108,7 +108,7 @@ final class GuestWorkspaceSync: ObservableObject {
                 continue
             }
             let digest = Self.digest(item.data)
-            if pushedDigests[item.relativePath] == digest {
+            if state.pushedDigest(for: item.relativePath) == digest {
                 unchanged += 1
                 continue
             }
@@ -172,8 +172,7 @@ final class GuestWorkspaceSync: ObservableObject {
                     break
                 }
                 for (relative, digest) in batch.files {
-                    pushedDigests[relative] = digest
-                    pushedPaths.insert(relative)
+                    state.recordPush(relative, digest: digest)
                 }
                 pushed += batch.files.count
             }
@@ -183,7 +182,7 @@ final class GuestWorkspaceSync: ObservableObject {
         // replacement never arrived would lose it from both sides.
         var removed = 0
         if removingStale && completed {
-            let stale = pushedPaths.subtracting(kept).sorted()
+            let stale = Set(state.pushedPaths).subtracting(kept).sorted()
             if !stale.isEmpty {
                 for slice in stride(from: 0, to: stale.count, by: 64).map({ Array(stale[$0..<min($0 + 64, stale.count)]) }) {
                     let command = "rm -f " + slice.map { Self.quoted(Self.guestRoot + "/" + $0) }.joined(separator: " ")
@@ -195,10 +194,7 @@ final class GuestWorkspaceSync: ObservableObject {
                     }
                     removed += slice.count
                 }
-                for relative in stale.prefix(removed) {
-                    pushedPaths.remove(relative)
-                    pushedDigests.removeValue(forKey: relative)
-                }
+                state.forgetPushed(Array(stale.prefix(removed)))
             }
         }
 
@@ -206,6 +202,9 @@ final class GuestWorkspaceSync: ObservableObject {
             output += "\nSkipped (larger than \(Self.maximumItemBytes / 1024) KB): \(skipped.joined(separator: ", "))\n"
         }
         lastSyncedAt = Date()
+        // Written out now rather than left to the store's debounce: the record is
+        // the difference between the next launch copying the project and not.
+        state.saveNow()
         lastSummary = Self.summary(pushed: pushed, unchanged: unchanged, removed: removed)
         return (pushed, unchanged, removed, skipped, output)
     }
@@ -312,7 +311,7 @@ final class GuestWorkspaceSync: ObservableObject {
     /// when it has not been pushed. This is the identity of a source file's
     /// contents, which is what a compile cache has to be keyed on.
     func digest(for relativePath: String) -> String? {
-        pushedDigests[relativePath]
+        state.pushedDigest(for: relativePath)
     }
 
     /// Content digest, used to decide whether a file has to travel at all.
