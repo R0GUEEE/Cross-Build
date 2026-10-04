@@ -347,14 +347,32 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
+    /// Builds the project: copy it into the guest, then run the toolchain.
+    ///
+    /// The copy is not optional and never was. The guest boots from its own
+    /// filesystem image, so the project only exists inside it because something
+    /// put it there -- and this function did not, which meant "Build Project" ran
+    /// the toolchain in the guest's HOME against whatever happened to be there.
+    /// The separate "Sync to guest" button existed to paper over that, and
+    /// pressing Build without it first compiled nothing at all.
+    ///
+    /// It is also the step that costs the most, and the reason a build used to
+    /// pay for the whole project again on every press: `GuestWorkspaceSync` now
+    /// sends only what changed, so the second build pays for the edit rather than
+    /// for the project.
     func runBuild(settings: AppSettings? = nil) {
         let resolved = settings ?? appSettings
+        guard !isExecuting else {
+            console += "error: Another command is already running.\n"
+            return
+        }
+        let root = activeProjectRoot ?? files.workspaceRoot.path
         Task {
-            // Clean plus build is two steps. A build on its own has no known
-            // length, so it reports an indeterminate bar rather than a made-up
-            // percentage.
-            let stepCount = resolved?.cleanBeforeBuild == true ? 2 : 1
-            beginProgress(label: "Build", detail: buildCommand(), stepCount: stepCount)
+            // Copy, clean (when asked) and compile. A build on its own has no
+            // known length, so it reports an indeterminate bar rather than a
+            // made-up percentage.
+            let stepCount = resolved?.cleanBeforeBuild == true ? 3 : 2
+            beginProgress(label: "Build", detail: "Copying into the guest", stepCount: stepCount)
             defer { endProgress() }
 
             if resolved?.clearDiagnosticsOnBuild == true {
@@ -364,21 +382,40 @@ final class WorkspaceModel: ObservableObject {
 
             let timeout = resolvedBuildTimeout(resolved)
 
+            let synced = await guestSync.push(await projectSyncItems(under: root),
+                                              session: .shared,
+                                              removingStale: true)
+            if !synced.output.isEmpty { console += synced.output }
+            console += "Guest sync: \(guestSync.lastSummary)\n"
+            setProgress(step: 1, detail: "Copied into the guest")
+
             if resolved?.cleanBeforeBuild == true {
-                let cleaned = await executeCommand(cleanCommand(), settings: resolved, timeoutOverride: timeout)
+                let cleaned = await executeCommand(inGuestProject(cleanCommand()), settings: resolved, timeoutOverride: timeout)
                 let stopOnFailure = resolved?.stopOnFirstError ?? true
                 if !cleaned.succeeded && stopOnFailure {
                     console += "Build stopped after clean failed (Settings → Build Policy → Stop workflow on first failure).\n"
                     return
                 }
-                setProgress(step: 1, detail: "Cleaned; compiling")
+                setProgress(step: 2, detail: "Cleaned; compiling")
             }
 
-            let command = configuredBuildCommand(settings: resolved)
+            let command = inGuestProject(configuredBuildCommand(settings: resolved))
             setProgress(step: stepCount - 1, detail: "Compiling")
             _ = await executeCommand(command, settings: resolved, timeoutOverride: timeout)
             setProgress(step: stepCount)
         }
+    }
+
+    /// A command that has to run against the project, which lives at
+    /// `GuestWorkspaceSync.guestRoot` inside the guest.
+    ///
+    /// `make`, `swift build` and `cargo build` all read the tree they are run in,
+    /// and the guest starts every command in its HOME, which holds none of the
+    /// project. Without this they run against an empty directory and report a
+    /// missing Makefile -- which reads like a broken project rather than a
+    /// command run in the wrong place.
+    func inGuestProject(_ command: String) -> String {
+        "cd \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.guestRoot)) && " + command
     }
 
     private func configuredBuildCommand(settings: AppSettings?) -> String {
@@ -932,7 +969,8 @@ final class WorkspaceModel: ObservableObject {
             return
         }
         let resolved = settings ?? appSettings
-        Task { _ = await executeCommand(command, settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved)) }
+        let project = inGuestProject(command)
+        Task { _ = await executeCommand(project, settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved)) }
     }
 
     func runCommand(_ command: String, settings: AppSettings? = nil) {
@@ -1062,16 +1100,40 @@ final class WorkspaceModel: ObservableObject {
     }
 
     /// Every non-hidden file under `root`, ready to be copied into the guest.
-    func projectSyncItems(under root: String) -> [GuestWorkspaceSync.Item] {
-        files.flattened.compactMap { file in
+    ///
+    /// Reading a project is local I/O, but it is not free: a few hundred files is
+    /// tens of megabytes, and it used to happen on the main actor inside the
+    /// build path, so the UI paid for it too. The file *list* is taken from the
+    /// model here and the bytes are read in a detached task -- which is also why
+    /// the model's own `contents(of:)` is not used: it writes a published error
+    /// message, and one unreadable file in a project should not be reported as the
+    /// project's problem.
+    ///
+    /// Files larger than what the guest sync will carry are skipped without being
+    /// read. That matters on a default install, where the guest's own rootfs image
+    /// lives under the workspace: the old text-decode read it (and failed) rather
+    /// than noticing it was hundreds of megabytes that could never be source.
+    func projectSyncItems(under root: String) async -> [GuestWorkspaceSync.Item] {
+        let rootPrefix = root.hasSuffix("/") ? root : root + "/"
+        let paths = files.flattened.compactMap { file -> String? in
             guard !file.isDirectory,
-                  file.path.hasPrefix(root + "/"),
+                  file.path.hasPrefix(rootPrefix),
                   !file.name.hasPrefix("."),
-                  !file.path.contains("/.git/"),
-                  let text = files.contents(of: file, encoding: editorEncoding)
+                  !file.path.contains("/.git/")
             else { return nil }
-            return .init(relativePath: relativePath(file.path), data: Data(text.utf8))
+            return file.path
         }
+        let encoding = editorEncoding
+        let limit = GuestWorkspaceSync.maximumItemBytes
+        return await Task.detached(priority: .userInitiated) {
+            paths.compactMap { path -> GuestWorkspaceSync.Item? in
+                let url = URL(fileURLWithPath: path)
+                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                guard size <= limit else { return nil }
+                guard let text = try? String(contentsOf: url, encoding: encoding) else { return nil }
+                return .init(relativePath: String(path.dropFirst(rootPrefix.count)), data: Data(text.utf8))
+            }
+        }.value
     }
 
     /// Builds one item instead of the whole project.
@@ -1086,6 +1148,12 @@ final class WorkspaceModel: ObservableObject {
             return
         }
         let root = activeProjectRoot ?? files.workspaceRoot.path
+        // A target's recipe may touch anything in the tree, so a target build
+        // syncs the whole project and can therefore prune what the project no
+        // longer has. A single-file build pushes one file and must not: pruning
+        // there would delete the rest of the project out of the guest.
+        var pruneGuest = false
+        if case .makeTarget = item.kind { pruneGuest = true }
 
         Task {
             beginProgress(label: "Build \(item.title)", detail: "Copying into the guest", stepCount: 2)
@@ -1103,13 +1171,13 @@ final class WorkspaceModel: ObservableObject {
                 }
                 items = [.init(relativePath: relative, data: Data(text.utf8))]
             case .makeTarget:
-                items = projectSyncItems(under: root)
+                items = await projectSyncItems(under: root)
             }
 
-            let synced = await guestSync.push(items, session: .shared)
+            let synced = await guestSync.push(items, session: .shared, removingStale: pruneGuest)
             if !synced.output.isEmpty { console += synced.output }
             console += "Guest sync: \(guestSync.lastSummary)\n"
-            guard synced.pushed > 0 else {
+            guard synced.pushed > 0 || synced.unchanged > 0 else {
                 console += "error: nothing reached the guest, so there is nothing to build.\n"
                 return
             }
@@ -1162,10 +1230,10 @@ final class WorkspaceModel: ObservableObject {
             beginProgress(label: "Compile \(sources.count) source(s)", detail: "Copying into the guest", stepCount: sources.count + 1)
             defer { endProgress() }
 
-            let synced = await guestSync.push(projectSyncItems(under: root), session: .shared)
+            let synced = await guestSync.push(await projectSyncItems(under: root), session: .shared, removingStale: true)
             if !synced.output.isEmpty { console += synced.output }
             console += "Guest sync: \(guestSync.lastSummary)\n"
-            guard synced.pushed > 0 else {
+            guard synced.pushed > 0 || synced.unchanged > 0 else {
                 console += "error: nothing reached the guest, so there is nothing to compile.\n"
                 return
             }
@@ -1193,12 +1261,17 @@ final class WorkspaceModel: ObservableObject {
     }
 
     /// Copies the project into the guest, explicitly.
+    ///
+    /// Unlike a build, this asks for the whole project rather than for what
+    /// changed: it is the escape hatch for a `/workspace` that has been emptied or
+    /// edited from inside the guest, where "already current" would be a lie.
     func syncWorkspaceToGuest(settings: AppSettings? = nil) {
         let root = activeProjectRoot ?? files.workspaceRoot.path
+        guestSync.forgetPushedState()
         Task {
             beginProgress(label: "Sync to guest", detail: "Copying project files", stepCount: 1)
             defer { endProgress() }
-            let result = await guestSync.push(projectSyncItems(under: root), session: .shared)
+            let result = await guestSync.push(await projectSyncItems(under: root), session: .shared, removingStale: true)
             if !result.output.isEmpty { console += result.output }
             console += "Guest sync: \(guestSync.lastSummary)\n"
             setProgress(step: 1)
@@ -1219,13 +1292,15 @@ final class WorkspaceModel: ObservableObject {
     @discardableResult
     func runPackage(settings: AppSettings? = nil) async -> CommandResult {
         let resolved = settings ?? appSettings
-        let command = packageCommand()
-        guard !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let configuredCommand = packageCommand()
+        guard !configuredCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             console += "error: No package command is configured.\n"
             return .init(exitCode: 1, stdout: "", stderr: "No package command configured.", duration: 0)
         }
         let artifactDir = configuration.artifactDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
         let root = activeProjectRoot ?? files.workspaceRoot.path
+        // Packaging reads the project tree too, so it runs beside the sources.
+        let command = inGuestProject(configuredCommand)
 
         // Packaging is the package command plus, when an artifact directory is
         // configured, the copy that follows it.
