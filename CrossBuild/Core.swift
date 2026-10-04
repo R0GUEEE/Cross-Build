@@ -124,6 +124,10 @@ final class WorkspaceModel: ObservableObject {
         var label: String = ""
         var seconds: TimeInterval = 0
         var succeeded = true
+        /// True when nothing was compiled because the file and the flags that
+        /// produced its object are unchanged. Reported rather than hidden, so a
+        /// zero-second row reads as "reused", not as "did nothing".
+        var cached = false
     }
 
     @Published private(set) var runProgress = RunProgress()
@@ -137,6 +141,11 @@ final class WorkspaceModel: ObservableObject {
     /// Keys already reported as unusable, so the note is printed once rather than
     /// on every command.
     private var reportedEnvironmentKeys = Set<String>()
+    /// What has compiled successfully, per source: the digest of the file's bytes
+    /// and the exact command that produced its object, joined. A source whose pair
+    /// is unchanged is not compiled again; a failure is never recorded, so a file
+    /// that did not compile is always tried again.
+    private var compiledSources: [String: String] = [:]
 
     @Published var generatedConfigurationSummary: [String] = []
     @Published var activeProjectRoot: String?
@@ -1079,8 +1088,7 @@ final class WorkspaceModel: ObservableObject {
         guard !relativePath.isEmpty else { return nil }
         let flags = (commandEnvironment()["CFLAGS"] ?? "").trimmingCharacters(in: .whitespaces)
         let path = GuestWorkspaceSync.guestRoot + "/" + relativePath
-        let stem = (relativePath as NSString).lastPathComponent
-        let object = "/tmp/crossbuild-\(stem).o"
+        let object = GuestWorkspaceSync.objectPath(for: relativePath)
         let quote = GuestWorkspaceSync.quoted
         let extra = flags.isEmpty ? "" : " " + flags
 
@@ -1096,6 +1104,72 @@ final class WorkspaceModel: ObservableObject {
         case "js", "ts": return "node --check \(quote(path))"
         case "h", "hpp", "hh": return "clang\(extra) -fsyntax-only \(quote(path))"
         default: return nil
+        }
+    }
+
+    /// The command that compiles one file inside the guest, ready to run: in the
+    /// project, with the object directory made first.
+    ///
+    /// Everything that compiles one file goes through here, so the object name
+    /// and the directory it lands in cannot drift between the sweep and a single
+    /// build -- which is what makes the two share a cache.
+    func singleFileBuildCommandLine(for relativePath: String) -> String? {
+        guard let built = singleFileBuildCommand(for: relativePath) else { return nil }
+        let prepare = "mkdir -p \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.objectDirectory))"
+        return inGuestProject("\(prepare) && \(built)")
+    }
+
+    /// The identity of a compile: the bytes of the source, the state of every
+    /// header in the project, and the exact command that would run. Anything that
+    /// changes any of them -- the file, a header, a flag, the object path --
+    /// produces a different token and therefore a real compile.
+    ///
+    /// The headers are in there because nothing here parses `#include`: without
+    /// them, editing `foo.h` would leave `bar.c` looking unchanged and its object
+    /// would be reused, which is a wrong answer rather than a slow one. The stamp
+    /// is size and modification time per header, not content -- the same thing
+    /// make keys on -- so it costs a stat, not a read.
+    ///
+    /// It under-approximates on purpose: a header that is not in the project
+    /// (a system header in the guest, or a file with an unlisted extension) is not
+    /// seen. Recompiling too much costs time; reusing a stale object costs
+    /// correctness, so the check is deliberately the whole project's headers
+    /// rather than the source's own.
+    private func projectHeaderStamp() -> String {
+        let headerExtensions: Set<String> = ["h", "hh", "hpp", "hxx", "h++", "inc", "ipp", "tcc"]
+        let root = activeProjectRoot ?? files.workspaceRoot.path
+        let rootPrefix = root.hasSuffix("/") ? root : root + "/"
+        var parts: [String] = []
+        for file in files.flattened where !file.isDirectory && file.path.hasPrefix(rootPrefix) {
+            guard headerExtensions.contains((file.name as NSString).pathExtension.lowercased()) else { continue }
+            let relative = String(file.path.dropFirst(rootPrefix.count))
+            let values = try? URL(fileURLWithPath: file.path)
+                .resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            let size = values?.fileSize ?? -1
+            let modified = values?.contentModificationDate?.timeIntervalSince1970 ?? -1
+            parts.append("\(relative):\(size):\(modified)")
+        }
+        guard !parts.isEmpty else { return "no-headers" }
+        return GuestWorkspaceSync.digest(Data(parts.sorted().joined(separator: "\n").utf8))
+    }
+
+    /// The identity of a compile: the bytes of the source, the state of every
+    /// header in the project, and the exact command that would run.
+    private func compileToken(for relativePath: String, command: String, headers: String) -> String {
+        (guestSync.digest(for: relativePath) ?? "unknown") + "\n" + headers + "\n" + command
+    }
+
+    /// Records the outcome of one single-file compile.
+    private func recordCompile(_ relative: String,
+                               label: String,
+                               token: String,
+                               result: CommandResult,
+                               seconds: TimeInterval) {
+        individualResults[relative] = RunRecord(label: label, seconds: seconds, succeeded: result.succeeded)
+        if result.succeeded {
+            compiledSources[relative] = token
+        } else {
+            compiledSources.removeValue(forKey: relative)
         }
     }
 
@@ -1183,26 +1257,34 @@ final class WorkspaceModel: ObservableObject {
             }
 
             let command: String
+            var token: String?
             switch item.kind {
             case .file(let relative):
-                guard let built = singleFileBuildCommand(for: relative) else {
+                guard let built = singleFileBuildCommandLine(for: relative) else {
                     console += "error: Cross Build has no single-file build for \(relative). Use the project build.\n"
                     return
                 }
-                command = "cd \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.guestRoot)) && \(built)"
+                let current = compileToken(for: relative, command: built, headers: projectHeaderStamp())
+                if compilerConfiguration.incrementalBuild, compiledSources[relative] == current {
+                    individualResults[relative] = RunRecord(label: item.title, seconds: 0, succeeded: true, cached: true)
+                    console += "\(relative) is unchanged since it last compiled; reusing its object (Settings \u{2192} Compiler \u{2192} Incremental build turns this off).\n"
+                    setProgress(step: 2)
+                    return
+                }
+                token = current
+                command = built
             case .makeTarget(let target):
                 let flags = compilerConfiguration.theosMakeFlags.trimmingCharacters(in: .whitespacesAndNewlines)
-                command = "cd \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.guestRoot)) && make \(target)"
+                command = inGuestProject("make \(target)")
                     + (flags.isEmpty ? "" : " " + flags)
             }
 
             setProgress(step: 1, detail: command)
             let started = Date()
             let result = await executeCommand(command, settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved))
-            if case .file(let relative) = item.kind {
-                individualResults[relative] = RunRecord(label: item.title,
-                                                        seconds: Date().timeIntervalSince(started),
-                                                        succeeded: result.succeeded)
+            if case .file(let relative) = item.kind, let token {
+                recordCompile(relative, label: item.title, token: token, result: result,
+                              seconds: Date().timeIntervalSince(started))
             }
             setProgress(step: 2)
         }
@@ -1239,24 +1321,38 @@ final class WorkspaceModel: ObservableObject {
             }
             setProgress(step: 1, detail: "Guest synchronised")
 
+            let incremental = compilerConfiguration.incrementalBuild
+            // Stamped once: it is a stat per header in the project, and it cannot
+            // change while the sweep runs.
+            let headers = projectHeaderStamp()
             for (index, relative) in sources.enumerated() {
-                guard let built = singleFileBuildCommand(for: relative) else {
+                guard let built = singleFileBuildCommandLine(for: relative) else {
                     console += "skipped \(relative): no single-file compile for that language.\n"
                     setProgress(step: index + 2, detail: "Skipped \(relative)")
                     continue
                 }
+                // Nothing changed, so nothing has to be compiled: the object the
+                // last successful run produced is still in the guest.
+                let token = compileToken(for: relative, command: built, headers: headers)
+                if incremental, compiledSources[relative] == token {
+                    individualResults[relative] = RunRecord(label: relative, seconds: 0, succeeded: true, cached: true)
+                    setProgress(step: index + 2, detail: "Unchanged: \(relative)")
+                    continue
+                }
                 setProgress(step: index + 2, detail: relative)
                 let started = Date()
-                let result = await executeCommand("cd \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.guestRoot)) && \(built)",
+                let result = await executeCommand(built,
                                                    settings: resolved,
                                                    timeoutOverride: resolvedBuildTimeout(resolved))
-                individualResults[relative] = RunRecord(label: relative,
-                                                        seconds: Date().timeIntervalSince(started),
-                                                        succeeded: result.succeeded)
+                recordCompile(relative, label: relative, token: token, result: result,
+                              seconds: Date().timeIntervalSince(started))
             }
             setProgress(step: sources.count + 1)
-            let failed = individualResults.filter { !$0.value.succeeded }.count
-            console += "Individual compile finished: \(sources.count - failed) ok, \(failed) failed.\n"
+            let failed = sources.filter { individualResults[$0]?.succeeded == false }.count
+            let reused = sources.filter { individualResults[$0]?.cached == true }.count
+            console += "Individual compile finished: \(sources.count - failed) ok, \(failed) failed"
+            if reused > 0 { console += ", \(reused) unchanged and reused" }
+            console += ".\n"
         }
     }
 

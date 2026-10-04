@@ -41,6 +41,13 @@ final class GuestWorkspaceSync: ObservableObject {
     /// Where a project lands inside the guest.
     static let guestRoot = "/workspace"
 
+    /// Where single-file builds keep their objects.
+    ///
+    /// Stable across builds and inside the guest, which is what lets an unchanged
+    /// file's object be reused instead of recompiled. Computed rather than stored
+    /// so it is reachable from the non-isolated naming helper below.
+    nonisolated static var objectDirectory: String { "/tmp/crossbuild-obj" }
+
     struct Item: Sendable {
         let relativePath: String
         let data: Data
@@ -284,6 +291,28 @@ final class GuestWorkspaceSync: ObservableObject {
             return true
         }
         return false
+    }
+
+    /// The object file a source compiles to.
+    ///
+    /// The name is derived from the whole relative path, not from the file's base
+    /// name. `/tmp/crossbuild-main.o` gave `src/main.c` and `lib/main.c` the same
+    /// object, so whichever compiled last won and the other's result was
+    /// attributed to a file that had never been built. The digest is of the path,
+    /// so the name is stable for a given source -- reused rather than rewritten.
+    nonisolated static func objectPath(for relativePath: String) -> String {
+        let stem = relativePath
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ".", with: "-")
+        let suffix = digest(Data(relativePath.utf8)).prefix(12)
+        return "\(objectDirectory)/\(stem)-\(suffix).o"
+    }
+
+    /// Digest of a path whose bytes are known to be current in the guest, or nil
+    /// when it has not been pushed. This is the identity of a source file's
+    /// contents, which is what a compile cache has to be keyed on.
+    func digest(for relativePath: String) -> String? {
+        pushedDigests[relativePath]
     }
 
     /// Content digest, used to decide whether a file has to travel at all.
