@@ -118,9 +118,9 @@ struct CompilerDashboardView: View {
 
                     GroupBox("Build Actions") {
                         HStack {
-                            action("Clean", "trash") { workspace.runCommand(workspace.cleanCommand(), settings: settings) }
+                            action("Clean", "trash") { workspace.runWorkflowCommand(workspace.cleanCommand(), settings: settings) }
                             action("Build", "hammer.fill") { workspace.runBuild(settings: settings) }
-                            action("Test", "checkmark.seal") { workspace.runCommand(workspace.testCommand(), settings: settings) }
+                            action("Test", "checkmark.seal") { workspace.runWorkflowCommand(workspace.testCommand(), settings: settings) }
                             action("Package", "shippingbox.fill") { Task { _ = await workspace.runPackage(settings: settings) } }
                         }
                     }

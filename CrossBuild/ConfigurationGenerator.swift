@@ -73,7 +73,11 @@ enum ConfigurationGenerator {
 
     @MainActor
     static func apply(_ generated: GeneratedProjectConfiguration, workspace: WorkspaceModel) {
-        workspace.selectedToolchain = generated.toolchain
+        // Same rule as detection: only take over the toolchain when the user has
+        // left auto-detection on.
+        if workspace.configuration.autoDetectToolchain {
+            workspace.selectedToolchain = generated.toolchain
+        }
         workspace.recommendedBuildCommand = generated.buildCommand
         workspace.compilerConfiguration.deploymentTarget = generated.deploymentTarget
         workspace.compilerConfiguration.architectures = generated.architectures

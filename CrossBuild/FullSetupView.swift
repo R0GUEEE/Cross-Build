@@ -66,6 +66,7 @@ struct FullSetupView: View {
                                 .foregroundStyle(statusColor(step.status))
                         }
                     }
+                    .disabled(step.output.isEmpty)
                     .buttonStyle(.plain)
                 }
 
@@ -89,6 +90,15 @@ struct FullSetupView: View {
             if !service.summary.isEmpty {
                 Section("Last Result") {
                     Text(service.summary)
+                    if !settings.setupCompletedAt.isEmpty {
+                        LabeledContent("Completed", value: settings.setupCompletedAt)
+                    }
+                }
+            } else if !settings.setupLastSummary.isEmpty {
+                // The summary was persisted on every run and then never shown, so
+                // the result of the last scan vanished on the next launch.
+                Section("Last Result") {
+                    Text(settings.setupLastSummary)
                     if !settings.setupCompletedAt.isEmpty {
                         LabeledContent("Completed", value: settings.setupCompletedAt)
                     }

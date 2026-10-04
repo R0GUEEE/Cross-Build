@@ -60,6 +60,10 @@ struct FileTreeOptions: Sendable {
 @MainActor
 final class FileManagerService: ObservableObject {
     @Published var roots: [WorkspaceFile] = []
+    /// True while the off-main tree walk is in flight. The navigator needs this
+    /// to tell "the tree has not been built yet" from "the workspace is empty",
+    /// which are otherwise the same picture: an empty list.
+    @Published private(set) var isLoadingTree = true
     @Published var selected: WorkspaceFile?
     @Published var recent: [WorkspaceFile] = []
     @Published var query = ""
@@ -237,10 +241,12 @@ final class FileManagerService: ObservableObject {
                                   favoritePaths: favoritePaths,
                                   workspaceRootPath: workspaceRoot.standardizedFileURL.path)
 
+        isLoadingTree = true
         reloadTask = Task { [weak self] in
             let built = await FileManagerService.buildTree(requests, options: options)
             guard !Task.isCancelled, let self else { return }
             self.roots = built
+            self.isLoadingTree = false
             self.refreshSelectedReference()
             // The visible tree changed, so previously computed content matches
             // may point at files that moved or disappeared.

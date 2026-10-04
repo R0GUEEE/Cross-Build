@@ -31,6 +31,23 @@ struct WorkspaceBrowserView: View {
                 }
             }
             if files.query.isEmpty {
+                if files.roots.isEmpty {
+                    Section {
+                        if files.isLoadingTree {
+                            HStack(spacing: 10) {
+                                ProgressView()
+                                Text("Building the file tree…").foregroundStyle(.secondary)
+                            }
+                        } else {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("No files yet").font(.headline)
+                                Text("Add a file with the button below, import from another app, or drop source into this folder from Files.app.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
                 if let projectRoot = files.roots.first {
                     Section("Project") {
                         OutlineGroup([projectRoot], children: \.children) { file in row(file) }

@@ -264,7 +264,12 @@ final class WorkspaceModel: ObservableObject {
         }
         let result = ProjectDetector.analyze(paths: projectPaths, fileContents: contents)
         analysis = result
-        selectedToolchain = result.primaryToolchain
+        // "Auto-detect toolchain" now does what it says. With it off, detection
+        // still analyses the project and reports what it found, but stops
+        // overriding the toolchain the user picked.
+        if configuration.autoDetectToolchain {
+            selectedToolchain = result.primaryToolchain
+        }
         let generated = ConfigurationGenerator.generate(from: result, files: scopedFiles, fileContents: contents)
         // "Generate project configuration automatically" gates the write now.
         // The summary is kept either way, because that is what the detection
@@ -729,6 +734,22 @@ final class WorkspaceModel: ObservableObject {
                 console = ""
             }
         }
+    }
+
+    /// Runs a clean/test command as part of the build workflow.
+    ///
+    /// These used `runCommand`, which applies the *command* timeout while Build
+    /// applies the *build* timeout -- so "Build timeout" silently governed only
+    /// one of the four buttons on the same row. They deliberately do not get the
+    /// build argument transforms (parallel jobs, verbose flags): those describe a
+    /// compilation, not a clean or a test run.
+    func runWorkflowCommand(_ command: String, settings: AppSettings? = nil) {
+        guard !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            console += "error: No command is configured for this action.\n"
+            return
+        }
+        let resolved = settings ?? appSettings
+        Task { _ = await executeCommand(command, settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved)) }
     }
 
     func runCommand(_ command: String, settings: AppSettings? = nil) {

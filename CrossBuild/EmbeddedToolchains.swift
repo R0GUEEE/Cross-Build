@@ -86,4 +86,18 @@ final class EmbeddedToolchainManager: ObservableObject {
         default: return .init(output:"",diagnostics:["No linked embedded engine for \(id)."],succeeded:false)
         }
     }
+
+    /// Whether this engine can execute the editor buffer as it stands.
+    ///
+    /// Clang cannot: it is a compiler front-end that takes a source path and an
+    /// output path, and its native payload is not linked, so "run the current
+    /// buffer" has nothing to act on. Offering the button there only ever
+    /// produced a diagnostic in `console`, which the Compiler tab never displays
+    /// -- a control whose only outcome was an invisible failure.
+    func runsBuffer(_ id: String) -> Bool {
+        switch id {
+        case javascript.id, logos.id, python.id: return available[id] != nil
+        default: return false
+        }
+    }
 }

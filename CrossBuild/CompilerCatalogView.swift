@@ -26,6 +26,16 @@ struct CompilerCatalogView: View {
                         }.padding(.vertical, 3)
                     }
                 }
+                if filtered.isEmpty {
+                    Section {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("No toolchains match").font(.headline)
+                            Text("Nothing in the catalogue matches the current search and category.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
                 ForEach(filtered) { item in
                     Button { selected = item } label: {
                         HStack(spacing: 12) {
@@ -101,7 +111,13 @@ struct CompilerCatalogDetailView: View {
                 if workspace.embeddedToolchains.isAvailable(item.id) {
                     Section("Embedded Engine") {
                         Label("Linked and available in this app build", systemImage: "checkmark.seal.fill")
-                        Button("Run Embedded Engine", systemImage: "play.fill") { workspace.runEmbedded(id: item.id) }
+                        if workspace.embeddedToolchains.runsBuffer(item.id) {
+                            Button("Run Embedded Engine", systemImage: "play.fill") { workspace.runEmbedded(id: item.id) }
+                        } else {
+                            Text("This engine compiles a file on disk rather than the editor buffer, so there is nothing to run from here.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
                 Section {
