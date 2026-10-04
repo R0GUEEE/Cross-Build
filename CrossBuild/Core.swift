@@ -764,7 +764,7 @@ final class WorkspaceModel: ObservableObject {
                     // Dropping this silently is what made "export FOO=bar" look
                     // like it had been set. Say it once per key, not per command.
                     if reportedEnvironmentKeys.insert(key).inserted {
-                        console += "Environment: "\(key)" is not a shell variable name, so it was not set.\n"
+                        console += "Environment: \(key) is not a shell variable name, so it was not set.\n"
                     }
                     continue
                 }
