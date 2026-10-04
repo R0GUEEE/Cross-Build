@@ -474,7 +474,6 @@ final class WorkspaceModel: ObservableObject {
         }
         let resolvedSettings = settings ?? appSettings
         let resolved = resolvedBackend(settings: resolvedSettings)
-        let mode = resolved.mode
         let backend = resolved.backend
         let localWorkingDirectory = configuration.workingDirectory.isEmpty ? (activeProjectRoot ?? files.workspaceRoot.path) : configuration.workingDirectory
         let workingDirectory = localWorkingDirectory
@@ -487,19 +486,19 @@ final class WorkspaceModel: ObservableObject {
         isExecuting = true
         executionStatus = "Running"
         var environment = resolvedSettings?.forwardEnvironment == false ? [:] : commandEnvironment()
-        if environment["PATH"] == nil {
-            environment["PATH"] = "/var/jb/usr/bin:/var/jb/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        }
+        // Commands run inside ios-linuxkit, so never inject host/jailbreak paths
+        // that cannot exist in the guest namespace.
+        environment["PATH"] = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         if resolvedSettings?.captureEnvironment == true && !environment.isEmpty {
             let summary = environment.keys.sorted().joined(separator: ", ")
             console += "env: \(summary)\n"
         }
-        let configuredShell = resolvedSettings?.shellPath.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Auto"
+        let configuredShell = resolvedSettings?.shellPath.trimmingCharacters(in: .whitespacesAndNewlines) ?? "/bin/sh"
         let request = CommandRequest(
             command: command,
             workingDirectory: workingDirectory,
             environment: environment,
-            shell: configuredShell == "Auto" || configuredShell.isEmpty ? nil : configuredShell,
+            shell: configuredShell.isEmpty ? "/bin/sh" : configuredShell,
             loginShell: resolvedSettings?.shellLogin ?? false,
             interactiveShell: resolvedSettings?.shellInteractive ?? false,
             initCommand: resolvedSettings?.shellInitCommand.trimmingCharacters(in: .whitespacesAndNewlines),
