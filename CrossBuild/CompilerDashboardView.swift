@@ -85,7 +85,7 @@ struct CompilerDashboardView: View {
                             LabeledContent("Integrated", value: "\(AppToolchainLibraries.all.count)")
                             ForEach(AppToolchainLibraries.all.prefix(6)) { lib in
                                 HStack {
-                                    Image(systemName: lib.requiresProcessBackend ? "link" : "checkmark.seal.fill")
+                                    Image(systemName: AppToolchainLibraries.scanBundle().first { $0.id == lib.id }?.present == true ? "checkmark.seal.fill" : "exclamationmark.triangle")
                                     VStack(alignment: .leading) {
                                         Text(lib.name).font(.subheadline.weight(.medium))
                                         Text("\(lib.module) • \(lib.availability.rawValue)").font(.caption2).foregroundStyle(.secondary)
