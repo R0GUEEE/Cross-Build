@@ -132,6 +132,8 @@ struct CompilerDashboardView: View {
 
                     GroupBox("Build Individual Items") {
                         VStack(alignment: .leading, spacing: 8) {
+                            BuildStatusBar(progress: workspace.runProgress, last: workspace.lastRun)
+                            Divider()
                             if buildItems.isEmpty {
                                 Text("Open a source file, or add a Makefile, to build something on its own.")
                                     .font(.caption).foregroundStyle(.secondary)
@@ -149,17 +151,25 @@ struct CompilerDashboardView: View {
                                                 Text(item.detail).font(.caption2).foregroundStyle(.secondary)
                                             }
                                             Spacer()
+                                            individualResult(item)
                                         }
                                     }
                                     .buttonStyle(.plain)
                                     .disabled(workspace.isExecuting)
                                 }
                             }
-                            Button("Copy Workspace into Guest", systemImage: "arrow.down.to.line") {
-                                workspace.syncWorkspaceToGuest(settings: settings)
+                            HStack {
+                                Button("Compile All Sources", systemImage: "square.stack.3d.down.right") {
+                                    workspace.compileAllIndividualSources(settings: settings)
+                                }
+                                .font(.caption)
+                                .disabled(workspace.isExecuting)
+                                Button("Copy Workspace into Guest", systemImage: "arrow.down.to.line") {
+                                    workspace.syncWorkspaceToGuest(settings: settings)
+                                }
+                                .font(.caption)
+                                .disabled(workspace.isExecuting)
                             }
-                            .font(.caption)
-                            .disabled(workspace.isExecuting)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -172,6 +182,21 @@ struct CompilerDashboardView: View {
             .sheet(isPresented: $showConfiguration) {
                 NavigationStack { CompilerConfigurationView(config: workspace.compilerConfiguration) }
             }
+        }
+    }
+
+    /// The last result for one item, so the list says which files compile rather
+    /// than only offering a button that may already have failed.
+    @ViewBuilder
+    private func individualResult(_ item: WorkspaceModel.IndividualBuildItem) -> some View {
+        if case .file(let relative) = item.kind, let record = workspace.individualResults[relative] {
+            HStack(spacing: 4) {
+                Image(systemName: record.succeeded ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    .foregroundStyle(record.succeeded ? .green : .red)
+                Text(RunProgressBar.clock(record.seconds)).monospacedDigit()
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
         }
     }
 

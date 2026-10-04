@@ -116,7 +116,21 @@ final class WorkspaceModel: ObservableObject {
         var currentStep: Int { min(step + 1, max(1, stepCount)) }
     }
 
+    /// What the last run was, kept after it finishes. `RunProgress` is cleared
+    /// when a run ends, so without this the status bar could only ever say "not
+    /// running" -- there was no way to see how long the build that just finished
+    /// actually took.
+    struct RunRecord: Equatable {
+        var label: String = ""
+        var seconds: TimeInterval = 0
+        var succeeded = true
+    }
+
     @Published private(set) var runProgress = RunProgress()
+    @Published private(set) var lastRun = RunRecord()
+    /// Per-file results for individual compiles, keyed by path relative to the
+    /// project root, so a file can show whether it last compiled.
+    @Published private(set) var individualResults: [String: RunRecord] = [:]
     /// Nesting depth, so a workflow that announced its own steps is not
     /// overwritten by the individual commands it runs.
     private var progressDepth = 0
@@ -559,6 +573,11 @@ final class WorkspaceModel: ObservableObject {
     func endProgress() {
         progressDepth = max(0, progressDepth - 1)
         guard progressDepth == 0 else { return }
+        if runProgress.isRunning {
+            lastRun = RunRecord(label: runProgress.label,
+                                seconds: runProgress.elapsed,
+                                succeeded: (lastExitCode ?? 0) == 0)
+        }
         runProgress = RunProgress()
     }
 
@@ -1037,6 +1056,7 @@ final class WorkspaceModel: ObservableObject {
         case "zig": return "zig build-obj \(quote(path)) -femit-bin=\(quote(object))"
         case "py": return "python3 -m py_compile \(quote(path))"
         case "js", "ts": return "node --check \(quote(path))"
+        case "h", "hpp", "hh": return "clang\(extra) -fsyntax-only \(quote(path))"
         default: return nil
         }
     }
@@ -1109,8 +1129,66 @@ final class WorkspaceModel: ObservableObject {
             }
 
             setProgress(step: 1, detail: command)
-            _ = await executeCommand(command, settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved))
+            let started = Date()
+            let result = await executeCommand(command, settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved))
+            if case .file(let relative) = item.kind {
+                individualResults[relative] = RunRecord(label: item.title,
+                                                        seconds: Date().timeIntervalSince(started),
+                                                        succeeded: result.succeeded)
+            }
             setProgress(step: 2)
+        }
+    }
+
+    /// Compiles every source file in the project, one after another.
+    ///
+    /// The guest is synchronised once for the whole run rather than per file: the
+    /// copy is the slow part, and doing it repeatedly is what would make a
+    /// per-file sweep pointless.
+    func compileAllIndividualSources(settings: AppSettings? = nil) {
+        let resolved = settings ?? appSettings
+        guard !isExecuting else {
+            console += "error: Another command is already running.\n"
+            return
+        }
+        let sources = individualSourceFiles().map { relativePath($0.path) }
+        guard !sources.isEmpty else {
+            console += "No source files found in the active project.\n"
+            return
+        }
+        let root = activeProjectRoot ?? files.workspaceRoot.path
+
+        Task {
+            beginProgress(label: "Compile \(sources.count) source(s)", detail: "Copying into the guest", stepCount: sources.count + 1)
+            defer { endProgress() }
+
+            let synced = await guestSync.push(projectSyncItems(under: root), session: .shared)
+            if !synced.output.isEmpty { console += synced.output }
+            console += "Guest sync: \(guestSync.lastSummary)\n"
+            guard synced.pushed > 0 else {
+                console += "error: nothing reached the guest, so there is nothing to compile.\n"
+                return
+            }
+            setProgress(step: 1, detail: "Guest synchronised")
+
+            for (index, relative) in sources.enumerated() {
+                guard let built = singleFileBuildCommand(for: relative) else {
+                    console += "skipped \(relative): no single-file compile for that language.\n"
+                    setProgress(step: index + 2, detail: "Skipped \(relative)")
+                    continue
+                }
+                setProgress(step: index + 2, detail: relative)
+                let started = Date()
+                let result = await executeCommand("cd \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.guestRoot)) && \(built)",
+                                                   settings: resolved,
+                                                   timeoutOverride: resolvedBuildTimeout(resolved))
+                individualResults[relative] = RunRecord(label: relative,
+                                                        seconds: Date().timeIntervalSince(started),
+                                                        succeeded: result.succeeded)
+            }
+            setProgress(step: sources.count + 1)
+            let failed = individualResults.filter { !$0.value.succeeded }.count
+            console += "Individual compile finished: \(sources.count - failed) ok, \(failed) failed.\n"
         }
     }
 

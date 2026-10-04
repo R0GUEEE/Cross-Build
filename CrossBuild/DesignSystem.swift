@@ -90,6 +90,41 @@ struct RunProgressBar: View {
     }
 }
 
+/// The build timer, in one place: what is running and for how long, or what ran
+/// last and how long it took. A run that has finished still has a duration worth
+/// seeing, which is why this reads both the live progress and the last record.
+struct BuildStatusBar: View {
+    let progress: WorkspaceModel.RunProgress
+    let last: WorkspaceModel.RunRecord
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if progress.isRunning {
+                ProgressView().controlSize(.small)
+                Text(progress.label).fontWeight(.medium).lineLimit(1)
+                if progress.stepCount > 1 {
+                    Text("step \(progress.currentStep)/\(progress.stepCount)")
+                        .foregroundStyle(.secondary)
+                }
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    Text(RunProgressBar.clock(progress.elapsed))
+                        .monospacedDigit()
+                        .fontWeight(.medium)
+                }
+            } else if !last.label.isEmpty {
+                Label(last.succeeded ? "ok" : "failed",
+                      systemImage: last.succeeded ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    .foregroundStyle(last.succeeded ? .green : .red)
+                Text(last.label).lineLimit(1)
+                Text(RunProgressBar.clock(last.seconds)).monospacedDigit()
+            } else {
+                Text("No build has run yet").foregroundStyle(.tertiary)
+            }
+        }
+        .font(.caption2)
+    }
+}
+
 struct ForgeCard<Content: View>: View {
     let title:String
     var subtitle:String? = nil

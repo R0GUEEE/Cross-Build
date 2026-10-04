@@ -310,6 +310,12 @@ struct IDEView: View {
                 if let candidate = analysis.candidates.first {
                     Text(candidate.command).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
                 }
+                // The same build timer as the editor status bar, so the strip above
+                // the code and the strip below it never disagree about a run.
+                if workspace.runProgress.isRunning || !workspace.lastRun.label.isEmpty {
+                    Divider().frame(height: 12)
+                    BuildStatusBar(progress: workspace.runProgress, last: workspace.lastRun)
+                }
             }.padding(.horizontal, 10).padding(.vertical, 6).background(.secondary.opacity(0.04))
         }
     }
@@ -393,6 +399,8 @@ struct IDEView: View {
 
     private var editorStatusBar: some View {
         HStack(spacing: 14) {
+            BuildStatusBar(progress: workspace.runProgress, last: workspace.lastRun)
+            Divider().frame(height: 12)
             Text("Ln \(editorSelection.line), Col \(editorSelection.column)")
             if editorSelection.selectedLength > 0 { Text("\(editorSelection.selectedLength) selected") }
             Spacer()
