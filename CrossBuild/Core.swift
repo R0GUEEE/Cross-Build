@@ -120,6 +120,9 @@ final class WorkspaceModel: ObservableObject {
     /// Nesting depth, so a workflow that announced its own steps is not
     /// overwritten by the individual commands it runs.
     private var progressDepth = 0
+    /// Keys already reported as unusable, so the note is printed once rather than
+    /// on every command.
+    private var reportedEnvironmentKeys = Set<String>()
 
     @Published var generatedConfigurationSummary: [String] = []
     @Published var activeProjectRoot: String?
@@ -425,14 +428,14 @@ final class WorkspaceModel: ObservableObject {
 
     func buildCommand() -> String {
         if let custom = activeCompiler, !custom.buildCommand.isEmpty { return custom.buildCommand }
-        if let recommendedBuildCommand, !recommendedBuildCommand.isEmpty { return recommendedBuildCommand }
-        return ToolchainRegistry.providers.first { $0.kind == selectedToolchain }?.buildCommands.first ?? "make"
+        if let recommendedBuildCommand, !recommendedBuildCommand.isEmpty { return applyingMakeFlags(recommendedBuildCommand) }
+        return applyingMakeFlags(ToolchainRegistry.providers.first { $0.kind == selectedToolchain }?.buildCommands.first ?? "make")
     }
 
     func cleanCommand() -> String {
         if let custom = activeCompiler, !custom.cleanCommand.isEmpty { return appendActionArguments(custom.cleanCommand, configuration.cleanArguments) }
         switch selectedToolchain {
-        case .theos, .custom, .clang: return appendActionArguments("make clean", configuration.cleanArguments)
+        case .theos, .custom, .clang: return applyingMakeFlags(appendActionArguments("make clean", configuration.cleanArguments))
         case .swift: return appendActionArguments("swift package clean", configuration.cleanArguments)
         case .rust: return appendActionArguments("cargo clean", configuration.cleanArguments)
         case .go: return appendActionArguments("go clean", configuration.cleanArguments)
@@ -445,7 +448,7 @@ final class WorkspaceModel: ObservableObject {
     func testCommand() -> String {
         if let custom = activeCompiler, !custom.testCommand.isEmpty { return appendActionArguments(custom.testCommand, configuration.testArguments) }
         switch selectedToolchain {
-        case .theos: return appendActionArguments("make", configuration.testArguments)
+        case .theos: return applyingMakeFlags(appendActionArguments("make", configuration.testArguments))
         case .swift: return appendActionArguments("swift test", configuration.testArguments)
         case .rust: return appendActionArguments("cargo test", configuration.testArguments)
         case .go: return appendActionArguments("go test ./...", configuration.testArguments)
@@ -459,20 +462,31 @@ final class WorkspaceModel: ObservableObject {
     func packageCommand() -> String {
         if let custom = activeCompiler, !custom.packageCommand.isEmpty { return appendActionArguments(custom.packageCommand, configuration.packageArguments) }
         switch selectedToolchain {
-        case .theos: return appendActionArguments("make package", configuration.packageArguments)
+        case .theos: return applyingMakeFlags(appendActionArguments("make package", configuration.packageArguments))
         case .swift: return appendActionArguments("swift build -c release", configuration.packageArguments)
         case .rust: return appendActionArguments("cargo build --release", configuration.packageArguments)
         case .go: return appendActionArguments("go build -trimpath ./...", configuration.packageArguments)
         case .zig: return appendActionArguments("zig build -Doptimize=ReleaseSafe", configuration.packageArguments)
         case .python: return appendActionArguments("python3 -m build", configuration.packageArguments)
         case .javascript: return appendActionArguments("npm pack", configuration.packageArguments)
-        case .clang, .custom: return appendActionArguments("make package", configuration.packageArguments)
+        case .clang, .custom: return applyingMakeFlags(appendActionArguments("make package", configuration.packageArguments))
         }
     }
 
     private func appendActionArguments(_ command: String, _ arguments: String) -> String {
         let extra = arguments.trimmingCharacters(in: .whitespacesAndNewlines)
         return extra.isEmpty ? command : command + " " + extra
+    }
+
+    /// "Additional make flags" belong on the make command line.
+    ///
+    /// They used to be exported as CROSSBUILD_THEOS_MAKE_FLAGS, a name nothing in
+    /// the app or in the guest reads, so typing `messages=yes` there did nothing
+    /// at all.
+    private func applyingMakeFlags(_ command: String) -> String {
+        let flags = compilerConfiguration.theosMakeFlags.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !flags.isEmpty, command.hasPrefix("make") else { return command }
+        return command + " " + flags
     }
 
     func runEmbedded(id: String, source: String? = nil) {
@@ -687,15 +701,74 @@ final class WorkspaceModel: ObservableObject {
         return settings.buildTimeout > 0 ? settings.buildTimeout : settings.commandTimeout
     }
 
+    // MARK: - Option field parsing
+
+    /// Splits a free-text option field the way its help text promises: one entry
+    /// per line, or comma separated. `#` starts a comment and blank entries are
+    /// dropped. Space separates only the fields whose entries cannot contain one
+    /// (define, undefine and library names) -- never paths, which often do.
+    private func optionTokens(_ text: String, spaceSeparated: Bool) -> [String] {
+        text.components(separatedBy: .newlines)
+            .flatMap { $0.components(separatedBy: ",") }
+            .map { line -> String in
+                guard let hash = line.firstIndex(of: "#") else { return line }
+                return String(line[..<hash])
+            }
+            .flatMap { piece -> [String] in
+                let trimmed = piece.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return [] }
+                guard spaceSeparated else { return [trimmed] }
+                return trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+            }
+    }
+
+    /// Accepts the flag as well as the bare value. These fields are labelled with
+    /// the flag they add, so people type it; prepending it blindly produced
+    /// `-I-I/usr/include` and `-l-lm`.
+    private func strippingOptionPrefix(_ token: String, prefixes: [String]) -> String {
+        for prefix in prefixes where token.hasPrefix(prefix) {
+            let rest = token.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
+            if !rest.isEmpty { return rest }
+        }
+        return token
+    }
+
+    /// A path ends up in CFLAGS/LDFLAGS, which the build tool word-splits again,
+    /// so one containing a space has to be quoted or it arrives as two flags.
+    private func quotedOptionValue(_ value: String) -> String {
+        value.contains(" ") ? "\"\(value)\"" : value
+    }
+
+    /// A shell variable name: letters, digits and underscores, not leading digit.
+    private static func isValidEnvironmentKey(_ key: String) -> Bool {
+        guard let first = key.first, first.isLetter || first == "_" else { return false }
+        return key.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
+    }
+
     private func commandEnvironment() -> [String: String] {
         var environment: [String: String] = [:]
         for source in [configuration.environmentVariables, compilerConfiguration.environment] {
-            for line in source.components(separatedBy: .newlines) {
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty, let separator = trimmed.firstIndex(of: "=") else { continue }
-                let key = String(trimmed[..<separator]).trimmingCharacters(in: .whitespaces)
-                let value = String(trimmed[trimmed.index(after: separator)...]).trimmingCharacters(in: .whitespaces)
-                if !key.isEmpty { environment[key] = value }
+            for rawLine in source.components(separatedBy: .newlines) {
+                var line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !line.isEmpty, !line.hasPrefix("#") else { continue }
+                // People paste shell assignments, so accept the shell's spelling
+                // rather than turning it into a variable named "export FOO".
+                if line.hasPrefix("export ") {
+                    line = String(line.dropFirst("export ".count))
+                }
+                guard let separator = line.firstIndex(of: "=") else { continue }
+                let key = String(line[..<separator]).trimmingCharacters(in: .whitespaces)
+                let value = String(line[line.index(after: separator)...]).trimmingCharacters(in: .whitespaces)
+                guard !key.isEmpty else { continue }
+                guard Self.isValidEnvironmentKey(key) else {
+                    // Dropping this silently is what made "export FOO=bar" look
+                    // like it had been set. Say it once per key, not per command.
+                    if reportedEnvironmentKeys.insert(key).inserted {
+                        console += "Environment: "\(key)" is not a shell variable name, so it was not set.\n"
+                    }
+                    continue
+                }
+                environment[key] = value
             }
         }
         let workspaceSDK = configuration.sdkPath.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -723,34 +796,39 @@ final class WorkspaceModel: ObservableObject {
         let compilerFlags = compilerConfiguration.compilerFlags.trimmingCharacters(in: .whitespacesAndNewlines)
         if !compilerFlags.isEmpty { cFlags.append(compilerFlags) }
         if compilerConfiguration.languageStandard != "Default" { cFlags.append("-std=\(compilerConfiguration.languageStandard)") }
-        if compilerConfiguration.cppStandard != "Default" { environment["CXXFLAGS"] = "-std=\(compilerConfiguration.cppStandard)" }
+        // CXXFLAGS is assembled below from the same flags; make's implicit C++
+        // rule reads $(CXXFLAGS), not $(CFLAGS).
         if compilerConfiguration.positionIndependentCode { cFlags.append("-fPIC") }
         if compilerConfiguration.clangModules { cFlags.append("-fmodules") }
         if !compilerConfiguration.objcARC { cFlags.append("-fno-objc-arc") }
         if compilerConfiguration.linkTimeOptimization { cFlags.append("-flto") }
         if compilerConfiguration.bitcode { cFlags.append("-fembed-bitcode") }
         if compilerConfiguration.reproducibleBuild {
-            cFlags.append(contentsOf: ["-Xclang", "-fdebug-compilation-dir=.", "-ffile-prefix-map=\(configuration.workingDirectory)=."])
+            // The override is usually empty, and an empty prefix produced the
+            // malformed `-ffile-prefix-map=.= .`. Fall back to the project root.
+            let override = configuration.workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+            let mapRoot = override.isEmpty ? (activeProjectRoot ?? files.workspaceRoot.path) : override
+            cFlags.append(contentsOf: ["-Xclang", "-fdebug-compilation-dir=.", "-ffile-prefix-map=\(mapRoot)=."])
         }
         let minimumOS = compilerConfiguration.minimumOS.trimmingCharacters(in: .whitespacesAndNewlines)
         if !minimumOS.isEmpty { cFlags.append("-mios-version-min=\(minimumOS)") }
-        let defines = compilerConfiguration.defines
-            .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "," })
-            .map(String.init)
+        // Define names cannot contain a space, so this field keeps the
+        // space-separated spelling. The flag prefix is now accepted instead of
+        // doubled, comments are honoured, and entries are trimmed -- a stray \r
+        // from the keyboard used to end up inside the flag.
+        let defines = optionTokens(compilerConfiguration.defines, spaceSeparated: true)
+            .map { strippingOptionPrefix($0, prefixes: ["-D"]) }
         cFlags.append(contentsOf: defines.map { "-D\($0)" })
-        let includes = compilerConfiguration.includePaths
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        cFlags.append(contentsOf: includes.map { "-I\($0)" })
-        let systemIncludes = compilerConfiguration.systemIncludePaths
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        cFlags.append(contentsOf: systemIncludes.map { "-isystem \($0)" })
-        let undefines = compilerConfiguration.undefines
-            .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "," })
-            .map(String.init)
+        // Paths may contain spaces, so these are one per line (or comma separated)
+        // and are quoted on the way into CFLAGS, which gets word-split again.
+        let includes = optionTokens(compilerConfiguration.includePaths, spaceSeparated: false)
+            .map { strippingOptionPrefix($0, prefixes: ["-I"]) }
+        cFlags.append(contentsOf: includes.map { "-I\(quotedOptionValue($0))" })
+        let systemIncludes = optionTokens(compilerConfiguration.systemIncludePaths, spaceSeparated: false)
+            .map { strippingOptionPrefix($0, prefixes: ["-isystem", "-I"]) }
+        cFlags.append(contentsOf: systemIncludes.map { "-isystem \(quotedOptionValue($0))" })
+        let undefines = optionTokens(compilerConfiguration.undefines, spaceSeparated: true)
+            .map { strippingOptionPrefix($0, prefixes: ["-U"]) }
         cFlags.append(contentsOf: undefines.map { "-U\($0)" })
         switch compilerConfiguration.optimization {
         case "Release": cFlags.append("-O2")
@@ -759,28 +837,30 @@ final class WorkspaceModel: ObservableObject {
         }
         if compilerConfiguration.debugSymbols { cFlags.append("-g") }
         if !cFlags.isEmpty { environment["CFLAGS"] = cFlags.joined(separator: " ") }
+        // make's implicit C++ rule uses $(CXXFLAGS), not $(CFLAGS), so every
+        // option accumulated above was invisible to .cpp/.mm sources.
+        var cxxFlags = cFlags
+        if compilerConfiguration.cppStandard != "Default" {
+            cxxFlags.append("-std=\(compilerConfiguration.cppStandard)")
+        }
+        if !cxxFlags.isEmpty { environment["CXXFLAGS"] = cxxFlags.joined(separator: " ") }
 
         var ldFlags: [String] = []
         let explicitLinker = compilerConfiguration.linkerFlags.trimmingCharacters(in: .whitespacesAndNewlines)
         if !explicitLinker.isEmpty { ldFlags.append(explicitLinker) }
-        let libraryPaths = compilerConfiguration.libraryPaths
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        ldFlags.append(contentsOf: libraryPaths.map { "-L\($0)" })
-        let frameworkPaths = compilerConfiguration.frameworkSearchPaths
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        ldFlags.append(contentsOf: frameworkPaths.map { "-F\($0)" })
-        let libraries = compilerConfiguration.libraries
-            .split(whereSeparator: { $0 == "," || $0 == "\n" || $0 == " " })
-            .map(String.init)
+        let libraryPaths = optionTokens(compilerConfiguration.libraryPaths, spaceSeparated: false)
+            .map { strippingOptionPrefix($0, prefixes: ["-L"]) }
+        ldFlags.append(contentsOf: libraryPaths.map { "-L\(quotedOptionValue($0))" })
+        let frameworkPaths = optionTokens(compilerConfiguration.frameworkSearchPaths, spaceSeparated: false)
+            .map { strippingOptionPrefix($0, prefixes: ["-F"]) }
+        ldFlags.append(contentsOf: frameworkPaths.map { "-F\(quotedOptionValue($0))" })
+        // "lib" as well as "-l": the field is labelled "-lname" and people write
+        // both, and a leading "lib" produced "-llibfoo".
+        let libraries = optionTokens(compilerConfiguration.libraries, spaceSeparated: true)
+            .map { strippingOptionPrefix($0, prefixes: ["-l", "lib"]) }
         ldFlags.append(contentsOf: libraries.map { "-l\($0)" })
-        let frameworks = compilerConfiguration.frameworks
-            .split(whereSeparator: { $0 == "," || $0 == "\n" })
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+        let frameworks = optionTokens(compilerConfiguration.frameworks, spaceSeparated: false)
+            .map { strippingOptionPrefix($0, prefixes: ["-framework"]) }
         ldFlags.append(contentsOf: frameworks.map { "-framework \($0)" })
         if compilerConfiguration.stripSymbols { ldFlags.append("-Wl,-S") }
         if compilerConfiguration.deadStrip { ldFlags.append("-Wl,-dead_strip") }
