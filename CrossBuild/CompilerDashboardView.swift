@@ -101,7 +101,7 @@ struct CompilerDashboardView: View {
                     }
 
                     GroupBox("Execution Backend") {
-                        let backend = ExecutionBackendFactory.make(mode: settings.executionBackend, settings: settings)
+                        let backend = ExecutionBackendFactory.make(mode: "Embedded Runtime", settings: settings)
                         VStack(alignment: .leading, spacing: 8) {
                             LabeledContent("Backend", value: backend.name)
                             LabeledContent("Status", value: workspace.executionStatus)
