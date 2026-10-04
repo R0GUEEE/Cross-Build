@@ -176,9 +176,9 @@ final class LinuxGuestSession: ObservableObject {
         }
         queue = Task { _ = await task.value }
         var result = await task.value
-        if let init = pendingInitOutput {
+        if let setupOutput = pendingInitOutput {
             pendingInitOutput = nil
-            result.1 = result.1.isEmpty ? init : init + "\n" + result.1
+            result.1 = result.1.isEmpty ? setupOutput : setupOutput + "\n" + result.1
         }
         return result
     }
