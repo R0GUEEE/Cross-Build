@@ -250,20 +250,22 @@ struct CodeEditorView: UIViewRepresentable {
         /// an unmatched one is left alone rather than guessed at.
         private func highlightMatchingBracket(in text: NSMutableAttributedString) {
             guard let textView = container?.textView else { return }
-            let text = textView.text as NSString
-            guard text.length > 0 else { return }
+            // Not named `text`: that is the attributed string being painted, and
+            // shadowing it here made every addAttributes call go to the NSString.
+            let content = textView.text as NSString
+            guard content.length > 0 else { return }
 
             let opens = Array("([{".utf16)
             let closes = Array(")]}".utf16)
-            let caret = min(max(0, textView.selectedRange.location), text.length)
+            let caret = min(max(0, textView.selectedRange.location), content.length)
 
             // The bracket just before the caret, else the one under it.
             var candidates: [Int] = []
             if caret > 0 { candidates.append(caret - 1) }
-            if caret < text.length { candidates.append(caret) }
+            if caret < content.length { candidates.append(caret) }
 
             for index in candidates {
-                let character = text.character(at: index)
+                let character = content.character(at: index)
                 let isOpen = opens.firstIndex(of: character)
                 let isClose = closes.firstIndex(of: character)
                 guard let side = isOpen ?? isClose else { continue }
@@ -272,8 +274,8 @@ struct CodeEditorView: UIViewRepresentable {
                 let step = opening ? 1 : -1
                 var depth = 0
                 var cursor = index
-                while cursor >= 0, cursor < text.length {
-                    let current = text.character(at: cursor)
+                while cursor >= 0, cursor < content.length {
+                    let current = content.character(at: cursor)
                     if current == character {
                         depth += 1
                     } else if current == target {
