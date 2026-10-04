@@ -13,13 +13,17 @@ extern "C" {
 //   <bundle>/python/lib/python3.X[/lib-dynload]   PYTHONHOME + PYTHONPATH
 //   <bundle>/app                                  PYTHONPATH for user code
 
-// Initialise the interpreter. Safe to call more than once. Returns 0 on success.
+// Initialise the interpreter. Safe to call more than once. Returns 0 on success,
+// 2/3 for a configuration or initialisation failure, and 4 if the interpreter has
+// already been finalized (CPython cannot be re-initialised after Py_FinalizeEx).
 int32_t cbpy_start(const char *pythonHome, const char *pythonPath);
 int32_t cbpy_is_started(void);
 
 // Run a Python source string. On success returns 0 and sets *outStdout/*outStderr
-// to malloc'd NUL-terminated UTF-8 (never NULL on return). A non-zero result means
-// the interpreter raised or could not run the code; the traceback is in *outStderr.
+// to malloc'd NUL-terminated UTF-8 (NULL only if allocation itself failed). A
+// non-zero result means the snippet raised or could not be run at all; the
+// traceback is in *outStderr. Text in *outStderr is NOT by itself a failure:
+// a successful snippet may write to stderr.
 int32_t cbpy_run(const char *source, char **outStdout, char **outStderr);
 
 // Release a string returned by cbpy_run.

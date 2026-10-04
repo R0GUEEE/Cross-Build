@@ -50,7 +50,7 @@ struct AppConfigurationView: View {
                 Toggle("Persistent terminal session", isOn: $settings.terminalPersistentSession)
                 TextField("Initialization command", text: $settings.shellInitCommand, axis: .vertical)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
-                Text("Shell paths are resolved inside the bundled Linux root. Host and jailbreak /var/jb shell options were removed.")
+                Text("Shell paths are resolved inside the bundled Linux root; host and jailbreak /var/jb options were removed. sh runs in the persistent guest shell, so directory and variable changes carry over; any other shell runs each command as a child of sh and does not.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 

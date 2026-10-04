@@ -44,9 +44,12 @@ struct PythonEmbeddedEngine: EmbeddedToolchainEngine {
         if let stdoutPointer { cbpy_free(stdoutPointer) }
         if let stderrPointer { cbpy_free(stderrPointer) }
 
+        // `code` already says whether the snippet raised. Re-testing the stderr
+        // text here marked a successful run failed whenever the script wrote to
+        // stderr -- a warning, or print(..., file=sys.stderr).
         var diagnostics: [String] = []
         if !errorText.isEmpty { diagnostics.append(errorText) }
-        return .init(output: output, diagnostics: diagnostics, succeeded: code == 0 && errorText.isEmpty)
+        return .init(output: output, diagnostics: diagnostics, succeeded: code == 0)
         #else
         return .init(output: "", diagnostics: ["Python was not linked into this app build."], succeeded: false)
         #endif

@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <stdarg.h>
+#include <time.h>
 
 // The engine's own entry point. xX_main_Xx.h defines xX_main_Xx() as a
 // static inline and wires up the guest's argv/rootfs; main.c in the upstream
@@ -465,6 +466,22 @@ static int scratch_append(const char *text, size_t length) {
     return 0;
 }
 
+// Monotonic milliseconds from an arbitrary origin.
+//
+// This exists because the read loop below used to advance its own budget by
+// 100ms per poll iteration instead of reading a clock. That is not a clock: a
+// guest that produced output continuously still "spent" 100ms for every 4 KB
+// read, so the loop could move at most 4096 bytes per 100ms of budget -- about
+// 40 KB/s. A command whose output exceeded timeoutMs * 40 KB came back as exit
+// 124 with the remainder of its output still queued in the pipe, where the next
+// command then read it as its own. A real deadline measures the time that
+// actually passed, so output is bounded by the timeout and nothing else.
+static int64_t cblk_monotonic_ms(void) {
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) { return 0; }
+    return (int64_t)now.tv_sec * 1000 + (int64_t)(now.tv_nsec / 1000000);
+}
+
 int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombined) {
     if (outCombined != NULL) { *outCombined = NULL; }
     if (!g_session_running) {
@@ -498,19 +515,38 @@ int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombi
     // through a freed pointer.
     g_session_scratch_capacity = 0;
 
-    // Read until the sentinel appears or the deadline passes.
+    // Read until the sentinel appears or the deadline passes. The deadline is
+    // read from the monotonic clock (see cblk_monotonic_ms), never inferred from
+    // the number of iterations.
     char chunk[4096];
     int found = 0;
-    int elapsedMs = 0;
-    while (elapsedMs < timeoutMs) {
+    int guest_gone = 0;
+    int64_t deadline = cblk_monotonic_ms() + (int64_t)timeoutMs;
+    for (;;) {
+        int64_t remaining = deadline - cblk_monotonic_ms();
+        if (remaining <= 0) { break; }
+        if (remaining > 100) { remaining = 100; }
         struct pollfd pfd;
         pfd.fd = g_session_out;
         pfd.events = POLLIN;
-        int ready = poll(&pfd, 1, 100);
-        elapsedMs += 100;
-        if (ready <= 0) { continue; }
+        int ready = poll(&pfd, 1, (int)remaining);
+        if (ready < 0) {
+            if (errno == EINTR) { continue; }
+            break;
+        }
+        if (ready == 0) { continue; }
         ssize_t got = read(g_session_out, chunk, sizeof(chunk));
-        if (got <= 0) { break; }
+        if (got == 0) {
+            // EOF, not a timeout: the shell that reads commands is gone (a
+            // command ran `exit`, or the guest died). Distinct from an empty
+            // read on a live pipe, which poll() never reports as readable.
+            guest_gone = 1;
+            break;
+        }
+        if (got < 0) {
+            if (errno == EINTR) { continue; }
+            break;
+        }
         if (scratch_append(chunk, (size_t)got) != 0) { break; }
         if (strstr(g_session_scratch, marker) != NULL) { found = 1; break; }
     }
@@ -524,6 +560,33 @@ int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombi
         while (len > 0 && (g_session_scratch[len - 1] == '\n' || g_session_scratch[len - 1] == '\r')) {
             g_session_scratch[--len] = '\0';
         }
+    }
+    if (guest_gone) {
+        // The session is over: stop claiming to be running, drop the pipe ends,
+        // and hand the caller an owned string (negative return code => the
+        // caller frees it, per the ownership rule in cblk_session_start).
+        // Reporting 124 instead would make the app spend the full timeout on
+        // this command and on every command after it, then blame a timeout.
+        g_session_running = 0;
+        if (g_session_in >= 0) { close(g_session_in); g_session_in = -1; }
+        if (g_session_out >= 0) { close(g_session_out); g_session_out = -1; }
+        restore_stdio();
+        const char *note = "The embedded Linux shell exited, so the guest can no longer run commands. Relaunch Cross Build to start a new guest.";
+        if (outCombined != NULL) {
+            if (g_session_scratch != NULL && g_session_scratch[0] != '\0') {
+                size_t needed = strlen(g_session_scratch) + strlen(note) + 4;
+                char *combined = (char *)malloc(needed);
+                if (combined != NULL) {
+                    snprintf(combined, needed, "%s\n%s", g_session_scratch, note);
+                    *outCombined = combined;
+                } else {
+                    *outCombined = cblk_strdup(note);
+                }
+            } else {
+                *outCombined = cblk_strdup(note);
+            }
+        }
+        return -3;
     }
     if (outCombined != NULL) {
         *outCombined = g_session_scratch != NULL ? g_session_scratch : cblk_strdup("");

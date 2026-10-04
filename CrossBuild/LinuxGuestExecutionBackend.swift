@@ -44,7 +44,21 @@ struct LinuxGuestExecutionBackend: ExecutionBackend {
         // Uses the shared session, so the root is booted once and stays up: every
         // command afterwards runs in the same guest, which is what makes this a
         // usable backend rather than a single command.
-        let result = await LinuxGuestSession.shared.run(request.command, timeout: timeout)
+        // Everything the caller configured about *how* to run this command now
+        // travels into the guest. Before this, only `request.command` did: the
+        // working directory, the environment (every Compiler -> Environment
+        // variable included), the shell, login/interactive mode and the
+        // initialization command were all built into CommandRequest and then
+        // dropped here, so those settings had no effect on anything.
+        let invocation = GuestShellInvocation(
+            executable: request.shell ?? "/bin/sh",
+            login: request.loginShell,
+            interactive: request.interactiveShell,
+            persistent: request.persistentSession,
+            workingDirectory: request.workingDirectory,
+            environment: request.environment
+        )
+        let result = await LinuxGuestSession.shared.run(request.command, timeout: timeout, invocation: invocation)
         guard result.code >= 0 else {
             return .init(exitCode: 125, stdout: "", stderr: result.output, duration: Date().timeIntervalSince(started))
         }

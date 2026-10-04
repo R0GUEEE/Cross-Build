@@ -24,6 +24,7 @@ struct CrossBuildApp: App {
                     // selected backend. Booting an emulated kernel takes real time,
                     // so doing it here rather than on the first command means the
                     // root is already up by the time anything asks to run.
+                    LinuxGuestSession.shared.configure(initCommand: settings.shellInitCommand)
                     await LinuxGuestSession.shared.startIfNeeded()
                 }
         }

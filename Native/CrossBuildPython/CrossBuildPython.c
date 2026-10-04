@@ -8,6 +8,10 @@
 // g_started guards against re-initialising (Py_InitializeFromConfig must run once)
 // and against running code before the interpreter exists.
 static int g_started = 0;
+// Set once the interpreter has been finalized. CPython does not support
+// re-initialisation after Py_FinalizeEx, so a later cbpy_start is refused
+// instead of pretending to succeed.
+static int g_finalized = 0;
 
 static char *cbpy_strdup(const char *text) {
     if (text == NULL) {
@@ -42,6 +46,9 @@ static char *cbpy_take_stringio(PyObject *globals, const char *name) {
 int32_t cbpy_start(const char *pythonHome, const char *pythonPath) {
     if (g_started) {
         return 0;
+    }
+    if (g_finalized) {
+        return 4;
     }
     if (pythonHome != NULL && pythonHome[0] != '\0') {
         setenv("PYTHONHOME", pythonHome, 1);
@@ -90,7 +97,17 @@ int32_t cbpy_run(const char *source, char **outStdout, char **outStderr) {
     // Called from whichever thread Swift hands us, so take the GIL.
     PyGILState_STATE gil = PyGILState_Ensure();
 
+    // PyImport_AddModule returns a borrowed reference and NULL on failure.
+    // PyModule_GetDict(NULL) dereferences the NULL type pointer, so testing only
+    // its result crashed before the "no __main__" branch below could ever run.
     PyObject *mainModule = PyImport_AddModule("__main__");
+    if (mainModule == NULL) {
+        PyErr_Clear();
+        PyGILState_Release(gil);
+        if (outStdout != NULL) { *outStdout = cbpy_strdup(""); }
+        if (outStderr != NULL) { *outStderr = cbpy_strdup("No __main__ module available."); }
+        return 101;
+    }
     PyObject *globals = PyModule_GetDict(mainModule);
     int32_t result = 0;
 
@@ -112,8 +129,11 @@ int32_t cbpy_run(const char *source, char **outStdout, char **outStderr) {
     Py_DECREF(pySource);
 
     // Redirect stdio into buffers, exec the snippet, and record any traceback.
-    // A leading backslash in the C string keeps the Python indentation intact.
+    // The wrapper records whether the snippet actually raised, because stderr is
+    // not a failure signal on its own: print(..., file=sys.stderr) and warnings
+    // write there on a perfectly successful run.
     static const char *wrapper =
+        "_cb_raised = False\n"
         "import io, sys, traceback\n"
         "_cb_out = io.StringIO()\n"
         "_cb_err = io.StringIO()\n"
@@ -126,6 +146,7 @@ int32_t cbpy_run(const char *source, char **outStdout, char **outStderr) {
         "    pass\n"
         "except BaseException:\n"
         "    traceback.print_exc()\n"
+        "    _cb_raised = True\n"
         "finally:\n"
         "    sys.stdout = _cb_stdout\n"
         "    sys.stderr = _cb_stderr\n";
@@ -137,9 +158,12 @@ int32_t cbpy_run(const char *source, char **outStdout, char **outStderr) {
 
     char *outText = cbpy_take_stringio(globals, "_cb_out");
     char *errText = cbpy_take_stringio(globals, "_cb_err");
-    if (errText != NULL && errText[0] != '\0') {
+    PyObject *raised = PyDict_GetItemString(globals, "_cb_raised");
+    if (raised != NULL && PyObject_IsTrue(raised) == 1) {
         result = 1;
     }
+    // Drop the marker so a later run cannot inherit this one's result.
+    PyDict_DelItemString(globals, "_cb_raised");
 
     PyGILState_Release(gil);
 
@@ -158,10 +182,13 @@ void cbpy_stop(void) {
     if (!g_started) {
         return;
     }
-    PyGILState_STATE gil = PyGILState_Ensure();
+    // The GIL state must not be released after Py_FinalizeEx: finalization
+    // destroys the thread state the release would touch. Take the GIL, finalize
+    // while holding it, and stop there.
+    PyGILState_Ensure();
     Py_FinalizeEx();
-    PyGILState_Release(gil);
     g_started = 0;
+    g_finalized = 1;
 }
 
 const char *cbpy_version(void) {

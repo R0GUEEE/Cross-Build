@@ -16,6 +16,19 @@ The Linux compatibility layer is based on [rcarmo/ios-linuxkit](https://github.c
 
 The shipped guest package allow-list is maintained in `ToolchainRuntimeArchitecture.guestRuntimePackages` and mirrored by CI. CI fails if a compiler or build-system executable leaks into the image.
 
+### How a command reaches the guest
+
+The guest boots **once per launch** with `/bin/sh` and stays up; commands are streamed to it, each followed by a sentinel echo so the reader knows where one command's output ends. `LinuxGuestSession.script(for:invocation:)` is the only place a command is turned into a shell script, and it is where the Embedded Shell settings take effect:
+
+- **Shell** — the session shell is always `/bin/sh` (the one shell the root is guaranteed to carry). Any other value is started as a child of it, which also means `cd`/`export` cannot carry over between commands.
+- **Login shell** — sources `/etc/profile` (or the child shell's own `-l`).
+- **Interactive shell** — `-i` on the child shell.
+- **Persistent terminal session** — off gives every command its own subshell.
+- **Initialization command** — run once after boot; its output is shown with the next command.
+- **Working directory / environment** — exported into the command's shell. Note the guest has its **own** filesystem image (`Documents/CrossBuild/linux-root`), so an iOS container path is not a directory inside it; the session says so and runs in the guest's current directory instead of failing the command. Only an explicit working-directory override is sent for that reason.
+
+The command timeout is measured with the monotonic clock, not by counting poll iterations: the loop used to advance its own budget by 100 ms per 4 KB read, which capped output at about 40 KB/s and reported a *timeout* for any command that printed more than that. A guest shell that exits (a command ran `exit`) is now reported as such and closes the session, instead of being indistinguishable from a deadline.
+
 ## AOT policy
 
 The target configuration is ios-linuxkit native AOT with runtime native-code emission disabled:

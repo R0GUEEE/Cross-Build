@@ -10,7 +10,12 @@ struct CommandRequest: Identifiable, Sendable {
     var interactiveShell = false
     var initCommand: String? = nil
     var timeout: Int = 0
-    var sessionID: String? = nil
+    /// Keep one guest shell alive across commands (so `cd` and `export` carry
+    /// over) instead of running each command in its own subshell. This replaced
+    /// a `sessionID` field that only ever reached the deleted external helper:
+    /// the guest backend ignored it, so the "Persistent terminal session" toggle
+    /// changed nothing.
+    var persistentSession = true
 }
 
 struct CommandResult: Sendable {

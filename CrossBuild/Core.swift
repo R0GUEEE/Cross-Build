@@ -466,7 +466,7 @@ final class WorkspaceModel: ObservableObject {
     /// build/test/package paths apply the dedicated "Build timeout" setting
     /// instead of the general command timeout; a value of 0 means unlimited.
     @discardableResult
-    func executeCommand(_ command: String, settings: AppSettings? = nil, sessionID: String? = nil, timeoutOverride: Int? = nil) async -> CommandResult {
+    func executeCommand(_ command: String, settings: AppSettings? = nil, timeoutOverride: Int? = nil) async -> CommandResult {
         guard !isExecuting else {
             let result = CommandResult(exitCode: 75, stdout: "", stderr: "Another command is already running.", duration: 0)
             console += "error: \(result.stderr)\n"
@@ -475,8 +475,14 @@ final class WorkspaceModel: ObservableObject {
         let resolvedSettings = settings ?? appSettings
         let resolved = resolvedBackend(settings: resolvedSettings)
         let backend = resolved.backend
-        let localWorkingDirectory = configuration.workingDirectory.isEmpty ? (activeProjectRoot ?? files.workspaceRoot.path) : configuration.workingDirectory
-        let workingDirectory = localWorkingDirectory
+        // The guest runs from its own filesystem image, so the iOS container path
+        // the workspace lives at is not a directory inside it. Only an explicit
+        // working-directory override is handed to the guest (which reports it when
+        // the path is not there); the default stays the guest's HOME. Sending the
+        // old default was misleading in both directions: the override looked like
+        // it worked, and the guest looked like it had been given a directory.
+        let workingDirectoryOverride = configuration.workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        let workingDirectory: String? = workingDirectoryOverride.isEmpty ? nil : workingDirectoryOverride
         let startedAt = Date()
         if resolvedSettings?.timestampBuildOutput == true {
             console += "[\(Self.timestampFormatter.string(from: startedAt))] $ \(command)\nBackend: \(backend.name)\n"
@@ -503,7 +509,7 @@ final class WorkspaceModel: ObservableObject {
             interactiveShell: resolvedSettings?.shellInteractive ?? false,
             initCommand: resolvedSettings?.shellInitCommand.trimmingCharacters(in: .whitespacesAndNewlines),
             timeout: timeoutOverride ?? resolvedSettings?.commandTimeout ?? 0,
-            sessionID: sessionID
+            persistentSession: resolvedSettings?.terminalPersistentSession ?? true
         )
         let result = await backend.execute(request)
         appendResultOutput(result, settings: resolvedSettings)
@@ -718,7 +724,7 @@ final class WorkspaceModel: ObservableObject {
         guard !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let resolved = settings ?? appSettings
         Task {
-            let result = await executeCommand(command, settings: resolved, sessionID: resolved?.terminalPersistentSession == false ? nil : "terminal")
+            let result = await executeCommand(command, settings: resolved)
             if result.succeeded, command.trimmingCharacters(in: .whitespacesAndNewlines) == "clear" {
                 console = ""
             }
