@@ -77,7 +77,9 @@ struct SettingsView: View {
                 }
 
                 Section("Files & Storage") {
-                    Toggle("Show hidden files globally", isOn: $settings.showHiddenFiles)
+                    Toggle("Show hidden files globally", isOn: Binding(
+                        get: { settings.showHiddenFiles },
+                        set: { settings.showHiddenFiles = $0; workspace.syncFileConfiguration() }))
                     LabeledContent("Workspace", value: workspace.files.workspaceRoot.path)
                     LabeledContent("Documents", value: workspace.files.documentsRoot.path)
                     LabeledContent("Library", value: workspace.files.libraryRoot.path)
@@ -95,7 +97,6 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
-            .onChange(of: settings.showHiddenFiles) { _ in workspace.syncFileConfiguration() }
         }
     }
 }

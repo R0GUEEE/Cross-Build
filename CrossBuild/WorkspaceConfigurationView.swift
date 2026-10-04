@@ -58,25 +58,25 @@ struct WorkspaceConfigurationView: View {
                         Text("LF").tag("LF")
                         Text("CRLF").tag("CRLF")
                     }
-                    Stepper("Recent files limit: \(config.maxRecentFiles)", value: $config.maxRecentFiles, in: 5...100, step: 5)
+                    Stepper("Recent files limit: \(config.maxRecentFiles)", value: synced($config.maxRecentFiles), in: 5...100, step: 5)
                 }
 
                 Section("Loaded Directories") {
-                    Toggle("Show app directories", isOn: $config.showAppDirectories)
+                    Toggle("Show app directories", isOn: synced($config.showAppDirectories))
                     if config.showAppDirectories {
-                        Toggle("Show application bundle", isOn: $config.showAppBundle)
-                        Toggle("Show app Library", isOn: $config.showContainerLibrary)
-                        Toggle("Show temporary files", isOn: $config.showTemporaryFiles)
+                        Toggle("Show application bundle", isOn: synced($config.showAppBundle))
+                        Toggle("Show app Library", isOn: synced($config.showContainerLibrary))
+                        Toggle("Show temporary files", isOn: synced($config.showTemporaryFiles))
                     }
                     LabeledContent("Workspace", value: workspace.files.workspaceRoot.path)
                 }
 
                 Section("Search & Traversal") {
-                    Toggle("Include hidden files", isOn: $config.searchHiddenFiles)
-                    Toggle("Case-sensitive search", isOn: $config.searchCaseSensitive)
-                    Toggle("Search file contents", isOn: $config.searchFileContents)
-                    Toggle("Follow symbolic links", isOn: $config.followSymlinks)
-                    TextField("Excluded directory names", text: $config.excludePatterns, axis: .vertical)
+                    Toggle("Include hidden files", isOn: synced($config.searchHiddenFiles))
+                    Toggle("Case-sensitive search", isOn: synced($config.searchCaseSensitive))
+                    Toggle("Search file contents", isOn: synced($config.searchFileContents))
+                    Toggle("Follow symbolic links", isOn: synced($config.followSymlinks))
+                    TextField("Excluded directory names", text: synced($config.excludePatterns), axis: .vertical)
                 }
 
                 Section("Generated Configuration") {
@@ -98,17 +98,26 @@ struct WorkspaceConfigurationView: View {
             }
             .navigationTitle("Workspace Configuration")
             .onAppear { workspace.syncFileConfiguration() }
-            .onChange(of: config.showAppDirectories) { _ in workspace.syncFileConfiguration() }
-            .onChange(of: config.showAppBundle) { _ in workspace.syncFileConfiguration() }
-            .onChange(of: config.showContainerLibrary) { _ in workspace.syncFileConfiguration() }
-            .onChange(of: config.showTemporaryFiles) { _ in workspace.syncFileConfiguration() }
-            .onChange(of: config.searchHiddenFiles) { _ in workspace.syncFileConfiguration() }
-            .onChange(of: config.searchCaseSensitive) { _ in workspace.syncFileConfiguration() }
-            .onChange(of: config.searchFileContents) { _ in workspace.syncFileConfiguration() }
-            .onChange(of: config.followSymlinks) { _ in workspace.syncFileConfiguration() }
-            .onChange(of: config.excludePatterns) { _ in workspace.syncFileConfiguration() }
-            .onChange(of: config.maxRecentFiles) { _ in workspace.syncFileConfiguration() }
         }
+    }
+
+    /// A binding that applies the file-browser settings as soon as they are
+    /// written.
+    ///
+    /// These ten controls used to hang off `.onChange(of:)` handlers on the
+    /// enclosing view. `config` is an ObservableObject whose stored properties are
+    /// all `@AppStorage`, and `@AppStorage` writes to UserDefaults without
+    /// publishing a change, so the view is not invalidated by one and the body is
+    /// not re-evaluated -- `.onChange` then has no new value to notice. Toggling
+    /// "Show app directories" could therefore leave the file tree as it was until
+    /// the screen was reopened. Applying the change in the setter does not depend
+    /// on the view being invalidated at all.
+    private func synced<T>(_ binding: Binding<T>) -> Binding<T> {
+        Binding(get: { binding.wrappedValue },
+                set: { newValue in
+                    binding.wrappedValue = newValue
+                    workspace.syncFileConfiguration()
+                })
     }
 
     private var activeProjectName: String {
