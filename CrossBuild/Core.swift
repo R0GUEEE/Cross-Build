@@ -128,6 +128,10 @@ final class WorkspaceModel: ObservableObject {
         /// produced its object are unchanged. Reported rather than hidden, so a
         /// zero-second row reads as "reused", not as "did nothing".
         var cached = false
+        /// False when the run compiled several files at once, so `seconds` is not
+        /// this file's time. Shown as nothing rather than as a number that would
+        /// be the batch's time wearing this file's name.
+        var timed = true
     }
 
     @Published private(set) var runProgress = RunProgress()
@@ -630,8 +634,16 @@ final class WorkspaceModel: ObservableObject {
     /// Runs a command through the resolved backend. `timeoutOverride` lets the
     /// build/test/package paths apply the dedicated "Build timeout" setting
     /// instead of the general command timeout; a value of 0 means unlimited.
+    ///
+    /// `silent` runs the command without echoing it or its raw output into the
+    /// console. A caller that drives many commands and parses their output (the
+    /// compile sweep) prints its own summary instead; without this, every file's
+    /// markers and the compiler command behind them would be dumped verbatim.
     @discardableResult
-    func executeCommand(_ command: String, settings: AppSettings? = nil, timeoutOverride: Int? = nil) async -> CommandResult {
+    func executeCommand(_ command: String,
+                        settings: AppSettings? = nil,
+                        timeoutOverride: Int? = nil,
+                        silent: Bool = false) async -> CommandResult {
         guard !isExecuting else {
             let result = CommandResult(exitCode: 75, stdout: "", stderr: "Another command is already running.", duration: 0)
             console += "error: \(result.stderr)\n"
@@ -649,10 +661,12 @@ final class WorkspaceModel: ObservableObject {
         let workingDirectoryOverride = configuration.workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
         let workingDirectory: String? = workingDirectoryOverride.isEmpty ? nil : workingDirectoryOverride
         let startedAt = Date()
-        if resolvedSettings?.timestampBuildOutput == true {
-            console += "[\(Self.timestampFormatter.string(from: startedAt))] $ \(command)\nBackend: \(backend.name)\n"
-        } else {
-            console += "$ \(command)\nBackend: \(backend.name)\n"
+        if !silent {
+            if resolvedSettings?.timestampBuildOutput == true {
+                console += "[\(Self.timestampFormatter.string(from: startedAt))] $ \(command)\nBackend: \(backend.name)\n"
+            } else {
+                console += "$ \(command)\nBackend: \(backend.name)\n"
+            }
         }
         isExecuting = true
         executionStatus = "Running"
@@ -663,7 +677,7 @@ final class WorkspaceModel: ObservableObject {
         // Commands run inside ios-linuxkit, so never inject host/jailbreak paths
         // that cannot exist in the guest namespace.
         environment["PATH"] = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        if resolvedSettings?.captureEnvironment == true && !environment.isEmpty {
+        if !silent, resolvedSettings?.captureEnvironment == true && !environment.isEmpty {
             let summary = environment.keys.sorted().joined(separator: ", ")
             console += "env: \(summary)\n"
         }
@@ -680,7 +694,7 @@ final class WorkspaceModel: ObservableObject {
             persistentSession: resolvedSettings?.terminalPersistentSession ?? true
         )
         let result = await backend.execute(request)
-        appendResultOutput(result, settings: resolvedSettings)
+        if !silent { appendResultOutput(result, settings: resolvedSettings) }
         recordDiagnostics(from: result, command: command, settings: resolvedSettings)
         lastExitCode = result.exitCode
         executionStatus = result.succeeded ? "Succeeded" : "Failed (\(result.exitCode))"
@@ -1295,6 +1309,85 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
+    /// Marker the guest prints for one file's result: `@@CB <index> <exit code>`.
+    private static let compileMarker = "@@CB "
+    /// Marker introducing one file's captured compiler output.
+    private static let compileLogMarker = "@@CBLOG "
+
+    /// One guest command that compiles several files, all at once.
+    ///
+    /// Every file's output goes to its own file and is replayed afterwards, in
+    /// order, and only if there is something in it. Without that, four compilers
+    /// writing to one stream would interleave their diagnostics into text that
+    /// names files it no longer belongs to -- the output would be *less* accurate
+    /// than a sequential run, which is the reason this had not been done.
+    ///
+    /// The only output the host has to read on the way is one short line per file.
+    private func guestCompileBatch(_ jobs: [(index: Int, command: String)]) -> String {
+        let logDirectory = "/tmp/crossbuild-log"
+        let quote = GuestWorkspaceSync.quoted
+        var lines: [String] = [
+            "cd \(quote(GuestWorkspaceSync.guestRoot)) || exit 1",
+            "mkdir -p \(quote(GuestWorkspaceSync.objectDirectory)) \(quote(logDirectory))",
+        ]
+        for job in jobs {
+            let log = "\(logDirectory)/\(job.index).log"
+            lines.append("( \(job.command) > \(quote(log)) 2>&1; rc=$?; "
+                + "printf '\(Self.compileMarker)%d %s\\n' \(job.index) \"$rc\" ) &")
+        }
+        lines.append("wait")
+        lines.append("for i in \(jobs.map { String($0.index) }.joined(separator: " ")); do")
+        lines.append("  if [ -s \(quote(logDirectory))/\"$i\".log ]; then "
+            + "printf '\(Self.compileLogMarker)%s\\n' \"$i\"; cat \(quote(logDirectory))/\"$i\".log; fi")
+        lines.append("done")
+        return lines.joined(separator: "\n")
+    }
+
+    /// One file's outcome, as the guest reported it.
+    struct GuestCompileOutcome {
+        var exitCode: Int32
+        var log: String
+    }
+
+    /// Reads the markers out of a sweep's output.
+    ///
+    /// A line that does not parse is dropped rather than guessed at, and the
+    /// caller treats a missing file as failed -- reporting success for a file the
+    /// guest never mentioned is the one outcome worth avoiding here.
+    private func parseGuestCompileOutput(_ text: String) -> [Int: GuestCompileOutcome] {
+        var results: [Int: GuestCompileOutcome] = [:]
+        var logOwner: Int?
+        var logLines: [String] = []
+
+        func flushLog() {
+            if let owner = logOwner, !logLines.isEmpty, var entry = results[owner] {
+                entry.log = logLines.joined(separator: "\n")
+                results[owner] = entry
+            }
+            logOwner = nil
+            logLines = []
+        }
+
+        for line in text.components(separatedBy: "\n") {
+            if line.hasPrefix(Self.compileLogMarker) {
+                flushLog()
+                logOwner = Int(line.dropFirst(Self.compileLogMarker.count).trimmingCharacters(in: .whitespaces))
+                continue
+            }
+            if line.hasPrefix(Self.compileMarker) {
+                flushLog()
+                let fields = line.dropFirst(Self.compileMarker.count).split(separator: " ").map(String.init)
+                if fields.count >= 2, let index = Int(fields[0]), let code = Int32(fields[1]) {
+                    results[index] = GuestCompileOutcome(exitCode: code, log: "")
+                }
+                continue
+            }
+            if logOwner != nil { logLines.append(line) }
+        }
+        flushLog()
+        return results
+    }
+
     /// Compiles every source file in the project, one after another.
     ///
     /// The guest is synchronised once for the whole run rather than per file: the
@@ -1330,8 +1423,14 @@ final class WorkspaceModel: ObservableObject {
             // Stamped once: it is a stat per header in the project, and it cannot
             // change while the sweep runs.
             let headers = projectHeaderStamp()
+            // The same knob the project build uses for `make -j`: "Parallel
+            // builds" and "Build jobs" describe how much of the machine a build
+            // may use, and a sweep of single files is a build.
+            let parallelJobs = resolved?.parallelBuilds == true ? max(1, resolved?.buildJobs ?? 1) : 1
+
+            var toCompile: [(index: Int, relative: String, command: String, token: String)] = []
             for (index, relative) in sources.enumerated() {
-                guard let built = singleFileBuildCommandLine(for: relative) else {
+                guard let built = singleFileBuildCommand(for: relative) else {
                     console += "skipped \(relative): no single-file compile for that language.\n"
                     setProgress(step: index + 2, detail: "Skipped \(relative)")
                     continue
@@ -1344,13 +1443,55 @@ final class WorkspaceModel: ObservableObject {
                     setProgress(step: index + 2, detail: "Unchanged: \(relative)")
                     continue
                 }
-                setProgress(step: index + 2, detail: relative)
+                toCompile.append((index, relative, built, token))
+            }
+
+            // One guest command per group instead of one per file, with the group
+            // running at once inside the guest. This is what decides whether the
+            // machine's other cores are used at all.
+            var cursor = 0
+            while cursor < toCompile.count {
+                let group = Array(toCompile[cursor..<min(cursor + parallelJobs, toCompile.count)])
+                cursor += group.count
+                setProgress(step: min(cursor + 1, sources.count + 1),
+                            detail: group.count == 1 ? group[0].relative : "Compiling \(group.count) files")
                 let started = Date()
-                let result = await executeCommand(built,
+                let result = await executeCommand(guestCompileBatch(group.map { (index: $0.index, command: $0.command) }),
                                                    settings: resolved,
-                                                   timeoutOverride: resolvedBuildTimeout(resolved))
-                recordCompile(relative, label: relative, token: token, result: result,
-                              seconds: Date().timeIntervalSince(started))
+                                                   timeoutOverride: resolvedBuildTimeout(resolved),
+                                                   silent: true)
+                let elapsed = Date().timeIntervalSince(started)
+                let outcomes = parseGuestCompileOutput(result.stdout)
+                if outcomes.isEmpty {
+                    console += "error: the guest reported no result for \(group.count) file(s); they are marked failed.\n"
+                    if !result.stdout.isEmpty { console += result.stdout }
+                }
+                // A group of one is timed exactly -- the batch is the file. A
+                // group of several is not: the host can only time the group, and
+                // giving each file the group's time would be a number that means
+                // something else.
+                let perFile = group.count == 1 ? elapsed : 0
+                for job in group {
+                    guard let outcome = outcomes[job.index] else {
+                        individualResults[job.relative] = RunRecord(label: job.relative, seconds: 0,
+                                                                    succeeded: false, timed: group.count == 1)
+                        compiledSources.removeValue(forKey: job.relative)
+                        continue
+                    }
+                    individualResults[job.relative] = RunRecord(label: job.relative,
+                                                                seconds: perFile,
+                                                                succeeded: outcome.exitCode == 0,
+                                                                timed: group.count == 1)
+                    if outcome.exitCode == 0 {
+                        compiledSources[job.relative] = job.token
+                    } else {
+                        compiledSources.removeValue(forKey: job.relative)
+                    }
+                    if !outcome.log.isEmpty { console += outcome.log + "\n" }
+                }
+                if group.count > 1 {
+                    console += "Compiled \(group.count) file(s) in \(String(format: "%.1f", elapsed))s (\(parallelJobs) at a time).\n"
+                }
             }
             setProgress(step: sources.count + 1)
             let failed = sources.filter { individualResults[$0]?.succeeded == false }.count

@@ -196,7 +196,7 @@ struct CompilerDashboardView: View {
                     .foregroundStyle(record.succeeded ? .green : .red)
                 if record.cached {
                     Text("unchanged")
-                } else {
+                } else if record.timed {
                     Text(RunProgressBar.clock(record.seconds)).monospacedDigit()
                 }
             }
