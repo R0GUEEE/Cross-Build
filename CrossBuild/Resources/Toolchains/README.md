@@ -1,7 +1,15 @@
 # Cross Build Toolchain Libraries
 
-This resource tree is the stable in-app home for compiler adapters, support data, SDK metadata, templates and embedded runtimes.
+This resource tree is the stable in-app home for compiler/runtime libraries, support data, SDK metadata, templates, and embedded resources.
 
-A catalogue item is always registered with Cross Build. "Embedded Engine" means it can execute in-process. "Bundled Support Library" means Cross Build ships integration/resources but execution may still require a backend. "Backend Adapter" means the UI, project detection, command planning and diagnostics integration ship in the app while compilation requires Jailbreak Local or Remote/SSH execution.
+A catalogue entry describes an intended Cross Build capability; it is **not** proof that the compiler is installed. At runtime, Setup & System Scan inspects the installed IPA and marks a toolchain ready only when its required framework/static-library/native payload is discoverable.
 
-Native binary/framework payloads can be added to the matching directory without changing workspace configuration.
+Current execution policy:
+
+- native/embedded engines execute inside the app;
+- Python uses the embedded CPython runtime;
+- JavaScript uses JavaScriptCore;
+- shell/POSIX compatibility uses the embedded ios-linuxkit environment;
+- no Remote Helper, Jailbreak Local, HTTP, or SSH execution backend is part of the current architecture.
+
+Native payloads should be placed in the matching toolchain directory or linked into the app target, with the runtime scanner updated when a component has a special linkage layout.
