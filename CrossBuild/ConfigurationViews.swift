@@ -30,31 +30,27 @@ struct AppConfigurationView: View {
                 Stepper("Activity history: \(settings.activityHistoryLimit)", value: $settings.activityHistoryLimit, in: 25...500, step: 25)
             }
 
-            Section("Default Runtime") {
+            Section("Runtime") {
                 LabeledContent("Execution", value: "Embedded / In-App")
-                LabeledContent("Compatibility runtime", value: "ios-linuxkit")
+                LabeledContent("POSIX runtime", value: "ios-linuxkit")
                 Toggle("Forward configured environment", isOn: $settings.forwardEnvironment)
-                Text("Cross Build is self-contained. Linked native engines handle supported languages and the embedded Linux runtime handles shell/POSIX workflows.")
+                Stepper(settings.commandTimeout == 0 ? "Command timeout: Unlimited" : "Command timeout: \(settings.commandTimeout)s",
+                        value: $settings.commandTimeout, in: 0...3600, step: 15)
+                Text("Compiler engines and support libraries are discovered from the app bundle. Shell/POSIX commands execute inside the embedded ios-linuxkit environment.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section("Shell Integration") {
+            Section("Embedded Shell") {
                 Picker("Shell", selection: $settings.shellPath) {
-                    Text("Auto Detect").tag("Auto")
-                    Text("Rootless zsh").tag("/var/jb/bin/zsh")
-                    Text("Rootless bash").tag("/var/jb/bin/bash")
-                    Text("Rootless sh").tag("/var/jb/bin/sh")
-                    Text("zsh").tag("/bin/zsh")
-                    Text("bash").tag("/bin/bash")
                     Text("sh").tag("/bin/sh")
+                    Text("bash").tag("/bin/bash")
                 }
                 Toggle("Login shell", isOn: $settings.shellLogin)
                 Toggle("Interactive shell", isOn: $settings.shellInteractive)
                 Toggle("Persistent terminal session", isOn: $settings.terminalPersistentSession)
-                TextField("Shell initialization command", text: $settings.shellInitCommand, axis: .vertical)
+                TextField("Initialization command", text: $settings.shellInitCommand, axis: .vertical)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
-                Stepper("Command timeout: \(settings.commandTimeout)s", value: $settings.commandTimeout, in: 0...3600, step: 5)
-                Text("Auto Detect prefers rootless jailbreak shells under /var/jb before system shells. A timeout of 0 disables the command timeout.")
+                Text("Shell paths are resolved inside the bundled Linux root. Host and jailbreak /var/jb shell options were removed.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
