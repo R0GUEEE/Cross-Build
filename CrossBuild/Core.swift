@@ -828,7 +828,13 @@ final class WorkspaceModel: ObservableObject {
         let workspaceSDK = configuration.sdkPath.trimmingCharacters(in: .whitespacesAndNewlines)
         let compilerSDK = compilerConfiguration.sysroot.trimmingCharacters(in: .whitespacesAndNewlines)
         let sdkPath = workspaceSDK.isEmpty ? compilerSDK : workspaceSDK
-        if !sdkPath.isEmpty { environment["SDKROOT"] = sdkPath }
+        if !sdkPath.isEmpty {
+            environment["SDKROOT"] = sdkPath
+        } else if let discovered = IOSSDKDiscovery.preferred() {
+            // Otherwise a supplied SDK is discovered, counted on a screen, and
+            // then ignored by every command that runs.
+            environment["SDKROOT"] = discovered.path
+        }
 
         environment["ARCHS"] = compilerConfiguration.architectures
         environment["IPHONEOS_DEPLOYMENT_TARGET"] = compilerConfiguration.deploymentTarget

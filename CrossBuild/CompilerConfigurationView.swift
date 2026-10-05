@@ -35,7 +35,9 @@ struct CompilerConfigurationView: View {
                 let toolchainScan = AppToolchainLibraries.scanBundle()
                 LabeledContent("Compiler libraries", value: "\(toolchainScan.filter(\.present).count)/\(toolchainScan.count) ready")
                 LabeledContent("Embedded Clang", value: toolchainScan.first { $0.id == "clang" }?.present == true ? workspace.embeddedToolchains.clang.version : "Native payload missing")
-                LabeledContent("Bundled iOS SDKs", value: "\(IOSSDKDiscovery.bundledSDKs().count)")
+                LabeledContent("iOS SDKs found", value: IOSSDKDiscovery.availableSDKs().isEmpty
+                               ? "None — drop an .sdk into Documents/SDKs"
+                               : "\(IOSSDKDiscovery.availableSDKs().count)")
                 LabeledContent("POSIX runtime", value: LinuxGuestEngine.isRootBundled ? "ios-linuxkit ready" : "rootfs missing")
             }
 

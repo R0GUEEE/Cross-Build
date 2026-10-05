@@ -10,7 +10,7 @@ struct SDKRecord: Identifiable, Sendable {
 enum SDKManager {
     static func discover() -> [SDKRecord] {
         var result:[SDKRecord]=[]
-        for url in IOSSDKDiscovery.bundledSDKs() {
+        for url in IOSSDKDiscovery.availableSDKs() {
             result.append(.init(id:url.path,name:url.deletingPathExtension().lastPathComponent,path:url.path,kind:"Apple SDK"))
         }
         if let root=LinuxGuestEngine.bundledRootPath {

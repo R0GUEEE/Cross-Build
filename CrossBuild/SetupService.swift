@@ -33,6 +33,11 @@ struct SetupEnvironment {
     var linuxRuntime = "ios-linuxkit"
     var rootfsPresent = false
     var sdkCount = 0
+    /// Build tools found in the Linux guest. The guest is where compilation
+    /// actually happens, so what it carries is part of the answer to "is this
+    /// install working" -- without it the screen could report a ready rootfs and
+    /// a toolchain the guest does not have.
+    var guestTools: [String] = []
     var toolchains: [AppToolchainScan] = []
     var notes: [String] = []
 }
@@ -63,7 +68,15 @@ final class SetupService: ObservableObject {
 
         var env = SetupEnvironment()
         env.rootfsPresent = LinuxGuestEngine.isLinked && LinuxGuestEngine.isRootBundled
-        env.sdkCount = IOSSDKDiscovery.bundledSDKs().count
+        env.sdkCount = IOSSDKDiscovery.availableSDKs().count
+        let probe = "for t in make cc gcc c++ g++ ; do command -v \"$t\" >/dev/null 2>&1 && printf '%s ' \"$t\"; done"
+        let probed = await LinuxGuestSession.shared.run(probe, timeout: 60)
+        if probed.code >= 0 {
+            env.guestTools = probed.output
+                .split(whereSeparator: { $0 == " " || $0 == "\n" })
+                .map(String.init)
+                .sorted()
+        }
         env.toolchains = AppToolchainLibraries.scanBundle()
 
         // Only a missing rootfs is a real fault. The other two conditions used to
@@ -117,6 +130,13 @@ final class SetupService: ObservableObject {
                     ? "ios-linuxkit engine and fakefs-root are bundled."
                     : "ios-linuxkit engine/rootfs is incomplete."
                 steps[index].status = environment.rootfsPresent ? .succeeded : .failed
+            case "toolchain":
+                let required = ToolchainRuntimeArchitecture.requiredGuestTools
+                let missing = required.filter { !environment.guestTools.contains($0) }
+                steps[index].output = missing.isEmpty
+                    ? "Present: \(environment.guestTools.joined(separator: ", "))"
+                    : "Missing: \(missing.joined(separator: ", "))\nPresent: \(environment.guestTools.joined(separator: ", "))"
+                steps[index].status = missing.isEmpty ? .succeeded : .failed
             case "sdk":
                 steps[index].output = environment.sdkCount > 0
                     ? "\(environment.sdkCount) bundled SDK(s) discovered."
@@ -147,6 +167,11 @@ final class SetupService: ObservableObject {
                   kind: .scan),
             .init(id: "linux", title: "Verify ios-linuxkit",
                   detail: env.rootfsPresent ? "Embedded runtime and rootfs detected." : "Runtime/rootfs incomplete.",
+                  kind: .verify),
+            .init(id: "toolchain", title: "Guest build toolchain",
+                  detail: env.guestTools.isEmpty
+                      ? "No build tools were found in the Linux guest."
+                      : "Found: \(env.guestTools.joined(separator: ", "))",
                   kind: .verify),
             .init(id: "sdk", title: "Scan bundled SDKs",
                   detail: "\(env.sdkCount) SDK payload(s) discovered.",

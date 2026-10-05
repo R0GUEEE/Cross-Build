@@ -46,7 +46,7 @@ enum BundledResources {
             icon: "terminal.fill"
         ))
 
-        let sdkCount = IOSSDKDiscovery.bundledSDKs().count
+        let sdkCount = IOSSDKDiscovery.availableSDKs().count
         items.append(BundledResource(
             id: "sdks",
             name: "Bundled SDKs",

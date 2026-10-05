@@ -95,10 +95,52 @@ private final class DiagnosticsBox {
 #endif
 
 enum IOSSDKDiscovery {
-    static func bundledSDKs()->[URL] {
-        guard let root=Bundle.main.resourceURL?.appendingPathComponent("SDKs") else{return[]}
-        return ((try? FileManager.default.contentsOfDirectory(at:root,includingPropertiesForKeys:nil)) ?? [])
-            .filter{$0.pathExtension=="sdk"}
+    /// Where an SDK may live.
+    ///
+    /// The bundle is first, for a jailbroken build that could carry one. The rest
+    /// are where a user can actually put one -- and that matters, because Apple's
+    /// iOS SDK is not redistributable, so it can never be the reason a count is
+    /// non-zero. Looking only in the bundle meant the answer was permanently zero
+    /// and there was no supported way to change it, even though the app's
+    /// Documents directory is now visible in Files.app.
+    static func searchRoots() -> [URL] {
+        var roots: [URL] = []
+        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("SDKs", isDirectory: true) {
+            roots.append(bundled)
+        }
+        if let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            roots.append(documents.appendingPathComponent("SDKs", isDirectory: true))
+            roots.append(documents.appendingPathComponent("Workspace/SDKs", isDirectory: true))
+        }
+        return roots
     }
-    static func preferred()->URL? { bundledSDKs().sorted{$0.lastPathComponent>$1.lastPathComponent}.first }
+
+    private static func sdks(in root: URL) -> [URL] {
+        ((try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "sdk" }
+    }
+
+    /// SDKs shipped inside the app. Expected to be empty, and not a fault.
+    static func bundledSDKs() -> [URL] {
+        guard let root = Bundle.main.resourceURL?.appendingPathComponent("SDKs") else { return [] }
+        return sdks(in: root)
+    }
+
+    /// Every SDK the app can see, wherever it was put.
+    ///
+    /// This is what the screens should count and what a build should use; the
+    /// bundle-only list is what the app ships, which is a different question.
+    static func availableSDKs() -> [URL] {
+        searchRoots().flatMap(sdks(in:))
+    }
+
+    /// True when the SDK was supplied rather than shipped, so the UI can say which.
+    static func isUserSupplied(_ url: URL) -> Bool {
+        guard let bundlePath = Bundle.main.resourceURL?.standardizedFileURL.path else { return true }
+        return !url.standardizedFileURL.path.hasPrefix(bundlePath)
+    }
+
+    static func preferred() -> URL? {
+        availableSDKs().sorted { $0.lastPathComponent > $1.lastPathComponent }.first
+    }
 }
