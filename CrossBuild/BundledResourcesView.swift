@@ -24,9 +24,13 @@ struct BundledResourcesView: View {
                                 .font(.caption2).foregroundStyle(.tertiary)
                         }
                         Spacer()
-                        Text(item.present ? "Ready" : "Missing")
+                        // "Missing" in red, on the same list that the Setup scan
+                        // renders as "Not bundled" in grey. Absent-by-design is not
+                        // a fault, and two screens disagreeing about the same
+                        // component is how a healthy install looks broken.
+                        Text(item.present ? "Ready" : "Not bundled")
                             .font(.caption)
-                            .foregroundStyle(item.present ? .green : .red)
+                            .foregroundStyle(item.present ? .green : .secondary)
                     }
                     .padding(.vertical, 3)
                 }
