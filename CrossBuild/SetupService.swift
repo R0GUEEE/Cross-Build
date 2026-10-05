@@ -68,7 +68,7 @@ final class SetupService: ObservableObject {
 
         var env = SetupEnvironment()
         env.rootfsPresent = LinuxGuestEngine.isLinked && LinuxGuestEngine.isRootBundled
-        env.sdkCount = IOSSDKDiscovery.bundledSDKs().count
+        env.sdkCount = IOSSDKDiscovery.availableSDKs().count
         let probe = "for t in make cc gcc c++ g++ ; do command -v \"$t\" >/dev/null 2>&1 && printf '%s ' \"$t\"; done"
         let probed = await LinuxGuestSession.shared.run(probe, timeout: 60)
         if probed.code >= 0 {
