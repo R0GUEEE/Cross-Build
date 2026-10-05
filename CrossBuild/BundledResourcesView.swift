@@ -13,6 +13,17 @@ struct BundledResourcesView: View {
         Form {
             Section {
                 ForEach(items) { item in
+                    // Resolved up front, with explicit types.
+                    //
+                    // A nested ternary mixing `.green`, `Color.accentColor` and
+                    // `.secondary` inside foregroundStyle made the whole row too
+                    // expensive for the type checker to solve -- "unable to
+                    // type-check this expression in reasonable time" -- which fails
+                    // the build rather than the row. Two plain values cannot.
+                    let statusLabel: String = item.present ? "Ready"
+                        : (item.guestBacked == nil ? "Not bundled" : "Via guest")
+                    let statusTint: Color = item.present ? .green
+                        : (item.guestBacked == nil ? .secondary : .accentColor)
                     HStack(alignment: .top, spacing: 12) {
                         Image(systemName: item.present ? item.icon : "xmark.circle")
                             .frame(width: 22)
@@ -28,10 +39,9 @@ struct BundledResourcesView: View {
                         // renders as "Not bundled" in grey. Absent-by-design is not
                         // a fault, and two screens disagreeing about the same
                         // component is how a healthy install looks broken.
-                        Text(item.present ? "Ready" : (item.guestBacked != nil ? "Via guest" : "Not bundled"))
+                        Text(statusLabel)
                             .font(.caption)
-                            .foregroundStyle(item.present ? .green
-                                             : (item.guestBacked != nil ? Color.accentColor : .secondary))
+                            .foregroundStyle(statusTint)
                     }
                     .padding(.vertical, 3)
                 }
