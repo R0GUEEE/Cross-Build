@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Partial plist, merged by xtool. It carries only what the app actually needs and
+  what project.yml's `info:` block used to declare.
+
+  UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace are the two that
+  matter: the workspace lives in Documents, and without them that directory is
+  invisible in Files.app -- the app cannot be given a file or hand one back. The
+  CI verify step asserted them in the built plist precisely because a build
+  setting that does nothing looks identical to one that works; that assertion
+  needs re-expressing against xtool's output.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key>
+    <string>Cross Build</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>UIApplicationSupportsIndirectInputEvents</key>
+    <true/>
+    <key>UILaunchScreen</key>
+    <dict/>
+    <key>UIFileSharingEnabled</key>
+    <true/>
+    <key>LSSupportsOpeningDocumentsInPlace</key>
+    <true/>
+</dict>
+</plist>

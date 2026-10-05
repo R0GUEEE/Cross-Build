@@ -1,0 +1,39 @@
+version: 1
+
+# The existing bundle identifier. Keep it: a different one is a different app as
+# far as iOS is concerned, and reinstalling loses the container.
+bundleID: dev.rogueee.crossbuild
+
+# The executable product in Package.swift.
+product: CrossBuild
+
+# Partial plist; xtool merges it into the generated one. This carries the two keys
+# that make the workspace reachable, plus the display name and launch screen that
+# project.yml's `info:` block used to describe.
+infoPath: Support/Info.plist
+
+# 1024×1024 source icon. Xcode compiled the .xcassets catalogue; xtool takes a
+# PNG, so the AppIcon PNG that already exists is used directly.
+iconPath: CrossBuild/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+
+# Files that must land at the ROOT of the .app bundle.
+#
+# These cannot be SwiftPM resources. SwiftPM puts a target's resources inside a
+# generated <Target>_<Target>.bundle and expects Bundle.module; the app reads all
+# four of these through Bundle.main.resourceURL -- fakefs-root for the guest,
+# python/ and app/ for PYTHONHOME and PYTHONPATH, Toolchains/ for the manifests
+# the catalogue displays. As SwiftPM resources every one of those paths would
+# resolve to nothing at runtime, which is a silent failure rather than a build
+# error: the app would boot and report a missing rootfs.
+#
+# All four are produced by the vendoring step (Tools/build-local.sh), not committed.
+resources:
+  - Vendor/linuxkit/fakefs-root
+  - Vendor/Python/stdlib/python
+  - Vendor/Python/stdlib/app
+  - CrossBuild/Resources/Toolchains
+
+# No entitlements file. The app is unsigned here and re-signed on install; the
+# engine is an interpreter with no JIT, so no executable-memory entitlement is
+# required. If one is ever added, diagnose capability support rather than deleting
+# it to make a build pass.
