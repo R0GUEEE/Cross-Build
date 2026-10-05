@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SwiftUI
 
@@ -145,6 +146,8 @@ final class WorkspaceModel: ObservableObject {
     private var pendingAgentPlan: [AgentExecution] = []
     weak var appSettings: AppSettings?
     private var autosaveTask: Task<Void, Never>?
+    /// Forwards the services' change notifications; see `init`.
+    private var cancellables = Set<AnyCancellable>()
     let files = FileManagerService()
     let github = GitHubWorkspaceService()
     let configuration = WorkspaceConfiguration()
@@ -165,6 +168,14 @@ final class WorkspaceModel: ObservableObject {
            let saved = try? JSONDecoder().decode([CustomCompiler].self, from: data) {
             customCompilers = saved
         }
+        // Views observe this object, not the services it owns. Nothing forwarded
+        // theirs, so a change inside `files` or `editor` invalidated nothing that
+        // reads them through the model: `editor.showFind.toggle()` never
+        // re-evaluated the IDE body (Find/Replace could not open), and the counts
+        // cached in `.task(id:)` never refreshed when the tree finished loading off
+        // the main actor. The sinks are weak, so neither side is retained.
+        files.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
+        editor.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
         syncFileConfiguration()
         restoreOpenDocuments()
     }
@@ -281,7 +292,10 @@ final class WorkspaceModel: ObservableObject {
     /// directly, so the list the model exposes is also the list the user sees.
     @Published var tasks: [AgentTask] = [
         .init(title: "Detect & Build", instruction: "Detect this project, configure it automatically, and build it"),
-        .init(title: "Repair failed builds", instruction: "Inspect diagnostics, patch safe compiler errors, and rebuild."),
+        // The local planner sequences actions; it never edits source. The text no
+        // longer promises patching it cannot do (there is no plan step that emits
+        // `.replaceEditor`).
+        .init(title: "Repair failed builds", instruction: "Inspect diagnostics and rebuild."),
         .init(title: "Clean & Package", instruction: "Clean the project and package the final artifact"),
         .init(title: "Run Tests", instruction: "Run the project tests and inspect failures")
     ]

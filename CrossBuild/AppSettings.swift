@@ -16,6 +16,13 @@ final class AppSettings: ObservableObject {
     /// keep the object alive.
     private var defaultsObserver: NSObjectProtocol?
 
+    deinit {
+        // The token was stored and never removed, so every instance left an
+        // observer behind. `removeObserver(self)` avoids touching the stored
+        // property from a deinit.
+        NotificationCenter.default.removeObserver(self)
+    }
+
     init() {
         defaultsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,

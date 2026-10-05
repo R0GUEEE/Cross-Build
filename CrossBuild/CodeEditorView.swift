@@ -123,7 +123,12 @@ struct CodeEditorView: UIViewRepresentable {
             }
             if replacement == "\t" {
                 let unit = parent.options.insertSpaces ? String(repeating: " ", count: max(1, parent.options.tabWidth)) : "\t"
-                textView.replace(textView.selectedTextRange ?? UITextRange(), withText: unit)
+                // A bare `UITextRange()` is not a range of this text view;
+                // `replace(_:withText:)` can raise NSInvalidArgumentException for
+                // one. Only reachable when the view is not first responder, so it
+                // is a latent crash rather than an everyday one.
+                guard let target = textView.selectedTextRange else { return true }
+                textView.replace(target, withText: unit)
                 return false
             }
             guard parent.options.autoClosePairs, replacement.count == 1,

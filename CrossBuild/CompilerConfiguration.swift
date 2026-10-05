@@ -14,6 +14,10 @@ final class CompilerConfiguration: ObservableObject {
     /// not been touched.
     private var defaultsObserver: NSObjectProtocol?
 
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
     init() {
         defaultsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,

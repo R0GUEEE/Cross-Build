@@ -59,7 +59,9 @@ struct FileTreeOptions: Sendable {
 
 @MainActor
 final class FileManagerService: ObservableObject {
-    @Published var roots: [WorkspaceFile] = []
+    @Published var roots: [WorkspaceFile] = [] {
+        didSet { flattenedIsValid = false }
+    }
     /// True while the off-main tree walk is in flight. The navigator needs this
     /// to tell "the tree has not been built yet" from "the workspace is empty",
     /// which are otherwise the same picture: an empty list.
@@ -106,11 +108,22 @@ final class FileManagerService: ObservableObject {
         reload()
     }
 
+    /// The tree as one flat array, cached until `roots` changes.
+    ///
+    /// This recurses over every node and allocates a fresh array per access, and
+    /// several view bodies read it (`projectFiles.count`, the favourites list, the
+    /// file count under the navigator), so the whole walk ran on every render.
+    private var cachedFlattened: [WorkspaceFile] = []
+    private var flattenedIsValid = false
+
     var flattened: [WorkspaceFile] {
+        if flattenedIsValid { return cachedFlattened }
         func walk(_ files: [WorkspaceFile]) -> [WorkspaceFile] {
             files.flatMap { [$0] + walk($0.children ?? []) }
         }
-        return walk(roots)
+        cachedFlattened = walk(roots)
+        flattenedIsValid = true
+        return cachedFlattened
     }
 
     var searchResults: [WorkspaceFile] {

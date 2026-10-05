@@ -1,7 +1,10 @@
 import SwiftUI
 
 struct FeatureStatus: Identifiable {
-    let id = UUID()
+    /// Stable across renders. `let id = UUID()` minted a fresh identity for every
+    /// row on every body pass, so SwiftUI tore the list down and rebuilt it
+    /// instead of diffing it.
+    var id: String { name }
     let name: String
     let detail: String
     let ready: Bool
@@ -12,7 +15,11 @@ struct FeatureDiagnosticsView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
     @ObservedObject var settings: AppSettings
 
-    private var features: [FeatureStatus] {
+    /// Filled from `.task`: this runs `AppToolchainLibraries.scanBundle()`, which
+    /// probes the app bundle (file existence plus a directory walk per entry).
+    @State private var features: [FeatureStatus] = []
+
+    private func makeFeatures() -> [FeatureStatus] {
         let scan = AppToolchainLibraries.scanBundle()
         let clang = scan.first { $0.id == "clang" }
         let linuxReady = LinuxGuestEngine.isLinked && LinuxGuestEngine.isRootBundled
@@ -66,5 +73,6 @@ struct FeatureDiagnosticsView: View {
             RuntimeToolchainSection(runtime: workspace.toolchainRuntime)
         }
         .navigationTitle("Feature Diagnostics")
+        .task { features = makeFeatures() }
     }
 }

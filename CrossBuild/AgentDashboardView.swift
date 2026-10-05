@@ -53,7 +53,7 @@ struct AgentDashboardView: View {
                         }
                     }
 
-                    ForgeCard("Agent State", subtitle: "The values below are the context the planner will use.") {
+                    ForgeCard("Agent State", subtitle: "Current workspace state. The planner reads the instruction, the selected toolchain and the permissions.") {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], spacing: 12) {
                             ForgeMetric(title: "Toolchain", value: workspace.analysis?.primaryToolchain.rawValue ?? workspace.selectedToolchain.rawValue, icon: "cpu")
                             ForgeMetric(title: "Files", value: "\(workspace.projectFiles.count)", icon: "doc.on.doc")

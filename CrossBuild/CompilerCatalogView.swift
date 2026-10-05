@@ -2,7 +2,6 @@ import SwiftUI
 
 struct CompilerCatalogView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
-    @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var category: CompilerCategory?
     @State private var selected: CompilerCatalogItem?
@@ -68,6 +67,9 @@ struct CompilerCatalogDetailView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
     @Environment(\.dismiss) private var dismiss
     let item: CompilerCatalogItem
+    /// Read once, off the render path. `scanBundle()` probes the whole app bundle;
+    /// doing it in `body` re-scanned everything to draw one row.
+    @State private var scan: AppToolchainScan?
 
     var body: some View {
         NavigationStack {
@@ -87,7 +89,6 @@ struct CompilerCatalogDetailView: View {
                     LabeledContent("App Library", value: workspace.embeddedToolchains.isAvailable(item.id) ? "Embedded Engine • Ready" : (AppToolchainLibraries.item(item.id)?.availability.rawValue ?? "Integrated"))
                     LabeledContent("Module", value: AppToolchainLibraries.item(item.id)?.module ?? item.id)
                     LabeledContent("Version", value: AppToolchainLibraries.item(item.id)?.version ?? "built-in")
-                    let scan = AppToolchainLibraries.scanBundle().first { $0.id == item.id }
                     LabeledContent("In-app payload", value: scan?.present == true ? "Ready" : "Not bundled")
                     if let detail = scan?.detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
                     if !item.languages.isEmpty { LabeledContent("Languages", value: item.languages.joined(separator: ", ")) }
@@ -124,7 +125,9 @@ struct CompilerCatalogDetailView: View {
                         dismiss()
                     }.buttonStyle(.borderedProminent)
                 }
-            }.navigationTitle("Toolchain")
+            }
+            .navigationTitle("Toolchain")
+            .task { scan = AppToolchainLibraries.scanBundle().first { $0.id == item.id } }
         }
     }
 
