@@ -56,6 +56,11 @@ final class LinuxGuestSession: ObservableObject {
     /// user is not left guessing whether their setup ran.
     private var pendingInitOutput: String?
 
+    /// Initialization commands this process has already run. The guest boots once
+    /// per launch, so boot-time setup runs once; a per-command initialization
+    /// command has to be remembered separately or it would run every time.
+    private var appliedInitCommands: Set<String> = []
+
     /// Returned by the shim when the shell reading commands has exited. Negative
     /// and distinct from -1 (never started) and 124 (deadline passed).
     private static let shellExitedCode: Int32 = -3
@@ -116,7 +121,7 @@ final class LinuxGuestSession: ObservableObject {
         state = .running
 
         let setup = initCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !setup.isEmpty {
+        if !setup.isEmpty, appliedInitCommands.insert(setup).inserted {
             // The guest is up, so this goes straight to the running shell. A
             // failing setup command is reported through the console rather than
             // treated as a boot failure: it is user shell, not part of the boot.
@@ -124,6 +129,24 @@ final class LinuxGuestSession: ObservableObject {
             if !result.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 pendingInitOutput = "$ \(setup)\n\(result.output)"
             }
+        }
+    }
+
+    /// Runs a command's initialization command once, if it has not run already.
+    ///
+    /// `CommandRequest.initCommand` was assembled from the "Initialization
+    /// command" setting and then dropped on the floor: nothing read it, so
+    /// changing that setting after launch changed nothing. This is where it takes
+    /// effect -- once per distinct command, for the life of the process.
+    func runInitCommandIfNeeded(_ command: String?) async {
+        let setup = (command ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !setup.isEmpty else { return }
+        await startIfNeeded()
+        guard state == .running, !appliedInitCommands.contains(setup) else { return }
+        appliedInitCommands.insert(setup)
+        let result = await run(setup, timeout: 120)
+        if !result.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            pendingInitOutput = "$ \(setup)\n\(result.output)"
         }
     }
 
@@ -197,7 +220,10 @@ final class LinuxGuestSession: ObservableObject {
         // The session shell is /bin/sh, so a different shell has to be started as
         // a child, and a child cannot inherit the session's `cd`/`export` state.
         // That is also what "Persistent terminal session: off" asks for.
-        let wraps = !invocation.persistent || shell != "/bin/sh"
+        // `interactive` is part of this decision, not only of the wrapper below:
+        // with the default settings (persistent session, /bin/sh) nothing wrapped
+        // the command, so turning "Interactive shell" on changed nothing at all.
+        let wraps = !invocation.persistent || shell != "/bin/sh" || invocation.interactive
 
         var lines: [String] = []
         // When the command is wrapped, the shell's own -l reads /etc/profile;
@@ -240,9 +266,12 @@ final class LinuxGuestSession: ObservableObject {
         return name.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
     }
 
-    /// Upper bound applied to the C poll loop. Large enough not to interfere with
-    /// a real build, small enough that `Int32` milliseconds cannot overflow.
-    private static let maximumTimeoutSeconds: TimeInterval = 3600
+    /// Upper bound for a single command, in seconds. This is what "no timeout"
+    /// means in practice: the C shim is handed `Int32` milliseconds, so ~24.8 days
+    /// is the arithmetic ceiling, and a command still running a day later is not
+    /// going to finish. It used to be one hour, which quietly contradicted the
+    /// Settings screen's "Unlimited" label.
+    private static let maximumTimeoutSeconds: TimeInterval = 24 * 60 * 60
 
     private static func effectiveTimeout(_ timeout: TimeInterval) -> TimeInterval {
         guard timeout > 0 else { return maximumTimeoutSeconds }

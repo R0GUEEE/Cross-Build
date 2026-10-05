@@ -65,7 +65,12 @@ final class EmbeddedToolchainManager: ObservableObject {
         available[logos.id]=logos.version
         if python.isLinked { available[python.id]=python.version }
         if LinuxGuestEngine.isLinked { available[LinuxGuestEngine.id]=LinuxGuestEngine.version }
-        if clang.isLinked { available["clang"]=clang.version }
+        // Not `clang.isLinked`: the bridge module is compiled into every build, so
+        // that is always true -- and the catalogue then reported Clang as
+        // "Embedded • Ready" while `cb_clang_compile` returned 125 for every
+        // request ("built without LLVM libraries"). The question that matters is
+        // whether a real LLVM payload is linked, and in a normal build it is not.
+        if ToolchainRuntimeArchitecture.hasLinkedCompiler { available["clang"]=clang.version }
     }
 
     func isAvailable(_ id:String)->Bool { available[id] != nil }

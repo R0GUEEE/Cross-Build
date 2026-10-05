@@ -18,9 +18,9 @@ The bridge is **not** on the critical path any more: C and C++ compile through t
 
 ## 2. ios-linuxkit runtime layer
 
-The Linux compatibility layer is based on [rcarmo/ios-linuxkit](https://github.com/rcarmo/ios-linuxkit), pinned by CI. Its fakefs contains only the minimal Alpine userland needed for shell/POSIX compatibility, source transport and workspace operations.
+The Linux compatibility layer is based on [rcarmo/ios-linuxkit](https://github.com/rcarmo/ios-linuxkit), pinned by CI. Its fakefs carries the minimal Alpine userland needed for shell/POSIX compatibility, source transport, workspace operations, and the GNU C/C++ toolchain described above -- and nothing else.
 
-The shipped guest package allow-list is maintained in `ToolchainRuntimeArchitecture.guestRuntimePackages` and mirrored by CI. CI fails if a compiler or build-system executable leaks into the image.
+The shipped guest package allow-list is maintained in `ToolchainRuntimeArchitecture.guestRuntimePackages`. CI hardcodes its own copy of that list as `RUNTIME_PACKAGES`, installs it, and then asserts the required executables are present; the two lists can drift and should be kept in step. CI fails if a **forbidden** tool leaks into the image -- clang, ld.lld, cmake, ninja, meson, python3, cargo, rustc, go, zig or swift -- not if `gcc` does, because `gcc` is required.
 
 ### How a command reaches the guest
 

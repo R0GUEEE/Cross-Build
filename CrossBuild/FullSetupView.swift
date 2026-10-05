@@ -12,7 +12,8 @@ struct FullSetupView: View {
                 LabeledContent("Execution", value: service.environment.runtime)
                 LabeledContent("POSIX runtime", value: service.environment.linuxRuntime)
                 LabeledContent("Linux rootfs", value: service.environment.rootfsPresent ? "Ready" : "Missing")
-                LabeledContent("Bundled SDKs", value: "\(service.environment.sdkCount)")
+                LabeledContent("Bundled SDKs", value: "\(service.environment.bundledSDKCount)")
+                LabeledContent("Available SDKs", value: "\(service.environment.sdkCount)")
                 LabeledContent("Guest toolchain", value: service.environment.guestTools.isEmpty
                                ? "None found"
                                : service.environment.guestTools.joined(separator: " "))

@@ -32,7 +32,11 @@ struct SetupEnvironment {
     var runtime = "Embedded / In-App"
     var linuxRuntime = "ios-linuxkit"
     var rootfsPresent = false
+    /// Every SDK the app can see: bundled plus anything under Documents.
     var sdkCount = 0
+    /// SDKs that actually ship inside the app. The screen labelled the *available*
+    /// count as "Bundled SDKs", so a user-supplied SDK made it non-zero.
+    var bundledSDKCount = 0
     /// Build tools found in the Linux guest. The guest is where compilation
     /// actually happens, so what it carries is part of the answer to "is this
     /// install working" -- without it the screen could report a ready rootfs and
@@ -69,6 +73,7 @@ final class SetupService: ObservableObject {
         var env = SetupEnvironment()
         env.rootfsPresent = LinuxGuestEngine.isLinked && LinuxGuestEngine.isRootBundled
         env.sdkCount = IOSSDKDiscovery.availableSDKs().count
+        env.bundledSDKCount = IOSSDKDiscovery.bundledSDKs().count
         // Ask the guest, but do NOT wait for the answer.
         //
         // Awaiting it made the entire scan depend on the guest being bootable. The
@@ -100,9 +105,14 @@ final class SetupService: ObservableObject {
             : "The embedded runtime is unavailable."
     }
 
-    /// Probes the guest off the scan's critical path.
+    /// The in-flight guest probe, so a verification run can wait for the answer
+    /// instead of judging the guest on an answer that has not arrived yet.
+    private var guestProbeTask: Task<Void, Never>?
+
+    /// Probes the guest off the *scan's* critical path -- but not off the
+    /// verification's, which is why the task is kept.
     private func probeGuestInBackground() {
-        Task { [weak self] in
+        guestProbeTask = Task { [weak self] in
             let probe = "for t in make cc gcc c++ g++ ; do command -v \"$t\" >/dev/null 2>&1 && printf '%s ' \"$t\"; done"
             let probed = await LinuxGuestSession.shared.run(probe, timeout: 15)
             guard let self, probed.code >= 0 else { return }
@@ -112,8 +122,24 @@ final class SetupService: ObservableObject {
                 .sorted()
             self.environment.guestTools = tools
             AppToolchainLibraries.guestTools = tools
+            // The toolchain list was scanned before this answer arrived, so every
+            // guest-backed entry was built with `guestBacked == nil` and went on
+            // saying "Not bundled" next to a working gcc. Re-scan and publish.
+            self.environment.toolchains = AppToolchainLibraries.scanBundle()
             self.refreshGuestToolchainStep()
+            self.refreshToolchainsStep()
         }
+    }
+
+    /// Recomputes the compiler-library step from the current toolchain list.
+    private func refreshToolchainsStep() {
+        guard let index = steps.firstIndex(where: { $0.id == "toolchains" }) else { return }
+        let missing = environment.toolchains.filter { !$0.present && $0.guestBacked == nil }
+        steps[index].output = environment.toolchains
+            .map { "\($0.present ? "READY" : ($0.guestBacked == nil ? "NOT BUNDLED" : "VIA GUEST"))  \($0.name)  \($0.location)\n\($0.detail)" }
+            .joined(separator: "\n\n")
+        let presentCount = environment.toolchains.count - missing.count
+        steps[index].status = presentCount > 0 ? .succeeded : .failed
     }
 
     /// Reflects a late guest answer in the toolchain step, when the scan has
@@ -132,6 +158,12 @@ final class SetupService: ObservableObject {
         guard !isRunning else { return }
         if !didPrepare { await prepare(workspace: workspace, settings: settings) }
 
+        // The scan deliberately does not wait for the guest. Verification does:
+        // judging the guest toolchain from a probe that has not returned yet
+        // marked a perfectly good install as failed and wrote that verdict into
+        // `summary`, which nothing recomputed afterwards.
+        await guestProbeTask?.value
+
         isRunning = true
         defer { isRunning = false }
 
@@ -141,18 +173,16 @@ final class SetupService: ObservableObject {
 
             switch steps[index].id {
             case "toolchains":
-                let missing = environment.toolchains.filter { !$0.present }
-                steps[index].output = environment.toolchains
-                    .map { "\($0.present ? "READY" : "NOT BUNDLED")  \($0.name)  \($0.location)\n\($0.detail)" }
-                    .joined(separator: "\n\n")
+                refreshToolchainsStep()
+                let noPayload = environment.toolchains.filter { !$0.present }
+                let viaGuest = noPayload.filter { $0.guestBacked != nil }.count
                 // This is a scan, and the scan itself always succeeds. A component
                 // without an in-app payload is a catalogue entry, not an
-                // installation fault, so it no longer marks the step failed. Only
-                // a build that ships no usable component at all is a failure.
-                let presentCount = environment.toolchains.count - missing.count
-                steps[index].status = presentCount > 0 ? .succeeded : .failed
-                if presentCount < environment.toolchains.count {
-                    steps[index].output += "\n\n\(environment.toolchains.count - presentCount) catalogue component(s) have no in-app library in this build. That is expected: a component is only READY when an in-app engine or library actually ships, and the toolchains that need a full compiler run through the embedded runtime instead."
+                // installation fault, so it does not mark the step failed.
+                if !noPayload.isEmpty {
+                    steps[index].output += "\n\n\(noPayload.count) catalogue component(s) have no in-app library in this build"
+                        + (viaGuest > 0 ? ", and \(viaGuest) of those are provided by the Linux guest instead" : "")
+                        + ". That is expected: a component is only READY when an in-app engine or library actually ships."
                 }
             case "linux":
                 steps[index].output = environment.rootfsPresent
@@ -167,10 +197,10 @@ final class SetupService: ObservableObject {
                     : "Missing: \(missing.joined(separator: ", "))\nPresent: \(environment.guestTools.joined(separator: ", "))"
                 steps[index].status = missing.isEmpty ? .succeeded : .failed
             case "sdk":
-                steps[index].output = environment.sdkCount > 0
-                    ? "\(environment.sdkCount) bundled SDK(s) discovered."
-                    : "No SDK payload is bundled with this build. The Apple SDK is not redistributable, so this is the normal state for a sideloaded install, not a fault; point a project at an SDK of your own when one is needed."
-                steps[index].status = environment.sdkCount > 0 ? .succeeded : .notBundled
+                steps[index].output = environment.bundledSDKCount > 0
+                    ? "\(environment.bundledSDKCount) bundled SDK(s) discovered."
+                    : "No SDK payload is bundled with this build (\(environment.sdkCount) SDK(s) available in total, counting any you supplied under Documents/SDKs). The Apple SDK is not redistributable, so this is the normal state for a sideloaded install, not a fault; point a project at an SDK of your own when one is needed."
+                steps[index].status = environment.bundledSDKCount > 0 ? .succeeded : .notBundled
             case "project":
                 workspace.detectSampleProject()
                 steps[index].output = workspace.generatedConfigurationSummary.joined(separator: "\n")
@@ -203,7 +233,7 @@ final class SetupService: ObservableObject {
                       : "Found: \(env.guestTools.joined(separator: ", "))",
                   kind: .verify),
             .init(id: "sdk", title: "Scan bundled SDKs",
-                  detail: "\(env.sdkCount) SDK payload(s) discovered.",
+                  detail: "\(env.bundledSDKCount) bundled SDK payload(s) discovered; \(env.sdkCount) available in total.",
                   kind: .scan),
             .init(id: "project", title: "Detect active project",
                   detail: "Generate project-specific compiler/package configuration from the workspace.",

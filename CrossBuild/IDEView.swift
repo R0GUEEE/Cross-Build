@@ -16,6 +16,12 @@ struct IDEView: View {
     @State private var editorSelection = CodeEditorSelection()
     @State private var showGoToLine = false
     @State private var goToLine = 1
+    /// Counted off the render path. `workspace.projectFiles.count` walks the whole
+    /// file tree (`flattened` rebuilds it) and `makefileTargets()` reads the
+    /// Makefile off disk -- both were evaluated on every body render, once inside
+    /// the navigator header and once inside the Build menu's content builder.
+    @State private var projectFileCount = 0
+    @State private var makeTargets: [String] = []
 
     var body: some View {
         NavigationSplitView {
@@ -32,7 +38,9 @@ struct IDEView: View {
             Button("Go") { jumpToLine(goToLine) }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("1 to \(max(1, workspace.editorText.components(separatedBy: "\n").count))")
+            // One pass instead of `components(separatedBy:)`, which allocated an
+            // array of every line each time the body was evaluated.
+            Text("1 to \(max(1, workspace.editorText.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }))")
         }
         .sheet(isPresented: $showCompilerManager) {
             CompilerManagerView().environmentObject(workspace)
@@ -52,6 +60,11 @@ struct IDEView: View {
             if let configured = ForgePanel(rawValue: settings.defaultBottomPanel) { bottomPanel = configured }
             bottomExpanded = settings.defaultBottomPanelExpanded
         }
+        // Re-read when the tree is rebuilt or the active project changes.
+        .task(id: "\(workspace.files.roots.count)-\(workspace.activeProjectRoot ?? "")") {
+            projectFileCount = workspace.projectFiles.count
+            makeTargets = workspace.makefileTargets()
+        }
         .alert(item: $pendingCloseDocument) { doc in
             Alert(
                 title: Text("Discard unsaved changes?"),
@@ -67,7 +80,8 @@ struct IDEView: View {
             HStack {
                 VStack(alignment:.leading,spacing:2) {
                     Text("Project").font(.headline)
-                    Text("\(workspace.projectFiles.count) files").font(.caption2).foregroundStyle(.secondary)
+                    Text(projectFileCount == 1 ? "1 file" : "\(projectFileCount) files")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button { openGitHubImporter() } label: { Image(systemName:"arrow.down.circle") }.buttonStyle(.plain)
@@ -214,7 +228,7 @@ struct IDEView: View {
                                                   settings: settings)
                     }
                 }
-                let targets = workspace.makefileTargets()
+                let targets = makeTargets
                 if !targets.isEmpty {
                     Menu("Build Make Target") {
                         ForEach(targets.prefix(20), id: \.self) { target in

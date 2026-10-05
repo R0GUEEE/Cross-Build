@@ -19,20 +19,17 @@ final class ToolchainRuntimeManager: ObservableObject {
     @Published private(set) var probes: [ToolchainProbe] = []
     @Published private(set) var isRefreshing = false
 
+    /// Only tools the shipped guest is allowed to carry.
+    ///
+    /// This list used to also offer clang, cmake, ninja, meson, python3, cargo,
+    /// go, zig and node as `apk add` targets -- every one of which
+    /// `ToolchainRuntimeArchitecture.forbiddenGuestBuildTools` says must not be in
+    /// the image, and whose install needs `apk update` to reach a network that
+    /// this backend declares it does not have.
     private static let guestTools: [(String,String,[String])] = [
-        ("clang","LLVM / Clang",["clang","llvm","lld","musl-dev"]),
         ("make","GNU Make",["make"]),
-        ("cmake","CMake",["cmake"]),
-        ("ninja","Ninja",["ninja"]),
-        ("meson","Meson",["meson","ninja"]),
-        ("python3","Python",["python3","py3-pip"]),
         ("git","Git",["git"]),
-        ("cargo","Rust / Cargo",["rust","cargo"]),
-        ("go","Go",["go"]),
-        ("zig","Zig",["zig"]),
-        ("node","Node.js",["nodejs","npm"]),
-        ("dpkg-deb","dpkg",["dpkg"]),
-        ("ldid","ldid",["ldid"])
+        ("dpkg-deb","dpkg",["dpkg"])
     ]
 
     func refresh() async {
