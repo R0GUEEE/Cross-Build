@@ -181,7 +181,13 @@ struct CompilerDashboardView: View {
             }
             .navigationTitle("Compiler")
             .toolbar { ToolbarItem(placement: .topBarLeading) { AppMenuButton(settings: settings) } }
-            .task(id: workspace.files.roots.count) { buildItems = workspace.individualBuildItems() }
+            // The list contains the open file and the project's make targets, so
+            // keying it on the tree alone left it stale: opening a file, switching
+            // project root or adding a Makefile changed nothing until something
+            // else happened to rebuild the tree.
+            .task(id: "\(workspace.files.roots.count)-\(workspace.activeProjectRoot ?? "")-\(workspace.editor.selected?.path ?? "")") {
+                buildItems = workspace.individualBuildItems()
+            }
             .task(id: workspace.files.roots.count) {
                 toolchainPresence = Dictionary(AppToolchainLibraries.scanBundle().map { ($0.id, $0.present) },
                                                uniquingKeysWith: { first, _ in first })
