@@ -97,6 +97,7 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .toolbar { ToolbarItem(placement: .topBarLeading) { AppMenuButton(settings: settings) } }
         }
     }
 }

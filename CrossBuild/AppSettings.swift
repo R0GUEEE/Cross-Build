@@ -3,6 +3,29 @@ import SwiftUI
 
 @MainActor
 final class AppSettings: ObservableObject {
+    /// Bridges `@AppStorage` to `ObservableObject`.
+    ///
+    /// This class is an `ObservableObject` but every property is `@AppStorage`,
+    /// which writes to `UserDefaults` and publishes nothing. So a Toggle bound to
+    /// one of these wrote its new value and then never saw a re-render: the
+    /// control snapped back, which looks exactly like a button that does nothing.
+    /// That was every control on the Settings screen.
+    ///
+    /// `UserDefaults` posts a change notification for every write, `@AppStorage`'s
+    /// own included, so relaying it is enough. Weakly captured, so this does not
+    /// keep the object alive.
+    private var defaultsObserver: NSObjectProtocol?
+
+    init() {
+        defaultsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+    }
+
     @AppStorage("editor.fontSize") var editorFontSize = 15.0
     @AppStorage("editor.autosave") var autosave = true
     @AppStorage("editor.trimWhitespace") var trimWhitespace = true
