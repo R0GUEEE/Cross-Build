@@ -1,0 +1,124 @@
+name: Native Toolchains
+
+# Builds the app-owned compiler payload described in docs/RUNTIME_ARCHITECTURE.md.
+#
+# Step 2 of that document's migration sequence is "move each compiler/runtime
+# behind an iOS-native library adapter", and step 5 is "generate Mach-O AOT
+# images against the exact bootstrap app ABI". The adapter already exists
+# (Native/CrossBuildClang) and reports itself unavailable because nothing is
+# linked behind it. This workflow produces the thing that goes behind it.
+#
+# Deliberately manual: an LLVM build for iOS arm64 takes hours, and the result is
+# a large binary that has to be reviewed before it becomes an input to every IPA.
+# Run this by hand, then let Build IPA pick the payload up.
+
+on:
+  workflow_dispatch:
+    inputs:
+      llvm_version:
+        description: LLVM release tag to build
+        default: llvmorg-18.1.8
+        required: true
+      include_lld:
+        description: Also build LLD (needed to link, not just compile)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-clang:
+    runs-on: macos-15
+    timeout-minutes: 600
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+          xcodebuild -version
+
+      - name: Cache the LLVM source and build tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            llvm-project
+            build-clang
+          key: llvm-ios-${{ inputs.llvm_version }}-${{ inputs.include_lld }}-v1
+
+      - name: Fetch LLVM
+        run: |
+          set -euo pipefail
+          if [ ! -d llvm-project ]; then
+            git clone --depth 1 --branch "${{ inputs.llvm_version }}" \
+              https://github.com/llvm/llvm-project.git llvm-project
+          fi
+          git -C llvm-project rev-parse HEAD | tee llvm-revision.txt
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          PROJECTS="clang"
+          if [ "${{ inputs.include_lld }}" = "true" ]; then PROJECTS="clang;lld"; fi
+          # Only the pieces a compiler needs. Everything else -- the tools, the
+          # tests, the other targets -- is build time and binary size the app
+          # never uses. Building ARM as well, because clang generated code for the
+          # target and the host ABI are both needed.
+          cmake -G Ninja -S llvm-project/llvm -B build-clang \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_SYSROOT="$SDK" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
+            -DCMAKE_INSTALL_PREFIX="$(pwd)/stage" \
+            -DLLVM_ENABLE_PROJECTS="$PROJECTS" \
+            -DLLVM_TARGETS_TO_BUILD="AArch64;ARM" \
+            -DLLVM_BUILD_TOOLS=ON \
+            -DLLVM_INCLUDE_TESTS=OFF \
+            -DLLVM_INCLUDE_EXAMPLES=OFF \
+            -DLLVM_INCLUDE_BENCHMARKS=OFF \
+            -DLLVM_ENABLE_TERMINFO=OFF \
+            -DLLVM_ENABLE_ZLIB=OFF \
+            -DLLVM_ENABLE_ZSTD=OFF \
+            -DLLVM_ENABLE_LIBXML2=OFF \
+            -DLLVM_ENABLE_BINDINGS=OFF \
+            -DLLVM_ENABLE_ASSERTIONS=OFF \
+            -DCLANG_ENABLE_STATIC_ANALYZER=OFF \
+            -DCLANG_ENABLE_ARCMT=OFF \
+            -DLLVM_ENABLE_RTTI=OFF \
+            -DBUILD_SHARED_LIBS=OFF
+
+      - name: Build
+        run: ninja -C build-clang clang lld
+
+      - name: Stage the payload
+        run: |
+          set -euo pipefail
+          # The layout ToolchainRuntimeArchitecture.payloadURL(for:) expects:
+          # a manifest describing what is here, the libraries themselves, and
+          # resources (headers/sysroot) -- never a Linux package tree.
+          PAYLOAD="NativeToolchains/clang"
+          mkdir -p "$PAYLOAD/lib"
+          find build-clang -name '*.a' -exec cp {} "$PAYLOAD/lib/" \;
+          {
+            echo "{"
+            echo "  \"id\": \"clang\","
+            echo "  \"llvmRevision\": \"$(cat llvm-revision.txt)\","
+            echo "  \"architectures\": [\"arm64\"],"
+            echo "  \"libraries\": $(find "$PAYLOAD/lib" -name '*.a' | wc -l | tr -d ' '),"
+            echo "  \"builtAt\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+            echo "}"
+          } > "$PAYLOAD/manifest.json"
+          du -sh "$PAYLOAD"
+          find "$PAYLOAD" -maxdepth 1
+
+      - name: Upload the payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: NativeToolchains-clang
+          path: NativeToolchains/
+          # Large by nature: this is a compiler.
+          compression-level: 0
+          if-no-files-found: error

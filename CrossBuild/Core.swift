@@ -1164,6 +1164,11 @@ final class WorkspaceModel: ObservableObject {
                     + (flags.isEmpty ? "" : " " + flags)
             }
 
+            guard ToolchainRuntimeArchitecture.hasLinkedCompiler || guestToolchain.contains("clang") else {
+                console += "error: \(ToolchainRuntimeArchitecture.unavailableReason)\n"
+                return
+            }
+
             setProgress(step: 1, detail: command)
             let started = Date()
             let result = await executeCommand(command, settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved))
@@ -1206,6 +1211,11 @@ final class WorkspaceModel: ObservableObject {
                 return
             }
             setProgress(step: 1, detail: "Guest synchronised")
+
+            guard ToolchainRuntimeArchitecture.hasLinkedCompiler || guestToolchain.contains("clang") else {
+                console += "error: \(ToolchainRuntimeArchitecture.unavailableReason)\n"
+                return
+            }
 
             for (index, relative) in sources.enumerated() {
                 guard let built = singleFileBuildCommand(for: relative) else {

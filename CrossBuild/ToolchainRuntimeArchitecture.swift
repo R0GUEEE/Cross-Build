@@ -37,4 +37,41 @@ enum ToolchainRuntimeArchitecture {
         guard let url = payloadURL(for: id) else { return false }
         return FileManager.default.fileExists(atPath: url.path)
     }
+
+    /// What the payload manifest says, when one is bundled.
+    ///
+    /// The manifest is written by the workflow that builds the payload, so it
+    /// names the LLVM revision that was actually linked. Reading it is the
+    /// difference between "a compiler should be linked in" and knowing which one.
+    struct PayloadManifest: Decodable {
+        var id: String
+        var llvmRevision: String?
+        var architectures: [String]?
+        var libraries: Int?
+        var builtAt: String?
+    }
+
+    static func manifest(for id: String) -> PayloadManifest? {
+        guard let url = payloadURL(for: id)?.appendingPathComponent("manifest.json"),
+              let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(PayloadManifest.self, from: data)
+    }
+
+    /// True when an app-owned compiler is actually linked in and usable.
+    ///
+    /// This is the contract the whole design rests on: compilers belong to the
+    /// signed application, and the Linux guest is not a compiler distribution.
+    /// Until this is true there is no compile path at all, which is a state the
+    /// UI has to be able to state plainly rather than discover through
+    /// `command not found` in a console nobody is reading.
+    static var hasLinkedCompiler: Bool {
+        hasPayload(for: "clang") && ClangEmbeddedBridge().isLinked
+    }
+
+    /// The sentence to show when nothing can compile.
+    static var unavailableReason: String {
+        "No compiler is linked into this build. Cross Build's toolchain is meant to be "
+        + "app-owned (docs/RUNTIME_ARCHITECTURE.md), and the Linux guest deliberately "
+        + "carries no compiler, so a compile cannot run yet."
+    }
 }

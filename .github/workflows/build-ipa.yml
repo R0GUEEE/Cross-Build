@@ -164,6 +164,30 @@ jobs:
           set -o pipefail
           xcodebuild             -project CrossBuild.xcodeproj             -scheme CrossBuild             -configuration Release             -sdk iphoneos             -derivedDataPath build/DerivedData             CODE_SIGNING_ALLOWED=NO             CODE_SIGNING_REQUIRED=NO             CODE_SIGN_IDENTITY=""             build | tee build.log
 
+      - name: Stage the app-owned toolchain payload
+        # Downloaded rather than built here: an LLVM build for iOS takes hours and
+        # is produced by the "Native Toolchains" workflow, deliberately by hand and
+        # reviewed. Absent is a normal state and not a failure -- it means this IPA
+        # carries no compiler, which the app now says outright.
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: NativeToolchains-clang
+          path: /tmp/NativeToolchains
+
+      - name: Copy the payload into the app when present
+        continue-on-error: true
+        run: |
+          APP="$(find build/DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
+          if [ -d /tmp/NativeToolchains ] && [ -n "$APP" ]; then
+            mkdir -p "$APP/NativeToolchains"
+            cp -R /tmp/NativeToolchains/. "$APP/NativeToolchains/"
+            echo "payload staged:"
+            find "$APP/NativeToolchains" -maxdepth 2
+          else
+            echo "no toolchain payload artifact; this build has no linked compiler"
+          fi
+
       - name: Verify bundled resources
         run: |
           APP="$(find build/DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
