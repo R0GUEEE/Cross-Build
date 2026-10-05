@@ -3,6 +3,27 @@ import SwiftUI
 
 @MainActor
 final class CompilerConfiguration: ObservableObject {
+    /// Bridges `@AppStorage` to `ObservableObject`.
+    ///
+    /// Same defect `AppSettings` had: every property here persists a value and
+    /// publishes nothing, so a control moved, wrote to `UserDefaults`, and nothing
+    /// depending on that value ever re-rendered. On this screen the consequence is
+    /// worse than a stale label -- the file and build settings are pushed into the
+    /// services from `onChange` handlers, and a change that never re-renders never
+    /// fires them. The control appeared to work and the app behaved as if it had
+    /// not been touched.
+    private var defaultsObserver: NSObjectProtocol?
+
+    init() {
+        defaultsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+    }
+
     @AppStorage("compiler.sdk") var sdk = "iPhoneOS"
     @AppStorage("compiler.sysroot") var sysroot = ""
     @AppStorage("compiler.archs") var architectures = "arm64"
