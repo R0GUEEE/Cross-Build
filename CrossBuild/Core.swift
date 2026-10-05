@@ -571,6 +571,9 @@ final class WorkspaceModel: ObservableObject {
                 return (String(parts[0]), parts[1] == "yes")
             }
         guestToolchain = entries.filter { $0.1 }.map { $0.0 }.sorted()
+        // The catalogue asks what the app ships; this tells it what the guest can
+        // actually do, so the two screens stop disagreeing with the compiler.
+        AppToolchainLibraries.guestTools = guestToolchain
         let missing = ToolchainRuntimeArchitecture.requiredGuestTools.filter { tool in !guestToolchain.contains(tool) }
         if !missing.isEmpty {
             console += "warning: the Linux guest has no \(missing.joined(separator: " or ")). "

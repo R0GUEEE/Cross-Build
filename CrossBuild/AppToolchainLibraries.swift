@@ -22,6 +22,9 @@ struct AppToolchainScan: Identifiable {
     let present: Bool
     let detail: String
     let location: String
+    /// The guest executables that satisfy this entry, when the app does not ship
+    /// a payload for it. Nil means genuinely unavailable.
+    var guestBacked: String? = nil
 }
 
 enum AppToolchainLibraries {
@@ -51,6 +54,34 @@ enum AppToolchainLibraries {
     /// Scans the installed app, not PATH or the Linux guest. A manifest alone is
     /// reported as support metadata; a compiler is ready only when its in-app
     /// engine/framework/library is actually present.
+    /// The guest's build tools, published by the last probe.
+    ///
+    /// The catalogue describes what the app *ships*. Compilation in this app
+    /// actually happens in the guest. Reporting only the former put "Not bundled"
+    /// next to GNU Make while make was installed and working one layer down, and
+    /// next to the C/C++ entry while gcc and g++ were there — a screen saying
+    /// nothing works, on an install that can compile.
+    static var guestTools: [String] = []
+
+    /// Which guest executables satisfy a catalogue entry, if any.
+    static func guestProvider(for id: String) -> String? {
+        guard !guestTools.isEmpty else { return nil }
+        switch id {
+        case "make":
+            return guestTools.contains("make") ? "make" : nil
+        case "clang":
+            // The guest carries the GNU toolchain, not clang. It covers the C and
+            // C++ languages this entry advertises; Objective-C does not come with
+            // gcc, so the detail says which tools rather than implying parity.
+            var tools: [String] = []
+            if guestTools.contains("gcc") { tools.append("gcc") }
+            if guestTools.contains("g++") { tools.append("g++") }
+            return tools.isEmpty ? nil : tools.joined(separator: " and ")
+        default:
+            return nil
+        }
+    }
+
     static func scanBundle() -> [AppToolchainScan] {
         all.map { lib in
             if lib.id == "javascriptcore" {
@@ -75,9 +106,19 @@ enum AppToolchainLibraries {
             }
 
             let payload = hasNativePayload(for: lib)
+            let guest = guestProvider(for: lib.id)
+            let detail: String
+            if payload {
+                detail = "In-app payload detected."
+            } else if let guest {
+                detail = "Not bundled, but the Linux guest provides \(guest), so builds that use it work."
+            } else {
+                detail = "No in-app library payload detected; catalogue metadata alone is not treated as installed."
+            }
             return .init(id: lib.id, name: lib.name, present: payload,
-                         detail: payload ? "In-app payload detected." : "No in-app library payload detected; catalogue metadata alone is not treated as installed.",
-                         location: lib.resourcePath ?? lib.module)
+                         detail: detail,
+                         location: lib.resourcePath ?? lib.module,
+                         guestBacked: guest)
         }
     }
 

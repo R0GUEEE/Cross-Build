@@ -28,9 +28,10 @@ struct BundledResourcesView: View {
                         // renders as "Not bundled" in grey. Absent-by-design is not
                         // a fault, and two screens disagreeing about the same
                         // component is how a healthy install looks broken.
-                        Text(item.present ? "Ready" : "Not bundled")
+                        Text(item.present ? "Ready" : (item.guestBacked != nil ? "Via guest" : "Not bundled"))
                             .font(.caption)
-                            .foregroundStyle(item.present ? .green : .secondary)
+                            .foregroundStyle(item.present ? .green
+                                             : (item.guestBacked != nil ? Color.accentColor : .secondary))
                     }
                     .padding(.vertical, 3)
                 }
