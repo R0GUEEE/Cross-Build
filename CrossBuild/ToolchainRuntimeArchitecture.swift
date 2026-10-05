@@ -12,17 +12,33 @@ enum ToolchainRuntimeArchitecture {
     static let linuxRuntimeMode = "AOT-ready / no runtime emission"
 
     /// Packages intentionally allowed in the shipped Alpine image.
+    ///
+    /// This used to be runtime-only, on the reasoning that compilers belong to
+    /// the iOS app rather than the Linux image. The consequence was that no build
+    /// action could run: the app's commands call `make` and `cc`, and neither was
+    /// present, while the app-owned compiler that was supposed to replace them was
+    /// never finished. A workbench whose Build button reports `not found` is not a
+    /// workbench, so the toolchain is in the guest and CI asserts it is.
     static let guestRuntimePackages = [
         "bash", "coreutils", "findutils", "grep", "sed", "gawk",
-        "git", "tar", "gzip", "xz", "ca-certificates"
+        "git", "tar", "gzip", "xz", "ca-certificates",
+        "make", "gcc", "g++", "musl-dev", "binutils"
     ]
 
     /// Executables that indicate a packaging regression if they appear in the
     /// bundled Linux root. CI enforces the same list.
+    ///
+    /// The C/C++ toolchain is deliberately no longer here. What remains is the
+    /// stack the guest still does not carry: language runtimes and build systems
+    /// whose app-owned equivalents are the better answer, and which would each add
+    /// their own large tree.
     static let forbiddenGuestBuildTools = [
-        "clang", "clang++", "gcc", "g++", "ld.lld", "cmake", "ninja",
+        "clang", "clang++", "ld.lld", "cmake", "ninja",
         "meson", "python3", "cargo", "rustc", "go", "zig", "swift"
     ]
+
+    /// The tools every build action invokes. CI asserts these are present.
+    static let requiredGuestTools = ["make", "cc", "gcc", "c++", "g++"]
 
     /// Native payload location used by app-owned toolchain adapters.
     /// Each payload can contain an XCFramework/static library, headers, SDK

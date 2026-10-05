@@ -559,7 +559,7 @@ final class WorkspaceModel: ObservableObject {
     func probeGuestToolchain() async {
         guard !didProbeGuestToolchain else { return }
         didProbeGuestToolchain = true
-        let probe = "for t in make clang gcc g++ cmake ninja python3 git; do "
+        let probe = "for t in make cc gcc c++ g++ cmake ninja python3 git; do "
             + "command -v \"$t\" >/dev/null 2>&1 && printf '%s:yes ' \"$t\" || printf '%s:no ' \"$t\"; done"
         let result = await LinuxGuestSession.shared.run(probe, timeout: 60)
         guard result.code >= 0 else { return }
@@ -571,7 +571,7 @@ final class WorkspaceModel: ObservableObject {
                 return (String(parts[0]), parts[1] == "yes")
             }
         guestToolchain = entries.filter { $0.1 }.map { $0.0 }.sorted()
-        let missing = ["make", "clang"].filter { tool in !guestToolchain.contains(tool) }
+        let missing = ToolchainRuntimeArchitecture.requiredGuestTools.filter { tool in !guestToolchain.contains(tool) }
         if !missing.isEmpty {
             console += "warning: the Linux guest has no \(missing.joined(separator: " or ")). "
                 + "Build actions that need it will fail with 'not found'. The guest rootfs ships no "
@@ -1081,17 +1081,20 @@ final class WorkspaceModel: ObservableObject {
         let quote = GuestWorkspaceSync.quoted
         let extra = flags.isEmpty ? "" : " " + flags
 
+        // `cc`/`c++` rather than `clang`: the guest carries the GNU toolchain, and
+        // these are the names that resolve to a real compiler there. Asking for
+        // clang was one more way for a build to fail with `not found`.
         switch (relativePath as NSString).pathExtension.lowercased() {
-        case "c": return "clang\(extra) -c \(quote(path)) -o \(quote(object))"
-        case "m": return "clang\(extra) -fobjc-arc -c \(quote(path)) -o \(quote(object))"
-        case "cc", "cpp", "cxx", "mm": return "clang++\(extra) -c \(quote(path)) -o \(quote(object))"
+        case "c": return "cc\(extra) -c \(quote(path)) -o \(quote(object))"
+        case "m": return "cc\(extra) -c \(quote(path)) -o \(quote(object))"
+        case "cc", "cpp", "cxx", "mm": return "c++\(extra) -c \(quote(path)) -o \(quote(object))"
+        case "h", "hpp", "hh": return "cc\(extra) -fsyntax-only \(quote(path))"
         case "swift": return "swiftc -typecheck \(quote(path))"
         case "rs": return "rustc --emit=obj \(quote(path)) -o \(quote(object))"
         case "go": return "go vet \(quote(path))"
         case "zig": return "zig build-obj \(quote(path)) -femit-bin=\(quote(object))"
         case "py": return "python3 -m py_compile \(quote(path))"
         case "js", "ts": return "node --check \(quote(path))"
-        case "h", "hpp", "hh": return "clang\(extra) -fsyntax-only \(quote(path))"
         default: return nil
         }
     }
@@ -1164,8 +1167,8 @@ final class WorkspaceModel: ObservableObject {
                     + (flags.isEmpty ? "" : " " + flags)
             }
 
-            guard ToolchainRuntimeArchitecture.hasLinkedCompiler || guestToolchain.contains("clang") else {
-                console += "error: \(ToolchainRuntimeArchitecture.unavailableReason)\n"
+            guard guestToolchain.contains("cc") || guestToolchain.contains("gcc") else {
+                console += "error: the guest has no C compiler, so \(relativePath) cannot be compiled.\n"
                 return
             }
 
@@ -1212,8 +1215,8 @@ final class WorkspaceModel: ObservableObject {
             }
             setProgress(step: 1, detail: "Guest synchronised")
 
-            guard ToolchainRuntimeArchitecture.hasLinkedCompiler || guestToolchain.contains("clang") else {
-                console += "error: \(ToolchainRuntimeArchitecture.unavailableReason)\n"
+            guard guestToolchain.contains("cc") || guestToolchain.contains("gcc") else {
+                console += "error: the guest has no C compiler, so there is nothing to compile with.\n"
                 return
             }
 

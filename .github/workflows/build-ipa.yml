@@ -125,12 +125,19 @@ jobs:
           test -x ./build-host/ish || { echo "::error::native ish was not built"; exit 1; }
 
           ROOT="$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root"
-          # Cross-Build's compiler stack belongs to the iOS application, not the
-          # Linux image. Keep this guest deliberately small: it supplies the shell,
-          # filesystem/userland and source-control transport needed by projects.
-          # LLVM/Clang, Swift, Python, build systems and language runtimes are
-          # app-owned native libraries/resources and must not be apk-installed here.
-          RUNTIME_PACKAGES="bash coreutils findutils grep sed gawk git tar gzip xz ca-certificates"
+          # The guest carries a working C/C++ toolchain.
+          #
+          # It did not, on the reasoning that compilers belong to the iOS app and
+          # the Linux image should stay small. That reasoning left every build
+          # action calling a tool that was not there -- `make: not found` for the
+          # project build, `not found` for each individual compile -- because the
+          # app-owned compiler was never finished. A build button that cannot
+          # build is worse than a large download.
+          #
+          # gcc + g++ + musl-dev + binutils is the smallest real toolchain: musl-dev
+          # supplies the C headers and crt objects, binutils the assembler and
+          # linker. This is a deliberate size cost.
+          RUNTIME_PACKAGES="bash coreutils findutils grep sed gawk git tar gzip xz ca-certificates make gcc g++ musl-dev binutils"
           echo "Installing runtime-only packages: $RUNTIME_PACKAGES"
 
           MIRROR_HOST="dl-cdn.alpinelinux.org"
@@ -139,14 +146,19 @@ jobs:
           ./build-host/ish -f "$ROOT" /bin/sh -c "echo '$IP $MIRROR_HOST' >> /etc/hosts"
           ./build-host/ish -f "$ROOT" /bin/sh -ec "apk update >/dev/null && apk add --no-cache $RUNTIME_PACKAGES"
 
-          # Assert the architectural boundary. If one of these appears in the
-          # guest, the IPA is accidentally carrying a second compiler stack.
-          for tool in clang clang++ gcc g++ ld.lld cmake ninja meson python3 cargo rustc go zig swift; do
-            if ./build-host/ish -f "$ROOT" /bin/sh -c "command -v $tool >/dev/null 2>&1"; then
-              echo "::error::compiler/build tool leaked into Linux rootfs: $tool"
+          # Assert the opposite of what this used to assert: the tools every
+          # build action invokes must actually be present, or the IPA ships a
+          # Build button that cannot build. `cc` and `make` are what the app's own
+          # commands call, so a missing one has to fail here rather than on the
+          # user's device.
+          for tool in make cc gcc c++ g++; do
+            if ! ./build-host/ish -f "$ROOT" /bin/sh -c "command -v $tool >/dev/null 2>&1"; then
+              echo "::error::$tool is missing from the Linux rootfs; builds will fail at runtime"
               exit 1
             fi
           done
+          ./build-host/ish -f "$ROOT" /bin/sh -c "printf 'int main(void){return 0;}\n' > /tmp/t.c && cc /tmp/t.c -o /tmp/t && /tmp/t" \
+            || { echo "::error::the guest toolchain is present but cannot compile and link"; exit 1; }
 
           ./build-host/ish -f "$ROOT" /bin/sh -ec '
             rm -rf /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale/??* 2>/dev/null || true

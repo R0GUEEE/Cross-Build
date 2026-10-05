@@ -6,9 +6,15 @@ Cross-Build uses two deliberately separate execution layers.
 
 Compilers, language runtimes and build-system dependencies belong to the application. They are packaged as static libraries, XCFrameworks, and read-only resource payloads under `NativeToolchains/`. SDK headers and support data are resources; executable compiler logic must be linked into the signed application.
 
-The embedded Linux root is **not** a compiler distribution. Do not install LLVM/Clang, GCC, LLD, Swift, Rust/Cargo, Go, Zig, Python, CMake, Ninja or Meson into `fakefs-root`.
+The embedded Linux root **is** a C/C++ build environment. It carries `make`, `gcc`, `g++`, `musl-dev` and `binutils`, and CI asserts both that they are present and that they can compile and link a program -- a Build button that reports `not found` is worse than a larger download.
+
+This reverses an earlier decision. The guest used to be runtime-only, on the reasoning that compilers belong to the iOS application; the consequence was that every build action called a tool that was not there, because the app-owned compiler was never finished. Until that work is done, the guest is where the toolchain lives.
+
+Still excluded, and still asserted absent by CI: `clang`, `ld.lld`, `cmake`, `ninja`, `meson`, `python3`, `cargo`, `rustc`, `go`, `zig`, `swift`. Each would add its own large tree, and for those the app-owned adapter is the better answer.
 
 The existing `CrossBuildClang` bridge is only an ABI adapter until LLVM/clangDriver is linked behind it. New toolchains should follow the same adapter pattern and report unavailable until their native payload is actually linked.
+
+The bridge is **not** on the critical path any more: C and C++ compile through the guest's GNU toolchain today. The adapter remains the intended home for a future app-owned compiler, and `.github/workflows/native-toolchains.yml` is the workflow that would build it.
 
 ## 2. ios-linuxkit runtime layer
 
