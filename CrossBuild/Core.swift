@@ -1120,6 +1120,26 @@ final class WorkspaceModel: ObservableObject {
     /// makes an individual build equivalent to the one make would have run.
     func singleFileBuildCommand(for relativePath: String) -> String? {
         guard !relativePath.isEmpty else { return nil }
+        // A language whose compiler the guest does not carry cannot be built one
+        // file at a time. Returning nil here makes the callers say "no single-file
+        // compile for that language" instead of running a command whose only
+        // possible answer is `not found` -- which is what the sweep used to do for
+        // every .swift, .rs, .go, .zig, .py, .js and .ts file, none of which have a
+        // compiler in the guest.
+        let required: [String]
+        switch (relativePath as NSString).pathExtension.lowercased() {
+        case "c", "m", "h", "hpp", "hh": required = ["cc", "gcc"]
+        case "cc", "cpp", "cxx", "mm": required = ["c++", "g++"]
+        case "swift": required = ["swiftc"]
+        case "rs": required = ["rustc"]
+        case "go": required = ["go"]
+        case "zig": required = ["zig"]
+        case "py": required = ["python3"]
+        case "js", "ts": required = ["node"]
+        default: return nil
+        }
+        guard !guestToolchain.isEmpty,
+              required.contains(where: { guestToolchain.contains($0) }) else { return nil }
         let flags = (commandEnvironment()["CFLAGS"] ?? "").trimmingCharacters(in: .whitespaces)
         let path = GuestWorkspaceSync.guestRoot + "/" + relativePath
         let object = Self.objectPath(for: relativePath)
@@ -1271,10 +1291,9 @@ final class WorkspaceModel: ObservableObject {
                     + (flags.isEmpty ? "" : " " + flags)
             }
 
-            guard guestToolchain.contains("cc") || guestToolchain.contains("gcc") else {
-                console += "error: the guest has no C compiler, so \(item.title) cannot be compiled.\n"
-                return
-            }
+            // No compiler check here any more: `singleFileBuildCommand` already
+            // returned nil (and said so) unless the guest has the tool this file
+            // needs, and the old check hard-coded C for every language.
 
             setProgress(step: 1, detail: command)
             let started = Date()
@@ -1360,6 +1379,11 @@ final class WorkspaceModel: ObservableObject {
         Task {
             beginProgress(label: "Compile \(sources.count) source(s)", detail: "Copying into the guest", stepCount: sources.count + 1)
             defer { endProgress() }
+            // Every other build entry point asks the guest what it has first. This
+            // one did not, so choosing "Compile All Sources" as the first action of
+            // a launch reported that the guest had no compiler -- its `guestToolchain`
+            // was still empty because nothing had probed yet.
+            await probeGuestToolchain()
 
             let syncItems = await projectSyncItems(under: root)
             let synced = await guestSync.push(syncItems, session: .shared)
@@ -1371,8 +1395,11 @@ final class WorkspaceModel: ObservableObject {
             }
             setProgress(step: 1, detail: "Guest synchronised")
 
-            guard guestToolchain.contains("cc") || guestToolchain.contains("gcc") else {
-                console += "error: the guest has no C compiler, so there is nothing to compile with.\n"
+            // Per file now, not per project: a source list of one language must be
+            // judged by that language's compiler, not by whether `cc` exists.
+            guard sources.contains(where: { singleFileBuildCommand(for: $0) != nil }) else {
+                console += "error: the guest has none of the compilers this project's sources need, "
+                    + "so there is nothing to compile with.\n"
                 return
             }
 
