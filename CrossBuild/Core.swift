@@ -356,6 +356,7 @@ final class WorkspaceModel: ObservableObject {
             let stepCount = resolved?.cleanBeforeBuild == true ? 2 : 1
             beginProgress(label: "Build", detail: buildCommand(), stepCount: stepCount)
             defer { endProgress() }
+            await probeGuestToolchain()
 
             if resolved?.clearDiagnosticsOnBuild == true {
                 console = "Build started.\n"
@@ -542,6 +543,40 @@ final class WorkspaceModel: ObservableObject {
         // executes inside the embedded ios-linuxkit runtime.
         let mode = "Embedded Runtime"
         return (ExecutionBackendFactory.make(mode: mode, settings: resolvedSettings), mode)
+    }
+
+    /// Tools found in the guest, and whether the probe has run.
+    @Published private(set) var guestToolchain: [String] = []
+    private var didProbeGuestToolchain = false
+
+    /// Asks the guest which build tools it actually has.
+    ///
+    /// The shipped rootfs is deliberately runtime-only -- CI fails the build if a
+    /// compiler or build system appears in it -- so "does the guest have make"
+    /// has a real answer, and it is not the one the build buttons assume. Without
+    /// this the first sign is `make: not found` scrolling past in a console the
+    /// user may not be looking at.
+    func probeGuestToolchain() async {
+        guard !didProbeGuestToolchain else { return }
+        didProbeGuestToolchain = true
+        let probe = "for t in make clang gcc g++ cmake ninja python3 git; do "
+            + "command -v \"$t\" >/dev/null 2>&1 && printf '%s:yes ' \"$t\" || printf '%s:no ' \"$t\"; done"
+        let result = await LinuxGuestSession.shared.run(probe, timeout: 60)
+        guard result.code >= 0 else { return }
+        let entries = result.output
+            .components(separatedBy: .whitespacesAndNewlines)
+            .compactMap { token -> (String, Bool)? in
+                let parts = token.split(separator: ":")
+                guard parts.count == 2 else { return nil }
+                return (String(parts[0]), parts[1] == "yes")
+            }
+        guestToolchain = entries.filter { $0.1 }.map { $0.0 }.sorted()
+        let missing = ["make", "clang"].filter { tool in !guestToolchain.contains(tool) }
+        if !missing.isEmpty {
+            console += "warning: the Linux guest has no \(missing.joined(separator: " or ")). "
+                + "Build actions that need it will fail with 'not found'. The guest rootfs ships no "
+                + "compiler stack by design, so the toolchain has to come from the guest itself.\n"
+        }
     }
 
     /// Announces a run. Nested calls are counted: the outermost caller owns the
@@ -1090,6 +1125,7 @@ final class WorkspaceModel: ObservableObject {
         Task {
             beginProgress(label: "Build \(item.title)", detail: "Copying into the guest", stepCount: 2)
             defer { endProgress() }
+            await probeGuestToolchain()
 
             // Push what the item needs: the one file for a file build, the whole
             // project for a target, whose recipe may touch anything in the tree.
@@ -1333,11 +1369,37 @@ final class WorkspaceModel: ObservableObject {
         return results
     }
 
-    func openSelectedFile() {
-        guard let file = files.selected, let text = files.contents(of: file, encoding: editorEncoding) else { return }
+    /// Opens one file in the editor.
+    ///
+    /// The previous version returned silently when the file could not be decoded,
+    /// so an unreadable file and a tap the app never received were the same
+    /// thing to the user: nothing happened.
+    func openFile(_ file: WorkspaceFile) {
+        guard !file.isDirectory else { return }
+        guard let text = files.contents(of: file, encoding: editorEncoding) else {
+            console += "error: \(file.name) could not be read as \(configuration.defaultEncoding), so it was not opened.\n"
+            files.errorMessage = "\(file.name) could not be read as \(configuration.defaultEncoding)."
+            return
+        }
         editor.open(file: file, text: text)
         editorText = editor.selected?.text ?? text
         persistOpenDocuments()
+    }
+
+    func openSelectedFile() {
+        guard let file = files.selected else { return }
+        openFile(file)
+    }
+
+    /// Makes a folder the project root.
+    ///
+    /// Detection already took a root override; nothing in the UI could supply
+    /// one, so a repository checked out inside a larger workspace could only be
+    /// built by moving it.
+    func useFolderAsActiveProject(_ folder: WorkspaceFile) {
+        guard folder.isDirectory else { return }
+        detectProject(at: folder.path)
+        console += "Active project: \(relativePath(folder.path))/\n"
     }
 
     func selectDocument(_ id: UUID) {

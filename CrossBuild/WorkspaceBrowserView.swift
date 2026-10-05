@@ -11,6 +11,16 @@ struct WorkspaceBrowserView: View {
     /// Mirrors "Confirm destructive actions". When it is off, Delete acts
     /// immediately instead of asking.
     var confirmDeletes: Bool = true
+    /// Called on tap, in addition to selecting the row.
+    ///
+    /// Opening used to rely on an `onChange` of `files.selected`, which does not
+    /// fire when the tapped file is the one already selected -- and the open path
+    /// then returned silently if the text could not be decoded. Both looked
+    /// exactly like the app ignoring the tap.
+    var onOpen: ((WorkspaceFile) -> Void)? = nil
+    /// Makes a folder the active project, for a repository that lives inside a
+    /// larger tree.
+    var onSetActiveProject: ((WorkspaceFile) -> Void)? = nil
     @State private var showImporter = false
     @State private var newItemName = ""
     @State private var showNewFile = false
@@ -145,7 +155,10 @@ struct WorkspaceBrowserView: View {
     }
 
     @ViewBuilder private func row(_ file: WorkspaceFile) -> some View {
-        Button { files.open(file) } label: {
+        Button {
+            files.open(file)
+            onOpen?(file)
+        } label: {
             Label {
                 VStack(alignment: .leading) {
                     Text(file.name)
@@ -162,6 +175,9 @@ struct WorkspaceBrowserView: View {
         .buttonStyle(.plain)
         .contextMenu {
             Button("Copy Path", systemImage: "doc.on.doc") { UIPasteboard.general.string = file.path }
+            if file.isDirectory, onSetActiveProject != nil {
+                Button("Use as Active Project", systemImage: "target") { onSetActiveProject?(file) }
+            }
             Button(file.isFavorite ? "Remove Favorite" : "Add Favorite",
                    systemImage: file.isFavorite ? "star.slash" : "star") { files.toggleFavorite(file) }
             if !files.isReadOnly(file) {

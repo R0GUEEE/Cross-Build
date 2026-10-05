@@ -103,8 +103,9 @@ struct IDEView: View {
             WorkspaceBrowserView(files: workspace.files,
                                  onDelete: workspace.deleteFile,
                                  onRename: workspace.renameFile,
-                                 confirmDeletes: settings.confirmDestructiveActions)
-                .onChange(of: workspace.files.selected) { _ in workspace.openSelectedFile() }
+                                 confirmDeletes: settings.confirmDestructiveActions,
+                                 onOpen: { workspace.openFile($0) },
+                                 onSetActiveProject: { workspace.useFolderAsActiveProject($0) })
         }
     }
 
