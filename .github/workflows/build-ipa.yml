@@ -238,7 +238,16 @@ jobs:
           # or that reasoning is never actually tested.
           ./build-host/ish -f "$ROOT" /bin/sh -c "printf 'int main(void){return 0;}\n' > /tmp/t.c && cc /tmp/t.c -o /tmp/t && /tmp/t" \
             || { echo "::error::the guest toolchain stopped linking after the rootfs trim"; exit 1; }
-          ./build-host/ish -f "$ROOT" /bin/sh -ec 'printf "#include <stdio.h>\nint main(void){printf(\"ok\\n\");return 0;}\n" > /tmp/t2.c && cc /tmp/t2.c -o /tmp/t2 && /tmp/t2' \
+          # Uses a here-document rather than a quoted printf: the C source needs no
+          # string literals, so no nested quoting is involved. Every line below is
+          # indented to the block's level so YAML keeps it, which means the guest
+          # sees the here-document at column 0.
+          ./build-host/ish -f "$ROOT" /bin/sh -ec '
+          cat > /tmp/t2.c <<"T2EOF"
+          #include <stdio.h>
+          int main(void){putchar(65);return 0;}
+          T2EOF
+          cc /tmp/t2.c -o /tmp/t2 && /tmp/t2' \
             || { echo "::error::the guest toolchain cannot build a program that uses the C library after the trim"; exit 1; }
 
       - name: Generate project
