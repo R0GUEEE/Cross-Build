@@ -69,14 +69,15 @@ final class SetupService: ObservableObject {
         var env = SetupEnvironment()
         env.rootfsPresent = LinuxGuestEngine.isLinked && LinuxGuestEngine.isRootBundled
         env.sdkCount = IOSSDKDiscovery.availableSDKs().count
-        let probe = "for t in make cc gcc c++ g++ ; do command -v \"$t\" >/dev/null 2>&1 && printf '%s ' \"$t\"; done"
-        let probed = await LinuxGuestSession.shared.run(probe, timeout: 60)
-        if probed.code >= 0 {
-            env.guestTools = probed.output
-                .split(whereSeparator: { $0 == " " || $0 == "\n" })
-                .map(String.init)
-                .sorted()
-        }
+        // Ask the guest, but do NOT wait for the answer.
+        //
+        // Awaiting it made the entire scan depend on the guest being bootable. The
+        // session serialises on a boot that may copy the rootfs, so a slow or
+        // absent guest held the whole screen at "0 of 0 checks / Scanning…" --
+        // no list, no steps, and nothing to say what was wrong. A scan of the
+        // installed app has to be able to finish without the guest's help; the
+        // guest's own row simply fills in when it answers.
+        probeGuestInBackground()
         env.toolchains = AppToolchainLibraries.scanBundle()
 
         // Only a missing rootfs is a real fault. The other two conditions used to
@@ -97,6 +98,34 @@ final class SetupService: ObservableObject {
         statusLine = env.rootfsPresent
             ? "In-app runtime scan complete. \(env.toolchains.count - missing.count) of \(env.toolchains.count) catalogue components ship as in-app libraries."
             : "The embedded runtime is unavailable."
+    }
+
+    /// Probes the guest off the scan's critical path.
+    private func probeGuestInBackground() {
+        Task { [weak self] in
+            let probe = "for t in make cc gcc c++ g++ ; do command -v \"$t\" >/dev/null 2>&1 && printf '%s ' \"$t\"; done"
+            let probed = await LinuxGuestSession.shared.run(probe, timeout: 15)
+            guard let self, probed.code >= 0 else { return }
+            let tools = probed.output
+                .split(whereSeparator: { $0 == " " || $0 == "\n" })
+                .map(String.init)
+                .sorted()
+            self.environment.guestTools = tools
+            AppToolchainLibraries.guestTools = tools
+            self.refreshGuestToolchainStep()
+        }
+    }
+
+    /// Reflects a late guest answer in the toolchain step, when the scan has
+    /// already produced one.
+    private func refreshGuestToolchainStep() {
+        guard let index = steps.firstIndex(where: { $0.id == "toolchain" }) else { return }
+        let required = ToolchainRuntimeArchitecture.requiredGuestTools
+        let missing = required.filter { !environment.guestTools.contains($0) }
+        steps[index].output = missing.isEmpty
+            ? "Present: \(environment.guestTools.joined(separator: ", "))"
+            : "Missing: \(missing.joined(separator: ", "))\nPresent: \(environment.guestTools.joined(separator: ", "))"
+        steps[index].status = missing.isEmpty ? .succeeded : .failed
     }
 
     func run(workspace: WorkspaceModel, settings: AppSettings) async {
