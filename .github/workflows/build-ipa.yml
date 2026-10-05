@@ -14,7 +14,14 @@ permissions:
 # and can leave an older artifact looking like the latest successful build.
 concurrency:
   group: build-ipa-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Queue rather than cancel.
+  #
+  # `cancel-in-progress: true` was killing runs mid-build, and at ~8 minutes a
+  # build (a 125 MB IPA plus toolchain provisioning) a single follow-up push
+  # discarded the previous one entirely -- so a fix could be written, pushed and
+  # never actually compiled. Waiting for a runner is a cost; losing the only
+  # compile check before a merge is a worse one.
+  cancel-in-progress: false
 
 jobs:
   build:
