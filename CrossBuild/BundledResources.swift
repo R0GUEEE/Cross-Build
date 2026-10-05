@@ -9,6 +9,9 @@ struct BundledResource: Identifiable {
     var sizeBytes: Int64
     var execution: BundledExecution
     var icon: String
+    /// The guest executables that satisfy this entry, when the app ships no
+    /// payload for it. Nil means genuinely unavailable.
+    var guestBacked: String? = nil
 }
 
 enum BundledExecution: String {
@@ -29,7 +32,11 @@ enum BundledResources {
                 present: scan.present,
                 sizeBytes: 0,
                 execution: .inProcess,
-                icon: scan.present ? "shippingbox.fill" : "shippingbox"
+                icon: scan.present ? "shippingbox.fill" : "shippingbox",
+                // Carried through rather than dropped: the scan knows the guest
+                // can satisfy this entry, and without this the row called it
+                // "Not bundled" while make or gcc was installed and working.
+                guestBacked: scan.guestBacked
             )
         }
 
