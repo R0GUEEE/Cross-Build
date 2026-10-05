@@ -9,41 +9,44 @@ struct BundledResourcesView: View {
     @State private var isRunningGuestTest = false
     @ObservedObject private var session = LinuxGuestSession.shared
 
+    /// One component row.
+    ///
+    /// Extracted from `body` deliberately. The row used to sit inline, and the
+    /// whole body then exceeded what the type checker would solve in reasonable
+    /// time -- "unable to type-check this expression in reasonable time", reported
+    /// against `var body` itself. That is a build failure, not a layout problem,
+    /// so it stopped the entire IPA.
+    ///
+    /// A function returning `some View` gives inference a fresh and much smaller
+    /// problem to solve. The status values are resolved before the view for the
+    /// same reason: a nested ternary mixing `.green`, `Color.accentColor` and
+    /// `.secondary` is exactly the kind of expression that tips it over.
+    private func componentRow(_ item: BundledResource) -> some View {
+        let statusLabel: String = item.present ? "Ready"
+            : (item.guestBacked == nil ? "Not bundled" : "Via guest")
+        let statusTint: Color = item.present ? .green
+            : (item.guestBacked == nil ? .secondary : .accentColor)
+        return HStack(alignment: .top, spacing: 12) {
+            Image(systemName: item.present ? item.icon : "xmark.circle")
+                .frame(width: 22)
+                .foregroundStyle(item.present ? .green : .secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.name).font(.subheadline.weight(.medium))
+                Text(item.detail).font(.caption).foregroundStyle(.secondary)
+                Text("\(item.location) • \(item.execution.rawValue)")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+            Spacer()
+            Text(statusLabel).font(.caption).foregroundStyle(statusTint)
+        }
+        .padding(.vertical, 3)
+    }
+
     var body: some View {
         Form {
             Section {
                 ForEach(items) { item in
-                    // Resolved up front, with explicit types.
-                    //
-                    // A nested ternary mixing `.green`, `Color.accentColor` and
-                    // `.secondary` inside foregroundStyle made the whole row too
-                    // expensive for the type checker to solve -- "unable to
-                    // type-check this expression in reasonable time" -- which fails
-                    // the build rather than the row. Two plain values cannot.
-                    let statusLabel: String = item.present ? "Ready"
-                        : (item.guestBacked == nil ? "Not bundled" : "Via guest")
-                    let statusTint: Color = item.present ? .green
-                        : (item.guestBacked == nil ? .secondary : .accentColor)
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: item.present ? item.icon : "xmark.circle")
-                            .frame(width: 22)
-                            .foregroundStyle(item.present ? .green : .secondary)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(item.name).font(.subheadline.weight(.medium))
-                            Text(item.detail).font(.caption).foregroundStyle(.secondary)
-                            Text("\(item.location) • \(item.execution.rawValue)")
-                                .font(.caption2).foregroundStyle(.tertiary)
-                        }
-                        Spacer()
-                        // "Missing" in red, on the same list that the Setup scan
-                        // renders as "Not bundled" in grey. Absent-by-design is not
-                        // a fault, and two screens disagreeing about the same
-                        // component is how a healthy install looks broken.
-                        Text(statusLabel)
-                            .font(.caption)
-                            .foregroundStyle(statusTint)
-                    }
-                    .padding(.vertical, 3)
+                    componentRow(item)
                 }
             } header: {
                 Text("Installed app components")
