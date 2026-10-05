@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-struct CodeEditorOptions {
+struct CodeEditorOptions: Equatable {
     var fontSize: CGFloat
     var tabWidth: Int
     var insertSpaces: Bool
@@ -44,6 +44,17 @@ struct CodeEditorView: UIViewRepresentable {
     func updateUIView(_ uiView: CodeEditorContainer, context: Context) {
         context.coordinator.parent = self
         uiView.apply(options: options)
+        // `apply` handles the font, gutter and wrapping, which take effect at once.
+        // What it cannot do is the things painted into text attributes -- invisible
+        // characters, the occurrence highlight, bracket matching -- because those
+        // come from the highlight pass, which is debounced and otherwise only runs
+        // when you type. So switching "Show invisible characters" looked like it
+        // did nothing until the next keystroke. Repaint now when the options
+        // actually differ; a re-render with unchanged options still does nothing.
+        if context.coordinator.lastOptions != options {
+            context.coordinator.lastOptions = options
+            context.coordinator.highlight(text: text, fileName: fileName)
+        }
         if uiView.textView.text != text {
             let selected = uiView.textView.selectedRange
             uiView.textView.text = text
@@ -68,6 +79,9 @@ struct CodeEditorView: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: CodeEditorView
         weak var container: CodeEditorContainer?
+        /// The options as of the last repaint, so a change can be told from a
+        /// re-render that changed nothing.
+        var lastOptions: CodeEditorOptions?
         private var applyingAttributes = false
 
         init(parent: CodeEditorView) { self.parent = parent }
