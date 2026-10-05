@@ -160,10 +160,55 @@ jobs:
           ./build-host/ish -f "$ROOT" /bin/sh -c "printf 'int main(void){return 0;}\n' > /tmp/t.c && cc /tmp/t.c -o /tmp/t && /tmp/t" \
             || { echo "::error::the guest toolchain is present but cannot compile and link"; exit 1; }
 
+          echo "=== trimming ==="
+          # Everything removed here is something a C/C++ build environment does
+          # not need. The guest exists to run a compiler, not to be a general
+          # distribution, and every megabyte here is a megabyte in the IPA.
+          #
+          # Reported per path rather than silently: a trim step nobody measures
+          # is how you end up unable to say what the guest actually costs.
           ./build-host/ish -f "$ROOT" /bin/sh -ec '
-            rm -rf /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale/??* 2>/dev/null || true
+            report() { [ -e "$1" ] && printf "  %-42s %s\n" "$1" "$(du -sh "$1" 2>/dev/null | cut -f1)"; }
+
+            # Documentation and locale data: nothing reads these at build time.
+            for p in /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale \
+                     /usr/share/gtk-doc /usr/share/gettext /usr/share/terminfo; do
+              report "$p"; rm -rf "$p" 2>/dev/null || true
+            done
+
+            # Static gcc runtimes. Only `-static` links need them, and a dynamic
+            # build against musl is what this guest can actually do.
+            for p in /usr/lib/gcc/*/*/libgcc.a /usr/lib/gcc/*/*/libgcc_eh.a; do
+              report "$p"; rm -f "$p" 2>/dev/null || true
+            done
+
+            # gcc ships a set of headers it has already "fixed" for the platform,
+            # duplicating what musl-dev provides.
+            report /usr/lib/gcc/*/include-fixed; rm -rf /usr/lib/gcc/*/include-fixed 2>/dev/null || true
+
+            # binutils parts no build uses: the old gold linker, coverage and
+            # profiling frontends. as/ld/ar/nm/ranlib/strip/objcopy/readelf stay.
+            for p in /usr/bin/gprof /usr/bin/gcov /usr/bin/gcov-dump /usr/bin/gcov-tool \
+                     /usr/bin/ld.gold /usr/bin/dwp; do
+              report "$p"; rm -f "$p" 2>/dev/null || true
+            done
+
+            # Perl POD is the bulk of the perl tree and is pure documentation.
+            report /usr/share/perl5/core_perl/pod; rm -rf /usr/share/perl5/core_perl/pod 2>/dev/null || true
+
+            # Zone data is megabytes for a guest that has no clock the user reads.
+            report /usr/share/zoneinfo; rm -rf /usr/share/zoneinfo 2>/dev/null || true
+
+            # Package caches and build leftovers.
             rm -rf /var/cache/apk /root/.cache /tmp/* 2>/dev/null || true
-          '
+          ' || echo "::warning::rootfs trimming did not run cleanly"
+
+          echo "=== what the guest costs ==="
+          for p in /usr/lib/gcc /usr/libexec/gcc /usr/bin /usr/lib /usr/share /lib /root /etc; do
+            size=$(./build-host/ish -f "$ROOT" /bin/sh -c "du -sh $p 2>/dev/null | cut -f1" 2>/dev/null)
+            [ -n "$size" ] && echo "  $p = $size"
+          done
+          echo "  total = $(du -sh "$ROOT" | cut -f1) (fakefs image on disk)"
           du -sh "$ROOT"
 
       - name: Generate project
