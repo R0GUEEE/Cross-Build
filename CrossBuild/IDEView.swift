@@ -24,6 +24,9 @@ struct IDEView: View {
     @State private var makeTargets: [String] = []
     /// Which find/replace match is current, advanced by the up/down buttons.
     @State private var currentMatch = 0
+    /// The bottom panel's height, scaled rather than fixed, so a large text size
+    /// does not leave the console clipped.
+    @ScaledMetric(relativeTo: .caption) private var bottomPanelHeight: CGFloat = 240
 
     var body: some View {
         NavigationSplitView {
@@ -34,15 +37,6 @@ struct IDEView: View {
                 .navigationSplitViewColumnWidth(min: 220, ideal: settings.navigatorWidth, max: 480)
         } detail: {
             editorWorkspace
-        }
-        .alert("Go to Line", isPresented: $showGoToLine) {
-            TextField("Line", value: $goToLine, format: .number)
-            Button("Go") { jumpToLine(goToLine) }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            // One pass instead of `components(separatedBy:)`, which allocated an
-            // array of every line each time the body was evaluated.
-            Text("1 to \(max(1, workspace.editorText.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }))")
         }
         .sheet(isPresented: $showCompilerManager) {
             CompilerManagerView().environmentObject(workspace)
@@ -163,19 +157,32 @@ struct IDEView: View {
             if workspace.editor.documents.isEmpty && settings.showWelcomeScreen {
                 WorkspaceHomeView(clone: { openGitHubImporter() }, configure: { showWorkspaceConfiguration = true }).environmentObject(workspace)
             } else if workspace.editor.documents.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "doc.text").font(.largeTitle).foregroundStyle(.secondary)
-                    Text("No File Open").font(.headline)
-                    Button("New File", systemImage: "doc.badge.plus") { createAndOpenNewFile() }
-                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                ForgeEmptyState(icon: "doc.text",
+                                title: "No File Open",
+                                message: "Open a file from the navigator, or start a new one.",
+                                actionTitle: "New File") { createAndOpenNewFile() }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                // The Go-to-Line alert lives here rather than on the split view.
+                // Two `.alert` modifiers on the same view is one more than
+                // SwiftUI honours, so it competed with the discard-changes alert
+                // and could silently do nothing.
                 editor
+                    .alert("Go to Line", isPresented: $showGoToLine) {
+                        TextField("Line", value: $goToLine, format: .number)
+                        Button("Go") { jumpToLine(goToLine) }
+                        Button("Cancel", role: .cancel) { }
+                    } message: {
+                        // One pass instead of `components(separatedBy:)`, which
+                        // allocated an array of every line per body evaluation.
+                        Text("1 to \(max(1, workspace.editorText.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }))")
+                    }
             }
             Divider()
             if bottomExpanded {
                 BottomWorkbenchView(panel: $bottomPanel)
                     .environmentObject(workspace)
-                    .frame(height: 240)
+                    .frame(height: bottomPanelHeight)
             } else {
                 collapsedPanelBar
             }
