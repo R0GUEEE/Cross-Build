@@ -379,8 +379,13 @@ final class WorkspaceModel: ObservableObject {
 
             let timeout = resolvedBuildTimeout(resolved)
 
+            guard await syncProjectToGuest() else {
+                console += "error: nothing reached the guest, so there is nothing to build there.\n"
+                return
+            }
+
             if resolved?.cleanBeforeBuild == true {
-                let cleaned = await executeCommand(cleanCommand(), settings: resolved, timeoutOverride: timeout)
+                let cleaned = await executeCommand(inGuestProject(cleanCommand()), settings: resolved, timeoutOverride: timeout)
                 let stopOnFailure = resolved?.stopOnFirstError ?? true
                 if !cleaned.succeeded && stopOnFailure {
                     console += "Build stopped after clean failed (Settings → Build Policy → Stop workflow on first failure).\n"
@@ -389,7 +394,7 @@ final class WorkspaceModel: ObservableObject {
                 setProgress(step: 1, detail: "Cleaned; compiling")
             }
 
-            let command = configuredBuildCommand(settings: resolved)
+            let command = inGuestProject(configuredBuildCommand(settings: resolved))
             setProgress(step: stepCount - 1, detail: "Compiling")
             _ = await executeCommand(command, settings: resolved, timeoutOverride: timeout)
             setProgress(step: stepCount)
@@ -1027,7 +1032,13 @@ final class WorkspaceModel: ObservableObject {
             return
         }
         let resolved = settings ?? appSettings
-        Task { _ = await executeCommand(command, settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved)) }
+        Task {
+            guard await syncProjectToGuest() else {
+                console += "error: nothing reached the guest, so \(command) was not run there.\n"
+                return
+            }
+            _ = await executeCommand(inGuestProject(command), settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved))
+        }
     }
 
     func runCommand(_ command: String, settings: AppSettings? = nil) {
@@ -1472,6 +1483,32 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
+    /// Wraps a command so it runs from the project directory inside the guest.
+    ///
+    /// The guest boots into its own filesystem image and its shell starts in
+    /// `/root`, where the project is not, so `make` there finds no Makefile. Every
+    /// *individual* build anchored itself with `cd <guestRoot> && ...`; the project
+    /// build ran the bare command, so "Build Project" could only ever report a
+    /// missing Makefile -- or build something unrelated that happened to be in the
+    /// guest's home.
+    private func inGuestProject(_ command: String) -> String {
+        "cd \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.guestRoot)) && " + command
+    }
+
+    /// Copies the project into the guest and reports what happened.
+    ///
+    /// Returns false when nothing reached the guest, which is the caller's cue to
+    /// stop rather than run a command against a copy that is not there.
+    @discardableResult
+    private func syncProjectToGuest() async -> Bool {
+        let root = activeProjectRoot ?? files.workspaceRoot.path
+        let syncItems = await projectSyncItems(under: root)
+        let synced = await guestSync.push(syncItems, session: .shared)
+        if !synced.output.isEmpty { console += synced.output }
+        console += "Guest sync: \(guestSync.lastSummary)\n"
+        return synced.pushed > 0
+    }
+
     /// Copies the project into the guest, explicitly.
     func syncWorkspaceToGuest(settings: AppSettings? = nil) {
         let root = activeProjectRoot ?? files.workspaceRoot.path
@@ -1514,11 +1551,16 @@ final class WorkspaceModel: ObservableObject {
         beginProgress(label: "Package", detail: command, stepCount: stepCount)
         defer { endProgress() }
 
+        guard await syncProjectToGuest() else {
+            console += "error: nothing reached the guest, so the package command was not run.\n"
+            return .init(exitCode: 1, stdout: "", stderr: "Nothing was copied into the guest.", duration: 0)
+        }
+
         let beforePaths: Set<String> = artifactDir.isEmpty
             ? []
             : await Self.snapshotFilesOffMain(under: root)
 
-        let result = await executeCommand(command, settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved))
+        let result = await executeCommand(inGuestProject(command), settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved))
         setProgress(step: 1, detail: "Collecting artifacts")
 
         guard result.succeeded, !artifactDir.isEmpty else { return result }
@@ -1809,21 +1851,21 @@ final class WorkspaceModel: ObservableObject {
                 console += "Agent build blocked by permissions.\n"
                 return .noCommand
             }
-            let result = await executeCommand(command, settings: settings, timeoutOverride: resolvedBuildTimeout(settings))
+            let result = await executeCommand(inGuestProject(command), settings: settings, timeoutOverride: resolvedBuildTimeout(settings))
             return .command(succeeded: result.succeeded)
         case .clean:
             guard settings?.allowAgentBuilds != false else {
                 console += "Agent clean blocked by permissions.\n"
                 return .noCommand
             }
-            let result = await executeCommand(cleanCommand(), settings: settings, timeoutOverride: resolvedBuildTimeout(settings))
+            let result = await executeCommand(inGuestProject(cleanCommand()), settings: settings, timeoutOverride: resolvedBuildTimeout(settings))
             return .command(succeeded: result.succeeded)
         case .test:
             guard settings?.allowAgentBuilds != false else {
                 console += "Agent test blocked by permissions.\n"
                 return .noCommand
             }
-            let result = await executeCommand(testCommand(), settings: settings, timeoutOverride: resolvedBuildTimeout(settings))
+            let result = await executeCommand(inGuestProject(testCommand()), settings: settings, timeoutOverride: resolvedBuildTimeout(settings))
             return .command(succeeded: result.succeeded)
         case .package:
             guard settings?.allowAgentBuilds != false else {
@@ -1850,7 +1892,7 @@ final class WorkspaceModel: ObservableObject {
                 return .noCommand
             }
             console += "Dependencies: \(ecosystem.name) (\(ecosystem.manifest))\n"
-            let result = await executeCommand(ecosystem.resolveCommand, settings: settings, timeoutOverride: resolvedBuildTimeout(settings))
+            let result = await executeCommand(inGuestProject(ecosystem.resolveCommand), settings: settings, timeoutOverride: resolvedBuildTimeout(settings))
             return .command(succeeded: result.succeeded)
         }
     }
