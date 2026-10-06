@@ -63,50 +63,14 @@ enum ForgeTheme {
 
 // MARK: - Primitives
 
+/// The app's status chip. `IDEStatusPill` and `ForgeBadge` were two capsules that
+/// differed only in padding, so one is now the other.
 struct IDEStatusPill: View {
     let icon: String
     let text: String
     var tint: Color = .secondary
     var body: some View {
-        Label(text, systemImage: icon)
-            .font(.caption.weight(.medium))
-            .foregroundStyle(tint)
-            .padding(.horizontal, ForgeTheme.Space.sm + 1)
-            .padding(.vertical, ForgeTheme.Space.xs + 1)
-            .background(tint.opacity(0.12), in: Capsule())
-    }
-}
-
-struct IDESectionHeader: View {
-    let title: String
-    var trailing: String? = nil
-    var body: some View {
-        ForgeSectionHeader(title: title, trailing: trailing)
-    }
-}
-
-/// A section title with optional subtitle and trailing text, used everywhere a
-/// screen groups its content.
-struct ForgeSectionHeader: View {
-    let title: String
-    var subtitle: String? = nil
-    var trailing: String? = nil
-    var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title.uppercased())
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.secondary)
-                    .tracking(0.6)
-                if let subtitle {
-                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            Spacer(minLength: ForgeTheme.Space.sm)
-            if let trailing {
-                Text(trailing).font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
-            }
-        }
+        ForgeBadge(text: text, icon: icon, tint: tint)
     }
 }
 
@@ -120,9 +84,29 @@ struct ForgeEmptyState: View {
     var action: (() -> Void)? = nil
 
     var body: some View {
+        // The system's own empty state where it exists: it matches the rest of
+        // iOS, follows Dynamic Type and accessibility settings, and is the shape
+        // people already recognise. The hand-rolled one stays for iOS 16.
+        if #available(iOS 17.0, *) {
+            ContentUnavailableView {
+                Label(title, systemImage: icon)
+            } description: {
+                if let message { Text(message) }
+            } actions: {
+                if let actionTitle, let action {
+                    Button(actionTitle, action: action).buttonStyle(.borderedProminent)
+                }
+            }
+        } else {
+            legacy
+        }
+    }
+
+    private var legacy: some View {
         VStack(spacing: ForgeTheme.Space.md) {
             Image(systemName: icon)
-                .font(.system(size: 34, weight: .light))
+                .font(.largeTitle.weight(.light))
+                .imageScale(.large)
                 .foregroundStyle(.tertiary)
             VStack(spacing: ForgeTheme.Space.xs) {
                 Text(title).font(.headline)
@@ -153,7 +137,8 @@ struct ForgeStat: View {
     var body: some View {
         HStack(spacing: ForgeTheme.Space.sm) {
             Image(systemName: icon)
-                .font(.system(size: 15, weight: .medium))
+                .font(.subheadline.weight(.medium))
+                .imageScale(.medium)
                 .foregroundStyle(tint)
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 1) {
@@ -181,8 +166,10 @@ struct ForgeBadge: View {
     var tint: Color = .secondary
 
     var body: some View {
-        HStack(spacing: 3) {
-            if let icon { Image(systemName: icon).font(.system(size: 9, weight: .bold)) }
+        HStack(spacing: 4) {
+            // `imageScale` rather than a fixed point size, so the chip grows with
+            // the label next to it instead of staying at 9pt.
+            if let icon { Image(systemName: icon).imageScale(.small) }
             Text(text)
         }
         .font(.caption2.weight(.semibold))
@@ -257,28 +244,23 @@ struct AnyButtonStyle: PrimitiveButtonStyle {
     func makeBody(configuration: Configuration) -> some View { makeBodyClosure(configuration) }
 }
 
-/// A tappable row, for the "pick one of these" lists that had grown their own
-/// padding and highlight each time.
-struct ForgeRowButton<Content: View>: View {
-    var selected = false
-    let action: () -> Void
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: ForgeTheme.Space.sm) {
-                content
-                Spacer(minLength: 0)
-            }
-            .frame(minHeight: ForgeTheme.Row.compactHeight, alignment: .leading)
-            .padding(.horizontal, ForgeTheme.Space.sm)
-            .contentShape(Rectangle())
-            .background(
-                RoundedRectangle(cornerRadius: ForgeTheme.Radius.small)
-                    .fill(selected ? Color.accentColor.opacity(0.14) : Color.clear)
-            )
+/// How a diagnostic is shown, in one place, so the Problems panel and any inline
+/// report cannot disagree about what red means.
+extension BuildDiagnosticSeverity {
+    var tint: Color {
+        switch self {
+        case .error: return .red
+        case .warning: return .orange
+        case .note: return .secondary
         }
-        .buttonStyle(.plain)
+    }
+
+    var symbol: String {
+        switch self {
+        case .error: return "xmark.octagon.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        case .note: return "info.circle.fill"
+        }
     }
 }
 

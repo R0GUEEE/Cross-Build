@@ -54,7 +54,11 @@ struct SettingsView: View {
                 }
 
                 Section("Build Policy") {
-                    Toggle("Auto-detect project on launch", isOn: $settings.autoDetect)
+                    // Offered in App Configuration → Startup instead of twice:
+                    // two identically-labelled switches on one key is a control
+                    // nobody can tell the difference between.
+                    LabeledContent("Auto-detect project on launch",
+                                   value: settings.autoDetect ? "On" : "Off")
                     Toggle("Parallel builds", isOn: $settings.parallelBuilds)
                     if settings.parallelBuilds {
                         Stepper("Build jobs: \(settings.buildJobs)", value: $settings.buildJobs, in: 1...32)

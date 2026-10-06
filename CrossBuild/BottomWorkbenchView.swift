@@ -43,9 +43,55 @@ struct BottomWorkbenchView: View {
     @ViewBuilder private var panelContent: some View {
         switch panel {
         case .terminal: terminalView
-        case .build: consoleView
+        case .build: buildPanel
         case .problems: problemsView
         case .agent: agentView
+        }
+    }
+
+    /// What the Build tab is for.
+    ///
+    /// It rendered the console, which the Terminal tab already renders, so it
+    /// could only ever be a second way to see the same bytes. It is now the app's
+    /// build controls: the four project actions, what is running, and what ran
+    /// last.
+    private var buildPanel: some View {
+        VStack(spacing: 0) {
+            BuildStatusBar(progress: workspace.runProgress, last: workspace.lastRun)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            Divider()
+            HStack(spacing: 8) {
+                Button("Build", systemImage: "hammer.fill") {
+                    workspace.runBuild(settings: workspace.appSettings)
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Clean", systemImage: "trash") {
+                    workspace.runWorkflowCommand(workspace.cleanCommand(), settings: workspace.appSettings)
+                }
+                .buttonStyle(.bordered)
+                Button("Test", systemImage: "checkmark.seal") {
+                    workspace.runWorkflowCommand(workspace.testCommand(), settings: workspace.appSettings)
+                }
+                .buttonStyle(.bordered)
+                Button("Package", systemImage: "shippingbox") {
+                    Task { _ = await workspace.runPackage(settings: workspace.appSettings) }
+                }
+                .buttonStyle(.bordered)
+                Spacer(minLength: ForgeTheme.Space.sm)
+                if !workspace.buildDiagnostics.isEmpty {
+                    ForgeBadge(text: "\(workspace.buildDiagnostics.count)",
+                               icon: "exclamationmark.triangle.fill",
+                               tint: .orange)
+                        .accessibilityLabel("\(workspace.buildDiagnostics.count) problems")
+                }
+            }
+            .controlSize(.small)
+            .disabled(workspace.isExecuting)
+            .padding(10)
+            Divider()
+            consoleView
         }
     }
 
@@ -76,11 +122,17 @@ struct BottomWorkbenchView: View {
 
     private var consoleView: some View {
         ScrollView {
-            Text(workspace.console.isEmpty ? "No output yet." : workspace.console)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(workspace.console.isEmpty ? .secondary : .primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled).padding(10)
+            if workspace.console.isEmpty {
+                ForgeEmptyState(icon: "terminal",
+                                title: "No Output Yet",
+                                message: "Output from anything the app runs appears here.")
+            } else {
+                Text(workspace.console)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .padding(10)
+            }
         }
     }
 
@@ -106,26 +158,48 @@ struct BottomWorkbenchView: View {
             TextField("Filter problems", text: $problemFilter)
                 .textFieldStyle(.roundedBorder).padding(8)
             if structuredProblems.isEmpty && problemLines.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle").font(.largeTitle).foregroundStyle(.secondary)
-                    Text("No Problems").font(.headline)
-                    Text("No matching errors or warnings are in the current output.").font(.caption).foregroundStyle(.secondary)
-                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                ForgeEmptyState(icon: "checkmark.circle",
+                                title: "No Problems",
+                                message: problemFilter.isEmpty
+                                    ? "Nothing has been reported yet. Build the project and any errors the compiler printed are listed here."
+                                    : "No problem matches “\(problemFilter)”.")
+                    .frame(maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         ForEach(structuredProblems) { diagnostic in
-                            HStack(alignment: .top, spacing: 8) {
-                                Image(systemName: icon(for: diagnostic.severity))
-                                    .foregroundStyle(diagnostic.severity == .error ? .red : .orange)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(diagnostic.message).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                                    Text(location(for: diagnostic))
-                                        .font(.system(.caption2, design: .monospaced))
-                                        .foregroundStyle(.secondary)
+                            // Tappable: a problem that names a file should open it.
+                            // The row used to be inert, so the one actionable part
+                            // of a diagnostic -- where it is -- did nothing.
+                            Button {
+                                workspace.openDiagnostic(diagnostic)
+                            } label: {
+                                HStack(alignment: .top, spacing: 8) {
+                                    Image(systemName: diagnostic.severity.symbol)
+                                        .foregroundStyle(diagnostic.severity.tint)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(diagnostic.message)
+                                            .font(.system(.caption, design: .monospaced))
+                                            .multilineTextAlignment(.leading)
+                                        Text(location(for: diagnostic))
+                                            .font(.system(.caption2, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer(minLength: 0)
+                                    if diagnostic.file != nil {
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                    }
                                 }
-                                Spacer()
-                            }.padding(8).background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(ForgeTheme.Surface.raised,
+                                            in: RoundedRectangle(cornerRadius: ForgeTheme.Radius.small))
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(diagnostic.file == nil)
                         }
                         // Only fall back to raw console lines when nothing was
                         // parsed; otherwise the same problem would be listed twice.
@@ -141,14 +215,6 @@ struct BottomWorkbenchView: View {
                     }.padding(10)
                 }
             }
-        }
-    }
-
-    private func icon(for severity: BuildDiagnosticSeverity) -> String {
-        switch severity {
-        case .error: return "xmark.octagon.fill"
-        case .warning: return "exclamationmark.triangle.fill"
-        case .note: return "info.circle.fill"
         }
     }
 
@@ -169,7 +235,9 @@ struct BottomWorkbenchView: View {
                         Label(activity, systemImage: "sparkles").font(.caption)
                     }
                     if workspace.agentActivity.isEmpty {
-                        Text("Agent activity will appear here.").font(.caption).foregroundStyle(.secondary)
+                        ForgeEmptyState(icon: "sparkles",
+                                        title: "No Agent Activity",
+                                        message: "Run a task from the Agent tab and every step it takes is listed here.")
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }

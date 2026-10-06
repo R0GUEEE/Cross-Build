@@ -131,31 +131,46 @@ struct AppMenuButton: View {
     }
 }
 
-/// The tab bar. A plain row with a fixed height -- it is chrome, so it should
-/// not move, resize or fade in response to what the content is doing.
+/// The tab bar. A plain row -- it is chrome, so it should not move or resize
+/// with the content -- but built like a system one: scaled to the user's text
+/// size, filled symbols when selected, and a real tap target per item.
 private struct RootTabBar: View {
     @Binding var section: AppSection
+    /// Scales with Dynamic Type, so a large text setting grows the bar instead of
+    /// clipping the labels. The old bar was a fixed 49pt with 10pt text.
+    @ScaledMetric(relativeTo: .caption2) private var barHeight: CGFloat = 49
 
     var body: some View {
         HStack(spacing: 0) {
             ForEach(AppSection.allCases) { item in
-                Button { section = item } label: {
+                let isSelected = section == item
+                Button {
+                    section = item
+                } label: {
                     VStack(spacing: 3) {
-                        Image(systemName: item.icon).font(.system(size: 17))
-                        Text(item.rawValue).font(.system(size: 10, weight: .medium))
+                        Image(systemName: item.icon)
+                            .font(.system(size: 17, weight: isSelected ? .semibold : .regular))
+                            .symbolVariant(isSelected ? .fill : .none)
+                            .imageScale(.large)
+                        Text(item.rawValue)
+                            .font(.caption2.weight(isSelected ? .semibold : .regular))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
-                    .frame(maxWidth: .infinity)
-                    .foregroundStyle(section == item ? Color.accentColor : Color.secondary)
+                    .frame(maxWidth: .infinity, minHeight: barHeight)
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(item.rawValue)
+                .accessibilityAddTraits(isSelected ? [.isSelected] : [])
             }
         }
         // The standard iOS tab bar proportions, with the system's own material
         // so it blurs the content behind it rather than sitting on top as a slab.
-        .frame(height: 49)
+        .frame(minHeight: barHeight)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
+        .animation(.easeOut(duration: 0.18), value: section)
     }
 }

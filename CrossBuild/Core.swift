@@ -1694,6 +1694,19 @@ final class WorkspaceModel: ObservableObject {
         persistOpenDocuments()
     }
 
+    /// Opens the file a diagnostic points at.
+    ///
+    /// Tapping a problem used to do nothing. The file is the actionable part, so
+    /// this is what makes the Problems panel worth having.
+    func openDiagnostic(_ diagnostic: BuildDiagnostic) {
+        guard let path = diagnostic.file else { return }
+        guard let file = files.flattened.first(where: { $0.path == path || $0.path.hasSuffix("/" + path) }) else {
+            console += "error: \(path) is not in the workspace, so it was not opened.\n"
+            return
+        }
+        openFile(file)
+    }
+
     func openSelectedFile() {
         guard let file = files.selected else { return }
         openFile(file)
