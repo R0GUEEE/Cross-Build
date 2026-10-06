@@ -454,16 +454,26 @@ int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory)
     // scratch pointer would stay dangling and the NEXT command's "free the old
     // scratch" line would free it a second time, corrupting the heap. So only the
     // error paths (rc < 0) own the string.
+    //
+    // The window is generous on purpose. This round trip is the *first* guest
+    // process start -- the kernel bring-up, plus forking and exec'ing /bin/sh --
+    // and on a slow device that is the most expensive thing the emulator does.
+    // Missing a 30-second window here did not mean "slow": the app recorded the
+    // guest as permanently failed and every later probe answered "not running",
+    // so the toolchain read as undetected for the whole session. Waiting longer
+    // costs nothing when the shell answers promptly, because the round trip
+    // returns as soon as the marker arrives.
     char *ready = NULL;
-    int rc = cblk_session_run(":", 30000, &ready);
+    int rc = cblk_session_run(":", 120000, &ready);
     if (rc < 0 && ready != NULL) { free(ready); }
     if (rc < 0) {
-        // The shell never answered. The header documents 0/-1/-2, but callers were
-        // also getting an undocumented 124 when the readiness round trip hit its
-        // deadline, and reporting that as a *command* timeout. g_booted stays set:
-        // the interpreter really has been initialised and cannot be initialised
-        // again, so a retry could only produce a less accurate error.
-        return -2;
+        // The shell never answered. Callers used to get an undocumented 124 here
+        // (the round trip's own timeout) and report it as a *command* timeout.
+        // g_booted stays set: the interpreter really has been initialised and
+        // cannot be initialised again, so a retry could only produce a less
+        // accurate error -- but -4 tells the app this was a slow start rather
+        // than a broken one.
+        return rc == 124 ? -4 : -2;
     }
     return 0;
 }

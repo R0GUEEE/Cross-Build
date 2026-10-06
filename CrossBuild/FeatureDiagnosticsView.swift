@@ -34,7 +34,16 @@ struct FeatureDiagnosticsView: View {
             .init(name: "JavaScriptCore", detail: "Embedded JavaScript evaluation with console output", ready: workspace.embeddedToolchains.isAvailable("javascriptcore"), icon: "curlybraces"),
             .init(name: "Python 3", detail: "Embedded CPython interpreter and standard library, running in-process", ready: workspace.embeddedToolchains.isAvailable("python3"), icon: "chevron.left.forwardslash.chevron.right"),
             .init(name: "Embedded Clang", detail: clang?.detail ?? "Clang component was not discovered.", ready: clang?.present == true, icon: "hammer"),
-            .init(name: "Full Logos Lowering", detail: "Directive recognition is embedded; full Logos parser payload required", ready: false, icon: "wrench.and.screwdriver")
+            .init(name: "Full Logos Lowering", detail: "Directive recognition is embedded; full Logos parser payload required", ready: false, icon: "wrench.and.screwdriver"),
+            // The compilers that actually build this app live in the guest, so the
+            // readiness list has to include them. It did not, and the only row that
+            // mentioned them reported the absent in-app Clang payload.
+            .init(name: "Linux guest build toolchain",
+                  detail: !workspace.guestToolchain.isEmpty
+                      ? "Found in the guest: \(workspace.guestToolchain.joined(separator: ", "))"
+                      : (workspace.guestToolchainError ?? "The guest has not been asked yet."),
+                  ready: !workspace.guestToolchain.isEmpty,
+                  icon: "wrench.and.screwdriver")
         ]
     }
 
@@ -73,6 +82,8 @@ struct FeatureDiagnosticsView: View {
             RuntimeToolchainSection(runtime: workspace.toolchainRuntime)
         }
         .navigationTitle("Feature Diagnostics")
-        .task { features = makeFeatures() }
+        .task(id: "\(workspace.guestToolchain.joined(separator: ","))|\(workspace.guestToolchainError ?? "")") {
+            features = makeFeatures()
+        }
     }
 }

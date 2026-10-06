@@ -15,7 +15,7 @@ struct FullSetupView: View {
                 LabeledContent("Bundled SDKs", value: "\(service.environment.bundledSDKCount)")
                 LabeledContent("Available SDKs", value: "\(service.environment.sdkCount)")
                 LabeledContent("Guest toolchain", value: service.environment.guestTools.isEmpty
-                               ? "None found"
+                               ? (service.environment.guestNote.map { "Not checked — \($0)" } ?? "None found")
                                : service.environment.guestTools.joined(separator: " "))
                 Button {
                     Task { await service.prepare(workspace: workspace, settings: settings) }

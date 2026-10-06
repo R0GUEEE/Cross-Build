@@ -42,6 +42,8 @@ struct SetupEnvironment {
     /// install working" -- without it the screen could report a ready rootfs and
     /// a toolchain the guest does not have.
     var guestTools: [String] = []
+    /// Why the guest's tools could not be determined, when they could not.
+    var guestNote: String?
     var toolchains: [AppToolchainScan] = []
     var notes: [String] = []
 }
@@ -115,7 +117,18 @@ final class SetupService: ObservableObject {
         guestProbeTask = Task { [weak self] in
             let probe = "for t in make cc gcc c++ g++ ; do command -v \"$t\" >/dev/null 2>&1 && printf '%s ' \"$t\"; done"
             let probed = await LinuxGuestSession.shared.run(probe, timeout: 15)
-            guard let self, probed.code >= 0 else { return }
+            guard let self else { return }
+            guard probed.code >= 0 else {
+                // Say *why* no toolchain was found. Reporting "Missing: make, cc,
+                // gcc" for a guest that never answered is what made a stalled guest
+                // indistinguishable from missing compilers.
+                self.environment.guestTools = []
+                self.environment.guestNote = self.guestStateDescription(code: probed.code)
+                AppToolchainLibraries.guestTools = []
+                self.refreshGuestToolchainStep()
+                return
+            }
+            self.environment.guestNote = nil
             let tools = probed.output
                 .split(whereSeparator: { $0 == " " || $0 == "\n" })
                 .map(String.init)
@@ -128,6 +141,17 @@ final class SetupService: ObservableObject {
             self.environment.toolchains = AppToolchainLibraries.scanBundle()
             self.refreshGuestToolchainStep()
             self.refreshToolchainsStep()
+        }
+    }
+
+    /// A sentence for why the guest did not answer, from the session's own state.
+    private func guestStateDescription(code: Int32) -> String {
+        switch LinuxGuestSession.shared.state {
+        case .idle: return "the Linux guest has not been started yet (code \(code))"
+        case .starting: return "the Linux guest is still starting (code \(code))"
+        case .running: return "the Linux guest is running but did not answer (code \(code))"
+        case .unavailable(let message): return message
+        case .failed(let message): return message
         }
     }
 
@@ -146,12 +170,19 @@ final class SetupService: ObservableObject {
     /// already produced one.
     private func refreshGuestToolchainStep() {
         guard let index = steps.firstIndex(where: { $0.id == "toolchain" }) else { return }
-        let required = ToolchainRuntimeArchitecture.requiredGuestTools
-        let missing = required.filter { !environment.guestTools.contains($0) }
-        steps[index].output = missing.isEmpty
-            ? "Present: \(environment.guestTools.joined(separator: ", "))"
-            : "Missing: \(missing.joined(separator: ", "))\nPresent: \(environment.guestTools.joined(separator: ", "))"
-        steps[index].status = missing.isEmpty ? .succeeded : .failed
+        guard environment.guestTools.isEmpty, let note = environment.guestNote else {
+            let required = ToolchainRuntimeArchitecture.requiredGuestTools
+            let missing = required.filter { !environment.guestTools.contains($0) }
+            steps[index].output = missing.isEmpty
+                ? "Present: \(environment.guestTools.joined(separator: ", "))"
+                : "Missing: \(missing.joined(separator: ", "))\nPresent: \(environment.guestTools.joined(separator: ", "))"
+            steps[index].status = missing.isEmpty ? .succeeded : .failed
+            return
+        }
+        // Nothing is known about the guest's tools, because the guest never
+        // answered. Reporting them as missing is the wrong conclusion.
+        steps[index].output = "Not checked — \(note)."
+        steps[index].status = .failed
     }
 
     func run(workspace: WorkspaceModel, settings: AppSettings) async {
@@ -190,12 +221,7 @@ final class SetupService: ObservableObject {
                     : "ios-linuxkit engine/rootfs is incomplete."
                 steps[index].status = environment.rootfsPresent ? .succeeded : .failed
             case "toolchain":
-                let required = ToolchainRuntimeArchitecture.requiredGuestTools
-                let missing = required.filter { !environment.guestTools.contains($0) }
-                steps[index].output = missing.isEmpty
-                    ? "Present: \(environment.guestTools.joined(separator: ", "))"
-                    : "Missing: \(missing.joined(separator: ", "))\nPresent: \(environment.guestTools.joined(separator: ", "))"
-                steps[index].status = missing.isEmpty ? .succeeded : .failed
+                refreshGuestToolchainStep()
             case "sdk":
                 steps[index].output = environment.bundledSDKCount > 0
                     ? "\(environment.bundledSDKCount) bundled SDK(s) discovered."
@@ -229,7 +255,7 @@ final class SetupService: ObservableObject {
                   kind: .verify),
             .init(id: "toolchain", title: "Guest build toolchain",
                   detail: env.guestTools.isEmpty
-                      ? "No build tools were found in the Linux guest."
+                      ? (env.guestNote.map { "Not checked — \($0)." } ?? "No build tools were found in the Linux guest.")
                       : "Found: \(env.guestTools.joined(separator: ", "))",
                   kind: .verify),
             .init(id: "sdk", title: "Scan bundled SDKs",

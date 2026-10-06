@@ -26,6 +26,13 @@ struct CrossBuildApp: App {
                     // root is already up by the time anything asks to run.
                     LinuxGuestSession.shared.configure(initCommand: settings.shellInitCommand)
                     await LinuxGuestSession.shared.startIfNeeded()
+
+                    // Ask the guest what it carries before any screen needs the
+                    // answer. The probe used to run only from a build action or
+                    // from Setup, so until one of those had happened every
+                    // toolchain read as undetected on the Compiler tab, in the
+                    // catalogue and on the components screen.
+                    await workspace.probeGuestToolchain()
                 }
         }
     }

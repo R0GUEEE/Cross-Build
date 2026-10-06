@@ -571,9 +571,17 @@ final class WorkspaceModel: ObservableObject {
         return (ExecutionBackendFactory.make(mode: mode, settings: resolvedSettings), mode)
     }
 
-    /// Tools found in the guest, and whether the probe has run.
+    /// Build tools found inside the Linux guest.
+    ///
+    /// Published, so a screen that reports availability re-reads it when the
+    /// answer arrives -- these values were cached in view state computed before
+    /// the probe ran, so "not detected" stuck even after a successful probe.
     @Published private(set) var guestToolchain: [String] = []
+    /// Why the probe produced no answer, when it did not. Without this, "the guest
+    /// has no compilers" and "the guest never answered" are the same picture.
+    @Published private(set) var guestToolchainError: String?
     private var didProbeGuestToolchain = false
+    private var isProbingGuestToolchain = false
 
     /// Asks the guest which build tools it actually has.
     ///
@@ -584,12 +592,25 @@ final class WorkspaceModel: ObservableObject {
     /// first sign of a broken rootfs is `make: not found` scrolling past in a
     /// console the user may not be looking at.
     func probeGuestToolchain() async {
-        guard !didProbeGuestToolchain else { return }
-        didProbeGuestToolchain = true
+        // A *successful* probe is final for the process; a failed one is not. The
+        // flag used to be set before the attempt, so a single early failure --
+        // usually the guest still booting when the app first asks -- left every
+        // screen reporting no compilers for the rest of the session, with no way
+        // to retry.
+        guard !didProbeGuestToolchain, !isProbingGuestToolchain else { return }
+        isProbingGuestToolchain = true
+        defer { isProbingGuestToolchain = false }
         let probe = "for t in make cc gcc c++ g++ cmake ninja python3 git; do "
             + "command -v \"$t\" >/dev/null 2>&1 && printf '%s:yes ' \"$t\" || printf '%s:no ' \"$t\"; done"
         let result = await LinuxGuestSession.shared.run(probe, timeout: 60)
-        guard result.code >= 0 else { return }
+        guard result.code >= 0 else {
+            guestToolchainError = result.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "The Linux guest did not answer the toolchain check (code \(result.code))."
+                : result.output
+            return
+        }
+        guestToolchainError = nil
+        didProbeGuestToolchain = true
         let entries = result.output
             .components(separatedBy: .whitespacesAndNewlines)
             .compactMap { token -> (String, Bool)? in

@@ -31,6 +31,13 @@ int32_t cblk_boot_and_run(const char *fakefsRoot,
 // lifetime of the process.
 
 // Boot the guest shell. Safe to call repeatedly; only the first call boots.
+//
+// Returns 0 on success, -1 if the arguments are wrong or the interpreter has
+// already been initialised, -2 if the boot itself failed, and -4 if the guest
+// came up but its shell did not answer the readiness round trip in time. -4 is
+// worth telling apart: it is the one failure that a slower start could still
+// have avoided, and on a slow device it is the difference between "the guest is
+// broken" and "the guest needed longer".
 int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory);
 int32_t cblk_session_is_running(void);
 

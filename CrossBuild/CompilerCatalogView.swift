@@ -89,7 +89,12 @@ struct CompilerCatalogDetailView: View {
                     LabeledContent("App Library", value: workspace.embeddedToolchains.isAvailable(item.id) ? "Embedded Engine • Ready" : (AppToolchainLibraries.item(item.id)?.availability.rawValue ?? "Integrated"))
                     LabeledContent("Module", value: AppToolchainLibraries.item(item.id)?.module ?? item.id)
                     LabeledContent("Version", value: AppToolchainLibraries.item(item.id)?.version ?? "built-in")
-                    LabeledContent("In-app payload", value: scan?.present == true ? "Ready" : "Not bundled")
+                    LabeledContent("In-app payload", value: scan?.present == true
+                                   ? "Ready"
+                                   : (scan?.guestBacked == nil ? "Not bundled" : "Provided by the Linux guest"))
+                    if let guest = scan?.guestBacked {
+                        LabeledContent("Guest executable", value: guest)
+                    }
                     if let detail = scan?.detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
                     if !item.languages.isEmpty { LabeledContent("Languages", value: item.languages.joined(separator: ", ")) }
                 }
