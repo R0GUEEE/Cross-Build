@@ -104,7 +104,9 @@ final class LinuxGuestSession: ObservableObject {
         }
 
         state = .starting
-        let task = Task.detached(priority: .userInitiated) {
+        // The result type is spelled out: with `return nil` as its own statement
+        // the closure's type cannot be inferred from a single ternary any more.
+        let task = Task.detached(priority: .userInitiated) { () -> String? in
             do {
                 let root = try LinuxGuestEngine.prepareWritableRoot()
                 #if canImport(CrossBuildLinux)
