@@ -91,7 +91,17 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF
 
       - name: Build
-        run: ninja -C build-clang clang lld
+        # lld is only a configured target when include_lld=true: CMake's
+        # LLVM_ENABLE_PROJECTS above decides that, and asking ninja for a target
+        # that was never configured fails the job. The manually selectable
+        # include_lld=false input could therefore never work.
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.include_lld }}" = "true" ]; then
+            ninja -C build-clang clang lld
+          else
+            ninja -C build-clang clang
+          fi
 
       - name: Stage the payload
         run: |

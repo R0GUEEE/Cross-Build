@@ -16,6 +16,14 @@ struct IDEView: View {
     @State private var editorSelection = CodeEditorSelection()
     @State private var showGoToLine = false
     @State private var goToLine = 1
+    /// Counted off the render path. `workspace.projectFiles.count` walks the whole
+    /// file tree (`flattened` rebuilds it) and `makefileTargets()` reads the
+    /// Makefile off disk -- both were evaluated on every body render, once inside
+    /// the navigator header and once inside the Build menu's content builder.
+    @State private var projectFileCount = 0
+    @State private var makeTargets: [String] = []
+    /// Which find/replace match is current, advanced by the up/down buttons.
+    @State private var currentMatch = 0
 
     var body: some View {
         NavigationSplitView {
@@ -32,7 +40,9 @@ struct IDEView: View {
             Button("Go") { jumpToLine(goToLine) }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("1 to \(max(1, workspace.editorText.components(separatedBy: "\n").count))")
+            // One pass instead of `components(separatedBy:)`, which allocated an
+            // array of every line each time the body was evaluated.
+            Text("1 to \(max(1, workspace.editorText.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }))")
         }
         .sheet(isPresented: $showCompilerManager) {
             CompilerManagerView().environmentObject(workspace)
@@ -52,6 +62,11 @@ struct IDEView: View {
             if let configured = ForgePanel(rawValue: settings.defaultBottomPanel) { bottomPanel = configured }
             bottomExpanded = settings.defaultBottomPanelExpanded
         }
+        // Re-read when the tree is rebuilt or the active project changes.
+        .task(id: "\(workspace.files.roots.count)-\(workspace.activeProjectRoot ?? "")") {
+            projectFileCount = workspace.projectFiles.count
+            makeTargets = workspace.makefileTargets()
+        }
         .alert(item: $pendingCloseDocument) { doc in
             Alert(
                 title: Text("Discard unsaved changes?"),
@@ -67,7 +82,8 @@ struct IDEView: View {
             HStack {
                 VStack(alignment:.leading,spacing:2) {
                     Text("Project").font(.headline)
-                    Text("\(workspace.projectFiles.count) files").font(.caption2).foregroundStyle(.secondary)
+                    Text(projectFileCount == 1 ? "1 file" : "\(projectFileCount) files")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button { openGitHubImporter() } label: { Image(systemName:"arrow.down.circle") }.buttonStyle(.plain)
@@ -123,8 +139,9 @@ struct IDEView: View {
                 // rest of the time.
                 let matches = findMatches()
                 HStack(spacing: 6) {
-                    TextField("Find", text: Binding(get: { workspace.editor.findText }, set: { workspace.editor.findText = $0 })).textFieldStyle(.roundedBorder)
-                    Text(matches.isEmpty ? "no matches" : "\(matchIndex(matches) + 1) of \(matches.count)")
+                    TextField("Find", text: Binding(get: { workspace.editor.findText },
+                                                    set: { workspace.editor.findText = $0; currentMatch = 0 })).textFieldStyle(.roundedBorder)
+                    Text(matches.isEmpty ? "no matches" : "\(clampedMatchIndex(matches) + 1) of \(matches.count)")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .fixedSize()
@@ -214,7 +231,7 @@ struct IDEView: View {
                                                   settings: settings)
                     }
                 }
-                let targets = workspace.makefileTargets()
+                let targets = makeTargets
                 if !targets.isEmpty {
                     Menu("Build Make Target") {
                         ForEach(targets.prefix(20), id: \.self) { target in
@@ -462,23 +479,28 @@ struct IDEView: View {
         return ranges
     }
 
-    /// Which match the caret is on, so the bar can say "3 of 9".
-    private func matchIndex(_ matches: [NSRange]) -> Int {
-        matches.firstIndex {
-            $0.location == editorSelection.range.location && $0.length == editorSelection.range.length
-        } ?? 0
+    /// Which match is current, so the bar can say "3 of 9".
+    ///
+    /// This used to be derived from the caret and to fall back to index 0, so
+    /// whenever the caret was not exactly on a match the label read "1 of N" and
+    /// "Replace" silently rewrote the *first* match in the file instead of the one
+    /// near the caret. The index is now tracked explicitly and clamped.
+    private func clampedMatchIndex(_ matches: [NSRange]) -> Int {
+        guard !matches.isEmpty else { return 0 }
+        return min(max(currentMatch, 0), matches.count - 1)
     }
 
     private func stepMatch(_ matches: [NSRange], by offset: Int) {
         guard !matches.isEmpty else { return }
         let count = matches.count
-        let next = ((matchIndex(matches) + offset) % count + count) % count
+        let next = ((clampedMatchIndex(matches) + offset) % count + count) % count
+        currentMatch = next
         editorSelection.range = matches[next]
     }
 
     private func replaceCurrentMatch(_ matches: [NSRange]) {
         guard !matches.isEmpty else { return }
-        let range = matches[matchIndex(matches)]
+        let range = matches[clampedMatchIndex(matches)]
         let text = workspace.editorText as NSString
         guard range.location + range.length <= text.length else { return }
         let replacement = workspace.editor.replaceText

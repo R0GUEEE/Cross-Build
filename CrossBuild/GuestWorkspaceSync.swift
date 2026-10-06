@@ -57,24 +57,29 @@ final class GuestWorkspaceSync: ObservableObject {
             let destination = Self.guestRoot + "/" + item.relativePath
             let directory = (destination as NSString).deletingLastPathComponent
             let encoded = item.data.base64EncodedString()
-            current.append("mkdir -p \(Self.quoted(directory))")
-            current.append("printf '%s' \(Self.quoted(encoded)) | base64 -d > \(Self.quoted(destination))")
-            currentBytes += encoded.count
-            if currentBytes >= Self.batchBytes {
+            // Flush *before* the batch would exceed the budget. Measuring after
+            // appending let a single 512 KB file produce a ~700 KB command line,
+            // which is exactly the long line the batching exists to avoid.
+            if !current.isEmpty && currentBytes + encoded.count > Self.batchBytes {
                 batches.append(current)
                 current = []
                 currentBytes = 0
             }
+            current.append("mkdir -p \(Self.quoted(directory))")
+            current.append("printf '%s' \(Self.quoted(encoded)) | base64 -d > \(Self.quoted(destination))")
+            currentBytes += encoded.count
         }
         if !current.isEmpty { batches.append(current) }
 
         var pushed = 0
         var output = ""
-        for batch in batches {
+        var failedBatch: Int?
+        for (index, batch) in batches.enumerated() {
             let script = (["mkdir -p \(Self.quoted(Self.guestRoot))"] + batch).joined(separator: "\n")
             let result = await session.run(script, timeout: 180)
             if result.code != 0 {
                 output += result.output
+                failedBatch = index
                 break
             }
             pushed += batch.filter { $0.hasPrefix("printf ") }.count
@@ -82,10 +87,17 @@ final class GuestWorkspaceSync: ObservableObject {
         if !skipped.isEmpty {
             output += "\nSkipped (larger than \(Self.maximumItemBytes / 1024) KB): \(skipped.joined(separator: ", "))\n"
         }
-        lastSyncedAt = Date()
-        lastSummary = pushed == 0
-            ? "Nothing was copied into the guest."
-            : "\(pushed) file(s) copied to \(Self.guestRoot) inside the guest."
+        if let failedBatch {
+            // A partial copy is not a sync. Reporting one as a success made the
+            // caller say "N file(s) copied" after a failure, and the earlier
+            // batches' output went down with the batch that broke.
+            lastSummary = "Copy failed on batch \(failedBatch + 1) of \(batches.count); \(pushed) file(s) landed before the failure."
+        } else {
+            lastSyncedAt = Date()
+            lastSummary = pushed == 0
+                ? "Nothing was copied into the guest."
+                : "\(pushed) file(s) copied to \(Self.guestRoot) inside the guest."
+        }
         return (pushed, skipped, output)
     }
 

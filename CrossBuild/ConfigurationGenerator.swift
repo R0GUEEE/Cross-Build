@@ -85,7 +85,10 @@ enum ConfigurationGenerator {
         workspace.compilerConfiguration.theosScheme = generated.theosScheme
         workspace.configuration.deploymentTarget = generated.deploymentTarget
         workspace.configuration.architecture = generated.architectures
-        workspace.configuration.autoDetectToolchain = true
+        // Deliberately NOT setting `autoDetectToolchain = true` here. It was, and
+        // because `apply` runs on every detection, the "Auto-detect toolchain"
+        // switch could never stay off: turning it off lasted only until the next
+        // detection turned it back on and overrode the toolchain the user picked.
     }
 
     private static func firstCapture(in text: String, pattern: String) -> String? {

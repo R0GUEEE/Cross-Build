@@ -3,6 +3,22 @@ import SwiftUI
 struct CompilerConfigurationView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
     @ObservedObject var config: CompilerConfiguration
+    /// Computed once, off the render path. `scanBundle()` probes the bundle for
+    /// every catalogue entry and `availableSDKs()` enumerates directories; this
+    /// screen re-renders on every keystroke in its text fields, because each
+    /// `@AppStorage` write publishes, so the scan used to run while typing.
+    @State private var toolchainCount = 0
+    @State private var readyToolchainCount = 0
+    @State private var clangPayloadPresent = false
+    @State private var sdkCount = 0
+
+    private func refreshScan() {
+        let scan = AppToolchainLibraries.scanBundle()
+        toolchainCount = scan.count
+        readyToolchainCount = scan.filter(\.present).count
+        clangPayloadPresent = scan.first { $0.id == "clang" }?.present == true
+        sdkCount = IOSSDKDiscovery.availableSDKs().count
+    }
 
     var body: some View {
         Form {
@@ -32,12 +48,11 @@ struct CompilerConfigurationView: View {
                     Text("Release").tag("Release")
                     Text("Size").tag("Size")
                 }
-                let toolchainScan = AppToolchainLibraries.scanBundle()
-                LabeledContent("Compiler libraries", value: "\(toolchainScan.filter(\.present).count)/\(toolchainScan.count) ready")
-                LabeledContent("Embedded Clang", value: toolchainScan.first { $0.id == "clang" }?.present == true ? workspace.embeddedToolchains.clang.version : "Native payload missing")
-                LabeledContent("iOS SDKs found", value: IOSSDKDiscovery.availableSDKs().isEmpty
+                LabeledContent("Compiler libraries", value: "\(readyToolchainCount)/\(toolchainCount) ready")
+                LabeledContent("Embedded Clang", value: clangPayloadPresent ? workspace.embeddedToolchains.clang.version : "Native payload missing")
+                LabeledContent("iOS SDKs found", value: sdkCount == 0
                                ? "None — drop an .sdk into Documents/SDKs"
-                               : "\(IOSSDKDiscovery.availableSDKs().count)")
+                               : "\(sdkCount)")
                 LabeledContent("POSIX runtime", value: LinuxGuestEngine.isRootBundled ? "ios-linuxkit ready" : "rootfs missing")
             }
 
@@ -130,5 +145,6 @@ struct CompilerConfigurationView: View {
             }
         }
         .navigationTitle("Build Configuration")
+        .task { refreshScan() }
     }
 }

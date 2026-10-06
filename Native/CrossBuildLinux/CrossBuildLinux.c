@@ -62,6 +62,9 @@ static char *cblk_strdup(const char *text) {
 static int g_saved_stdout = -1;
 static int g_saved_stderr = -1;
 static int g_saved_stdin = -1;
+// The engine duplicates stderr onto fd 666 for printk. It was redirected at the
+// guest pipes but never saved, so nothing could put it back.
+static int g_saved_fd666 = -1;
 
 static int redirect_stdio_to_pipes(int pipe_fds[2]) {
     if (pipe(pipe_fds) != 0) { return -1; }
@@ -71,7 +74,9 @@ static int redirect_stdio_to_pipes(int pipe_fds[2]) {
     dup2(pipe_fds[1], STDERR_FILENO);
     close(pipe_fds[1]);
     // The engine duplicates stderr onto fd 666 for printk, so route that at the
-    // pipe too (STDOUT_FILENO now refers to it).
+    // pipe too (STDOUT_FILENO now refers to it). Saved first so restore_stdio can
+    // put it back.
+    if (g_saved_fd666 < 0) { g_saved_fd666 = dup(666); }
     dup2(STDOUT_FILENO, 666);
     return 0;
 }
@@ -80,6 +85,7 @@ static void restore_stdio(void) {
     if (g_saved_stdin >= 0) { dup2(g_saved_stdin, STDIN_FILENO); close(g_saved_stdin); g_saved_stdin = -1; }
     if (g_saved_stdout >= 0) { dup2(g_saved_stdout, STDOUT_FILENO); close(g_saved_stdout); g_saved_stdout = -1; }
     if (g_saved_stderr >= 0) { dup2(g_saved_stderr, STDERR_FILENO); close(g_saved_stderr); g_saved_stderr = -1; }
+    if (g_saved_fd666 >= 0) { dup2(g_saved_fd666, 666); close(g_saved_fd666); g_saved_fd666 = -1; }
 }
 
 static char *drain_fd(int fd) {
@@ -189,7 +195,11 @@ int32_t cblk_boot_and_run(const char *fakefsRoot,
     g_booted = 1;
 
     // argv: ish -f <root> [-d <cwd>] /bin/sh -c <command>
-    static char *argv[8];
+    //
+    // Eight slots held at most seven arguments plus the NULL terminator, and the
+    // widest form above is eight arguments (ish -f root -d cwd /bin/sh -c cmd):
+    // `argv[argc] = NULL` then wrote one pointer past the end of the array.
+    static char *argv[12];
     int argc = 0;
     argv[argc++] = (char *)"ish";
     argv[argc++] = (char *)"-f";
@@ -261,9 +271,13 @@ int32_t cblk_has_booted(void) {
 }
 
 void cblk_free(char *text) {
-    // The returned buffers are owned by this shim and reused across calls, so a
-    // free here would be wrong; kept for API symmetry with the other shims.
-    (void)text;
+    // Only ever called for the error and guest-gone returns, which hand back a
+    // malloc'ed/strdup'ed string -- the ownership rule in cblk_session_start. The
+    // success and timeout returns hand back the internal scratch buffer, which the
+    // caller must not free, and LinuxGuestSession only calls this when the return
+    // code is negative. Leaving this a no-op leaked one message per failed
+    // command for the life of the process.
+    if (text != NULL) { free(text); }
 }
 
 const char *cblk_engine_version(void) {
@@ -366,10 +380,13 @@ int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory)
 
     int toGuest[2] = { -1, -1 };
     int fromGuest[2] = { -1, -1 };
-    if (pipe(toGuest) != 0) { return -2; }
+    // Nothing has been initialised yet on these paths, so a later start is still
+    // legitimate: clear the flag rather than making the failure permanent.
+    if (pipe(toGuest) != 0) { g_booted = 0; return -2; }
     if (pipe(fromGuest) != 0) {
         close(toGuest[0]);
         close(toGuest[1]);
+        g_booted = 0;
         return -2;
     }
 
@@ -381,6 +398,7 @@ int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory)
     dup2(toGuest[0], STDIN_FILENO);
     dup2(fromGuest[1], STDOUT_FILENO);
     dup2(fromGuest[1], STDERR_FILENO);
+    if (g_saved_fd666 < 0) { g_saved_fd666 = dup(666); }
     dup2(STDOUT_FILENO, 666);          // printk
     close(toGuest[0]);
     close(fromGuest[1]);
@@ -416,6 +434,7 @@ int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory)
 
     if (pthread_create(&g_session_thread, NULL, session_thread_main, &args) != 0) {
         g_session_running = 0;
+        g_booted = 0;   // the engine never ran, so a retry is still possible
         if (g_session_in >= 0) { close(g_session_in); g_session_in = -1; }
         if (g_session_out >= 0) { close(g_session_out); g_session_out = -1; }
         restore_stdio();
@@ -438,11 +457,52 @@ int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory)
     char *ready = NULL;
     int rc = cblk_session_run(":", 30000, &ready);
     if (rc < 0 && ready != NULL) { free(ready); }
-    return rc;
+    if (rc < 0) {
+        // The shell never answered. The header documents 0/-1/-2, but callers were
+        // also getting an undocumented 124 when the readiness round trip hit its
+        // deadline, and reporting that as a *command* timeout. g_booted stays set:
+        // the interpreter really has been initialised and cannot be initialised
+        // again, so a retry could only produce a less accurate error.
+        return -2;
+    }
+    return 0;
 }
 
 int32_t cblk_session_is_running(void) {
     return g_session_running ? 1 : 0;
+}
+
+// Largest amount of one command's output kept.
+//
+// The deadline bounded time, never size: a command that printed without bound (a
+// stray `yes`, a build loop) grew the scratch buffer until the app ran out of
+// memory. Past this the output is discarded but the stream is still drained to the
+// sentinel, so the pipe stays in step.
+#define CB_MAX_CAPTURE_BYTES (8u * 1024u * 1024u)
+
+// Looks for the end-of-command sentinel in one read, carrying the tail of the
+// previous read so a marker split across two reads is still found.
+//
+// The capture buffer cannot be searched once output is capped, because past the
+// cap nothing is appended to it -- so the marker has to be found in the stream.
+// `carry` must hold at least 128 bytes.
+static void marker_scan_step(const char *chunk, size_t length, const char *marker,
+                             char *carry, size_t *carry_len, int *found) {
+    char scan[128 + 4096 + 1];
+    size_t marker_len = strlen(marker);
+    size_t keep = marker_len > 0 ? marker_len - 1 : 0;
+    if (keep > 127) { keep = 127; }
+    if (*carry_len > 127) { *carry_len = 127; }
+    if (length > 4096 || *carry_len + length > sizeof(scan) - 1) {
+        length = sizeof(scan) - 1 - *carry_len;
+    }
+    memcpy(scan, carry, *carry_len);
+    memcpy(scan + *carry_len, chunk, length);
+    size_t scan_len = *carry_len + length;
+    scan[scan_len] = '\0';
+    if (marker_len > 0 && strstr(scan, marker) != NULL) { *found = 1; }
+    *carry_len = scan_len < keep ? scan_len : keep;
+    memcpy(carry, scan + scan_len - *carry_len, *carry_len);
 }
 
 // Appends to a growable scratch buffer, used to accumulate one command's output.
@@ -519,8 +579,11 @@ int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombi
     // read from the monotonic clock (see cblk_monotonic_ms), never inferred from
     // the number of iterations.
     char chunk[4096];
+    char carry[128];
+    size_t carry_len = 0;
     int found = 0;
     int guest_gone = 0;
+    int truncated = 0;
     int64_t deadline = cblk_monotonic_ms() + (int64_t)timeoutMs;
     for (;;) {
         int64_t remaining = deadline - cblk_monotonic_ms();
@@ -547,8 +610,41 @@ int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombi
             if (errno == EINTR) { continue; }
             break;
         }
-        if (scratch_append(chunk, (size_t)got) != 0) { break; }
-        if (strstr(g_session_scratch, marker) != NULL) { found = 1; break; }
+        marker_scan_step(chunk, (size_t)got, marker, carry, &carry_len, &found);
+        // Capture until the cap, then keep draining: the sentinel still has to be
+        // found, or the pipe would be left desynchronised for the next command.
+        if (!truncated) {
+            size_t room = CB_MAX_CAPTURE_BYTES > g_session_scratch_len
+                        ? (size_t)(CB_MAX_CAPTURE_BYTES - g_session_scratch_len) : 0;
+            size_t take = (size_t)got < room ? (size_t)got : room;
+            if (take > 0 && scratch_append(chunk, take) != 0) { break; }
+            if (take < (size_t)got) { truncated = 1; }
+        }
+        if (found) { break; }
+    }
+
+    // The command hit the deadline with output still queued. Drain what is already
+    // in the pipe -- and look for the sentinel while doing it -- so the remainder
+    // of this command's output is not delivered as the *next* command's output.
+    // Bounded, so a genuinely wedged guest still returns.
+    if (!found && !guest_gone) {
+        int64_t grace = cblk_monotonic_ms() + 2000;
+        size_t drained = 0;
+        while (drained < CB_MAX_CAPTURE_BYTES && cblk_monotonic_ms() < grace) {
+            struct pollfd pfd;
+            pfd.fd = g_session_out;
+            pfd.events = POLLIN;
+            if (poll(&pfd, 1, 20) <= 0) { break; }
+            ssize_t got = read(g_session_out, chunk, sizeof(chunk));
+            if (got <= 0) {
+                if (got == 0) { guest_gone = 1; }
+                break;
+            }
+            drained += (size_t)got;
+            marker_scan_step(chunk, (size_t)got, marker, carry, &carry_len, &found);
+        }
+        // If the sentinel was not found the stream stays out of step; the 124
+        // return is what tells the caller this command timed out.
     }
 
     // Trim the sentinel and the echoed command tail from the captured text.
@@ -560,6 +656,10 @@ int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombi
         while (len > 0 && (g_session_scratch[len - 1] == '\n' || g_session_scratch[len - 1] == '\r')) {
             g_session_scratch[--len] = '\0';
         }
+    }
+    if (truncated) {
+        static const char note[] = "\n[crossbuild: output truncated at 8 MB; the command continued]\n";
+        scratch_append(note, sizeof(note) - 1);
     }
     if (guest_gone) {
         // The session is over: stop claiming to be running, drop the pipe ends,

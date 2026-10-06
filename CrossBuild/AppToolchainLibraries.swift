@@ -97,12 +97,23 @@ enum AppToolchainLibraries {
                              location: "Python.framework")
             }
             if lib.id == "clang" {
-                let bridge = ClangEmbeddedBridge()
                 let payload = hasNativePayload(for: lib)
-                let ok = bridge.isLinked && payload
-                return .init(id: lib.id, name: lib.name, present: ok,
-                             detail: ok ? "Clang bridge and native LLVM payload detected." : "Bridge is linked, but the native LLVM/clangDriver payload is not yet present.",
-                             location: lib.resourcePath ?? "Statically linked")
+                let ok = ClangEmbeddedBridge().isLinked && payload
+                // This used to return early with no `guestBacked`, which bypassed
+                // the guest lookup directly below it -- so the C/C++ entry read
+                // "Not bundled" on an install whose guest has a working gcc/g++.
+                let guest = guestProvider(for: lib.id)
+                let detail: String
+                if ok {
+                    detail = "Clang bridge and native LLVM/clangDriver payload detected."
+                } else if let guest {
+                    detail = "No in-app Clang payload is linked, but the Linux guest provides \(guest) for the C and C++ languages this entry advertises."
+                } else {
+                    detail = "Bridge is linked, but the native LLVM/clangDriver payload is not present and the guest reports no C compiler."
+                }
+                return .init(id: lib.id, name: lib.name, present: ok, detail: detail,
+                             location: lib.resourcePath ?? "Statically linked",
+                             guestBacked: guest)
             }
 
             let payload = hasNativePayload(for: lib)
@@ -139,6 +150,13 @@ enum AppToolchainLibraries {
                 }
             }
         }
+
+        // The app-owned payload workflow stages its result at
+        // `NativeToolchains/<id>` (see .github/workflows/build-ipa.yml and
+        // ToolchainRuntimeArchitecture.payloadURL). Nothing looked there, so a
+        // staged payload could never make its own row present.
+        if let staged = ToolchainRuntimeArchitecture.payloadURL(for: lib.id),
+           fm.fileExists(atPath: staged.path) { return true }
 
         guard let relative = lib.resourcePath,
               let resourceRoot = Bundle.main.resourceURL?.appendingPathComponent(relative),

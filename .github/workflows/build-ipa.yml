@@ -103,11 +103,15 @@ jobs:
           # fstatat/makedev/DT_*; _DARWIN_C_SOURCE forces the level back to
           # __DARWIN_C_FULL while still satisfying ucontext.h.
           #
-          # posix_spawn_file_actions_addchdir is declared in Tools/native-offload-shim.h
-          # and prepended to the one translation unit that needs it. It is NOT
-          # passed via c_args: Meson applies those to assembly as well, and the
-          # asbestos gadget .S files then fail with "unrecognized instruction
-          # mnemonic" -- the same trap hit earlier with the dispatch header.
+          # posix_spawn_file_actions_addchdir does not exist in the runner's
+          # libSystem at all, and the only caller is the host-side native-offload
+          # fast path the build-time CLI never takes, so patch_linuxkit.py turns it
+          # into a no-op. (This used to be described as a force-included header,
+          # Tools/native-offload-shim.h, which nothing referenced and which has been
+          # removed.) It is NOT done via c_args: Meson applies those to assembly as
+          # well, and the asbestos gadget .S files then fail with "unrecognized
+          # instruction mnemonic" -- the same trap hit earlier with the dispatch
+          # header.
           python3 "$GITHUB_WORKSPACE/Tools/patch_linuxkit.py" "$PWD"
           meson setup build-host --buildtype=release -Dguest_arch=arm64 \
             -Dc_args="-D_XOPEN_SOURCE=600 -D_DARWIN_C_SOURCE"
@@ -167,6 +171,17 @@ jobs:
           ./build-host/ish -f "$ROOT" /bin/sh -c "printf 'int main(void){return 0;}\n' > /tmp/t.c && cc /tmp/t.c -o /tmp/t && /tmp/t" \
             || { echo "::error::the guest toolchain is present but cannot compile and link"; exit 1; }
 
+          # The default CFLAGS the app assembles for a build must be accepted by
+          # this compiler, or the Build button ships broken. Core.swift emits
+          # -fPIC/-O0/-g (plus the user's -D/-I/-U) for a guest build and keeps the
+          # Apple-clang-only flags behind a check that a real clang payload is
+          # linked: -fmodules, -fembed-bitcode, -Xclang and -mios-version-min are
+          # hard errors under gcc ("unrecognized command-line option"), and they
+          # used to be emitted by default.
+          ./build-host/ish -f "$ROOT" /bin/sh -ec \
+            'printf "int main(void){return 0;}\n" > /tmp/flags.c && cc -fPIC -O0 -g -c /tmp/flags.c -o /tmp/flags.o' \
+            || { echo "::error::the guest compiler rejected the app's default CFLAGS"; exit 1; }
+
           echo "=== trimming ==="
           # Everything removed here is something a C/C++ build environment does
           # not need. The guest exists to run a compiler, not to be a general
@@ -217,6 +232,23 @@ jobs:
           done
           echo "  total = $(du -sh "$ROOT" | cut -f1) (fakefs image on disk)"
           du -sh "$ROOT"
+
+          # The trim above deletes /usr/lib/gcc/*/*/libgcc.a, on the reasoning that
+          # only -static links need it. Re-assert compile AND link *after* the trim,
+          # or that reasoning is never actually tested.
+          ./build-host/ish -f "$ROOT" /bin/sh -c "printf 'int main(void){return 0;}\n' > /tmp/t.c && cc /tmp/t.c -o /tmp/t && /tmp/t" \
+            || { echo "::error::the guest toolchain stopped linking after the rootfs trim"; exit 1; }
+          # Uses a here-document rather than a quoted printf: the C source needs no
+          # string literals, so no nested quoting is involved. Every line below is
+          # indented to the block's level so YAML keeps it, which means the guest
+          # sees the here-document at column 0.
+          ./build-host/ish -f "$ROOT" /bin/sh -ec '
+          cat > /tmp/t2.c <<"T2EOF"
+          #include <stdio.h>
+          int main(void){putchar(65);return 0;}
+          T2EOF
+          cc /tmp/t2.c -o /tmp/t2 && /tmp/t2' \
+            || { echo "::error::the guest toolchain cannot build a program that uses the C library after the trim"; exit 1; }
 
       - name: Generate project
         env:

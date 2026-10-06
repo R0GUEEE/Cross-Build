@@ -9,6 +9,10 @@ struct CompilerDashboardView: View {
     /// Computed off the render path: it walks the file tree and reads the
     /// Makefile, which must not happen every time the body is evaluated.
     @State private var buildItems: [WorkspaceModel.IndividualBuildItem] = []
+    /// Which catalogue entries have an in-app payload, computed once. Calling
+    /// `scanBundle()` inside the ForEach ran a fresh full bundle scan for every
+    /// row on every body evaluation.
+    @State private var toolchainPresence: [String: Bool] = [:]
 
     var body: some View {
         NavigationStack {
@@ -88,7 +92,7 @@ struct CompilerDashboardView: View {
                             LabeledContent("Integrated", value: "\(AppToolchainLibraries.all.count)")
                             ForEach(AppToolchainLibraries.all.prefix(6)) { lib in
                                 HStack {
-                                    Image(systemName: AppToolchainLibraries.scanBundle().first { $0.id == lib.id }?.present == true ? "checkmark.seal.fill" : "exclamationmark.triangle")
+                                    Image(systemName: toolchainPresence[lib.id] == true ? "checkmark.seal.fill" : "exclamationmark.triangle")
                                     VStack(alignment: .leading) {
                                         Text(lib.name).font(.subheadline.weight(.medium))
                                         Text("\(lib.module) • \(lib.availability.rawValue)").font(.caption2).foregroundStyle(.secondary)
@@ -177,7 +181,17 @@ struct CompilerDashboardView: View {
             }
             .navigationTitle("Compiler")
             .toolbar { ToolbarItem(placement: .topBarLeading) { AppMenuButton(settings: settings) } }
-            .task(id: workspace.files.roots.count) { buildItems = workspace.individualBuildItems() }
+            // The list contains the open file and the project's make targets, so
+            // keying it on the tree alone left it stale: opening a file, switching
+            // project root or adding a Makefile changed nothing until something
+            // else happened to rebuild the tree.
+            .task(id: "\(workspace.files.roots.count)-\(workspace.activeProjectRoot ?? "")-\(workspace.editor.selected?.path ?? "")") {
+                buildItems = workspace.individualBuildItems()
+            }
+            .task(id: workspace.files.roots.count) {
+                toolchainPresence = Dictionary(AppToolchainLibraries.scanBundle().map { ($0.id, $0.present) },
+                                               uniquingKeysWith: { first, _ in first })
+            }
             .sheet(isPresented: $showManager) { CompilerManagerView().environmentObject(workspace) }
             .sheet(isPresented: $showCatalog) { CompilerCatalogView().environmentObject(workspace) }
             .sheet(isPresented: $showConfiguration) {

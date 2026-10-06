@@ -84,10 +84,9 @@ enum ToolchainRuntimeArchitecture {
         hasPayload(for: "clang") && ClangEmbeddedBridge().isLinked
     }
 
-    /// The sentence to show when nothing can compile.
-    static var unavailableReason: String {
-        "No compiler is linked into this build. Cross Build's toolchain is meant to be "
-        + "app-owned (docs/RUNTIME_ARCHITECTURE.md), and the Linux guest deliberately "
-        + "carries no compiler, so a compile cannot run yet."
-    }
+    // `unavailableReason` used to live here and said "the Linux guest
+    // deliberately carries no compiler, so a compile cannot run yet" -- which
+    // contradicted `guestRuntimePackages` directly above it and the CI step that
+    // installs and asserts gcc/g++/musl-dev. It was also referenced nowhere.
+    // The honest statement is `hasLinkedCompiler` alone.
 }

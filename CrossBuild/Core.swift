@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SwiftUI
 
@@ -145,6 +146,8 @@ final class WorkspaceModel: ObservableObject {
     private var pendingAgentPlan: [AgentExecution] = []
     weak var appSettings: AppSettings?
     private var autosaveTask: Task<Void, Never>?
+    /// Forwards the services' change notifications; see `init`.
+    private var cancellables = Set<AnyCancellable>()
     let files = FileManagerService()
     let github = GitHubWorkspaceService()
     let configuration = WorkspaceConfiguration()
@@ -165,6 +168,14 @@ final class WorkspaceModel: ObservableObject {
            let saved = try? JSONDecoder().decode([CustomCompiler].self, from: data) {
             customCompilers = saved
         }
+        // Views observe this object, not the services it owns. Nothing forwarded
+        // theirs, so a change inside `files` or `editor` invalidated nothing that
+        // reads them through the model: `editor.showFind.toggle()` never
+        // re-evaluated the IDE body (Find/Replace could not open), and the counts
+        // cached in `.task(id:)` never refreshed when the tree finished loading off
+        // the main actor. The sinks are weak, so neither side is retained.
+        files.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
+        editor.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
         syncFileConfiguration()
         restoreOpenDocuments()
     }
@@ -281,7 +292,10 @@ final class WorkspaceModel: ObservableObject {
     /// directly, so the list the model exposes is also the list the user sees.
     @Published var tasks: [AgentTask] = [
         .init(title: "Detect & Build", instruction: "Detect this project, configure it automatically, and build it"),
-        .init(title: "Repair failed builds", instruction: "Inspect diagnostics, patch safe compiler errors, and rebuild."),
+        // The local planner sequences actions; it never edits source. The text no
+        // longer promises patching it cannot do (there is no plan step that emits
+        // `.replaceEditor`).
+        .init(title: "Repair failed builds", instruction: "Inspect diagnostics and rebuild."),
         .init(title: "Clean & Package", instruction: "Clean the project and package the final artifact"),
         .init(title: "Run Tests", instruction: "Run the project tests and inspect failures")
     ]
@@ -399,6 +413,13 @@ final class WorkspaceModel: ObservableObject {
             } else if command.hasPrefix("zig build") {
                 command += " -j\(jobs)"
             }
+        }
+
+        if !compilerConfiguration.incrementalBuild && command.hasPrefix("make") {
+            // "Incremental build" off means rebuild everything. make's own mtime
+            // logic is what makes a build incremental in the first place, so -B
+            // (always-make) is the honest way to turn it off.
+            command += " -B"
         }
 
         if settings.verboseBuild {
@@ -551,11 +572,12 @@ final class WorkspaceModel: ObservableObject {
 
     /// Asks the guest which build tools it actually has.
     ///
-    /// The shipped rootfs is deliberately runtime-only -- CI fails the build if a
-    /// compiler or build system appears in it -- so "does the guest have make"
-    /// has a real answer, and it is not the one the build buttons assume. Without
-    /// this the first sign is `make: not found` scrolling past in a console the
-    /// user may not be looking at.
+    /// The shipped rootfs does carry a C/C++ toolchain -- CI installs make, gcc,
+    /// g++ and musl-dev and asserts they can compile and link -- but the guest is
+    /// writable and can be replaced, so "does the guest have make" still has a
+    /// real answer and it is worth asking rather than assuming. Without this the
+    /// first sign of a broken rootfs is `make: not found` scrolling past in a
+    /// console the user may not be looking at.
     func probeGuestToolchain() async {
         guard !didProbeGuestToolchain else { return }
         didProbeGuestToolchain = true
@@ -577,8 +599,9 @@ final class WorkspaceModel: ObservableObject {
         let missing = ToolchainRuntimeArchitecture.requiredGuestTools.filter { tool in !guestToolchain.contains(tool) }
         if !missing.isEmpty {
             console += "warning: the Linux guest has no \(missing.joined(separator: " or ")). "
-                + "Build actions that need it will fail with 'not found'. The guest rootfs ships no "
-                + "compiler stack by design, so the toolchain has to come from the guest itself.\n"
+                + "Build actions that need it will fail with 'not found'. The bundled rootfs is "
+                + "supposed to carry make, cc/gcc, c++/g++ and binutils; if one is missing this "
+                + "install's guest root is incomplete or was replaced.\n"
         }
     }
 
@@ -750,6 +773,18 @@ final class WorkspaceModel: ObservableObject {
         buildDiagnostics = parsed
     }
 
+    /// True when the compiler that will read `CFLAGS`/`LDFLAGS` is an Apple
+    /// clang linked into the app.
+    ///
+    /// It is false for the shipped configuration: every build action in this app
+    /// runs in the Linux guest, whose toolchain is GNU gcc (CI installs gcc/g++
+    /// and asserts they are present). Passing clang-only flags to gcc is a hard
+    /// error, not a warning, so the flags are gated on a compiler that can
+    /// actually accept them.
+    private var usesAppleClangFlags: Bool {
+        ToolchainRuntimeArchitecture.hasLinkedCompiler
+    }
+
     /// The timeout for build/test/package actions: the dedicated "Build timeout"
     /// when one is set, otherwise the general "Command timeout". `buildTimeout`
     /// previously had a stepper in Settings that nothing read.
@@ -855,6 +890,7 @@ final class WorkspaceModel: ObservableObject {
             if !theosTarget.isEmpty { environment["TARGET"] = theosTarget }
         }
 
+        let appleClang = usesAppleClangFlags
         var cFlags: [String] = []
         let compilerFlags = compilerConfiguration.compilerFlags.trimmingCharacters(in: .whitespacesAndNewlines)
         if !compilerFlags.isEmpty { cFlags.append(compilerFlags) }
@@ -862,19 +898,30 @@ final class WorkspaceModel: ObservableObject {
         // CXXFLAGS is assembled below from the same flags; make's implicit C++
         // rule reads $(CXXFLAGS), not $(CFLAGS).
         if compilerConfiguration.positionIndependentCode { cFlags.append("-fPIC") }
-        if compilerConfiguration.clangModules { cFlags.append("-fmodules") }
-        if !compilerConfiguration.objcARC { cFlags.append("-fno-objc-arc") }
+        // Apple/clang-only flags. They are emitted only when an Apple clang is
+        // actually the compiler that will read this variable; the guest's GNU
+        // gcc rejects every one of them outright ("unrecognized command-line
+        // option"), which made the default configuration unable to compile a
+        // single C file through make's implicit rules.
+        if compilerConfiguration.clangModules && appleClang { cFlags.append("-fmodules") }
+        if !compilerConfiguration.objcARC && appleClang { cFlags.append("-fno-objc-arc") }
         if compilerConfiguration.linkTimeOptimization { cFlags.append("-flto") }
-        if compilerConfiguration.bitcode { cFlags.append("-fembed-bitcode") }
+        if compilerConfiguration.bitcode && appleClang { cFlags.append("-fembed-bitcode") }
         if compilerConfiguration.reproducibleBuild {
             // The override is usually empty, and an empty prefix produced the
             // malformed `-ffile-prefix-map=.= .`. Fall back to the project root.
             let override = configuration.workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
             let mapRoot = override.isEmpty ? (activeProjectRoot ?? files.workspaceRoot.path) : override
-            cFlags.append(contentsOf: ["-Xclang", "-fdebug-compilation-dir=.", "-ffile-prefix-map=\(mapRoot)=."])
+            if appleClang {
+                cFlags.append(contentsOf: ["-Xclang", "-fdebug-compilation-dir=.", "-ffile-prefix-map=\(mapRoot)=."])
+            } else {
+                // -ffile-prefix-map is understood by gcc 8+ and by clang; the
+                // -Xclang spelling is not a gcc option at all.
+                cFlags.append("-ffile-prefix-map=\(mapRoot)=.")
+            }
         }
         let minimumOS = compilerConfiguration.minimumOS.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !minimumOS.isEmpty { cFlags.append("-mios-version-min=\(minimumOS)") }
+        if !minimumOS.isEmpty && appleClang { cFlags.append("-mios-version-min=\(minimumOS)") }
         // Define names cannot contain a space, so this field keeps the
         // space-separated spelling. The flag prefix is now accepted instead of
         // doubled, comments are honoured, and entries are trimmed -- a stray \r
@@ -926,7 +973,11 @@ final class WorkspaceModel: ObservableObject {
             .map { strippingOptionPrefix($0, prefixes: ["-framework"]) }
         ldFlags.append(contentsOf: frameworks.map { "-framework \($0)" })
         if compilerConfiguration.stripSymbols { ldFlags.append("-Wl,-S") }
-        if compilerConfiguration.deadStrip { ldFlags.append("-Wl,-dead_strip") }
+        if compilerConfiguration.deadStrip {
+            // -dead_strip belongs to Apple's ld; GNU ld has no such option and
+            // fails the link. --gc-sections is its equivalent.
+            ldFlags.append(appleClang ? "-Wl,-dead_strip" : "-Wl,--gc-sections")
+        }
         if !ldFlags.isEmpty { environment["LDFLAGS"] = ldFlags.joined(separator: " ") }
         environment["CROSSBUILD_INCREMENTAL_BUILD"] = compilerConfiguration.incrementalBuild ? "1" : "0"
 
@@ -1083,42 +1134,120 @@ final class WorkspaceModel: ObservableObject {
     /// makes an individual build equivalent to the one make would have run.
     func singleFileBuildCommand(for relativePath: String) -> String? {
         guard !relativePath.isEmpty else { return nil }
+        // A language whose compiler the guest does not carry cannot be built one
+        // file at a time. Returning nil here makes the callers say "no single-file
+        // compile for that language" instead of running a command whose only
+        // possible answer is `not found` -- which is what the sweep used to do for
+        // every .swift, .rs, .go, .zig, .py, .js and .ts file, none of which have a
+        // compiler in the guest.
+        let required: [String]
+        switch (relativePath as NSString).pathExtension.lowercased() {
+        case "c", "m", "h", "hpp", "hh": required = ["cc", "gcc"]
+        case "cc", "cpp", "cxx", "mm": required = ["c++", "g++"]
+        case "swift": required = ["swiftc"]
+        case "rs": required = ["rustc"]
+        case "go": required = ["go"]
+        case "zig": required = ["zig"]
+        case "py": required = ["python3"]
+        case "js", "ts": required = ["node"]
+        default: return nil
+        }
+        guard !guestToolchain.isEmpty,
+              required.contains(where: { guestToolchain.contains($0) }) else { return nil }
         let flags = (commandEnvironment()["CFLAGS"] ?? "").trimmingCharacters(in: .whitespaces)
         let path = GuestWorkspaceSync.guestRoot + "/" + relativePath
-        let stem = (relativePath as NSString).lastPathComponent
-        let object = "/tmp/crossbuild-\(stem).o"
+        let object = Self.objectPath(for: relativePath)
         let quote = GuestWorkspaceSync.quoted
         let extra = flags.isEmpty ? "" : " " + flags
+        // The object directory is keyed by the whole relative path, so
+        // `src/main.c` and `lib/main.c` no longer overwrite one another's object
+        // -- the old name was `/tmp/crossbuild-<basename>.o`, which made a file's
+        // reported result describe an object it had not produced.
+        let prepare = "mkdir -p \(quote(Self.objectDirectory)) && "
 
         // `cc`/`c++` rather than `clang`: the guest carries the GNU toolchain, and
         // these are the names that resolve to a real compiler there. Asking for
         // clang was one more way for a build to fail with `not found`.
         switch (relativePath as NSString).pathExtension.lowercased() {
-        case "c": return "cc\(extra) -c \(quote(path)) -o \(quote(object))"
-        case "m": return "cc\(extra) -c \(quote(path)) -o \(quote(object))"
-        case "cc", "cpp", "cxx", "mm": return "c++\(extra) -c \(quote(path)) -o \(quote(object))"
+        case "c": return prepare + "cc\(extra) -c \(quote(path)) -o \(quote(object))"
+        case "m": return prepare + "cc\(extra) -c \(quote(path)) -o \(quote(object))"
+        case "cc", "cpp", "cxx", "mm": return prepare + "c++\(extra) -c \(quote(path)) -o \(quote(object))"
         case "h", "hpp", "hh": return "cc\(extra) -fsyntax-only \(quote(path))"
         case "swift": return "swiftc -typecheck \(quote(path))"
-        case "rs": return "rustc --emit=obj \(quote(path)) -o \(quote(object))"
+        case "rs": return prepare + "rustc --emit=obj \(quote(path)) -o \(quote(object))"
         case "go": return "go vet \(quote(path))"
-        case "zig": return "zig build-obj \(quote(path)) -femit-bin=\(quote(object))"
+        case "zig": return prepare + "zig build-obj \(quote(path)) -femit-bin=\(quote(object))"
         case "py": return "python3 -m py_compile \(quote(path))"
         case "js", "ts": return "node --check \(quote(path))"
         default: return nil
         }
     }
 
+    /// Where per-file objects live inside the guest. One directory, so the
+    /// incremental cache can list what is really there in a single round trip.
+    static let objectDirectory = "/tmp/crossbuild/obj"
+
+    /// A stable object name for a source path. Everything outside
+    /// `[A-Za-z0-9._-]` becomes `_`, and the **whole relative path** is kept, so
+    /// two files with the same basename cannot collide.
+    static func objectPath(for relativePath: String) -> String {
+        let slug = String(relativePath.map { ch -> Character in
+            if ch.isLetter || ch.isNumber || ch == "." || ch == "_" || ch == "-" { return ch }
+            return "_"
+        })
+        return objectDirectory + "/" + slug + ".o"
+    }
+
+    static func objectName(for relativePath: String) -> String {
+        String(objectPath(for: relativePath).split(separator: "/").last ?? "")
+    }
+
+    /// A file the guest sync should carry, described without its bytes so the
+    /// read can happen off the main actor.
+    private struct SyncCandidate: Sendable {
+        var relative: String
+        var path: String
+    }
+
+    /// Files above this size are not copied into the guest. The workspace lives
+    /// beside `Documents/CrossBuild/linux-root` (the guest's own filesystem
+    /// image); reading a file this size had no upper bound at all before.
+    static let maximumSyncItemBytes: Int64 = 16 * 1024 * 1024
+
     /// Every non-hidden file under `root`, ready to be copied into the guest.
-    func projectSyncItems(under root: String) -> [GuestWorkspaceSync.Item] {
-        files.flattened.compactMap { file in
+    ///
+    /// Files are read as **bytes**, not as UTF-8 text. The transport is base64,
+    /// so an image, archive or object file is copied intact; decoding as text
+    /// silently dropped every binary from the sync, and published a
+    /// `FileManagerService.errorMessage` for each one because `contents(of:)`
+    /// reports its failures on a `@Published` property. The listing comes from
+    /// the in-memory tree; only the byte reads leave the main actor.
+    func projectSyncItems(under root: String) async -> [GuestWorkspaceSync.Item] {
+        let prefix = root + "/"
+        var candidates: [SyncCandidate] = []
+        var oversized = 0
+        for file in files.flattened {
             guard !file.isDirectory,
-                  file.path.hasPrefix(root + "/"),
+                  file.path.hasPrefix(prefix),
                   !file.name.hasPrefix("."),
-                  !file.path.contains("/.git/"),
-                  let text = files.contents(of: file, encoding: editorEncoding)
-            else { return nil }
-            return .init(relativePath: relativePath(file.path), data: Data(text.utf8))
+                  !file.path.contains("/.git/") else { continue }
+            guard file.size <= Self.maximumSyncItemBytes else { oversized += 1; continue }
+            candidates.append(SyncCandidate(relative: relativePath(file.path), path: file.path))
         }
+        if oversized > 0 {
+            console += "Guest sync: skipped \(oversized) file(s) larger than "
+                + "\(Self.maximumSyncItemBytes / (1024 * 1024)) MB.\n"
+        }
+        let limited = candidates
+        // Returned as plain tuples: `GuestWorkspaceSync.Item` is not marked
+        // `Sendable`, and a pair of `String`/`Data` is.
+        let read: [(String, Data)] = await Task.detached(priority: .utility) {
+            limited.compactMap { candidate -> (String, Data)? in
+                guard let data = FileManager.default.contents(atPath: candidate.path) else { return nil }
+                return (candidate.relative, data)
+            }
+        }.value
+        return read.map { GuestWorkspaceSync.Item(relativePath: $0.0, data: $0.1) }
     }
 
     /// Builds one item instead of the whole project.
@@ -1151,7 +1280,7 @@ final class WorkspaceModel: ObservableObject {
                 }
                 items = [.init(relativePath: relative, data: Data(text.utf8))]
             case .makeTarget:
-                items = projectSyncItems(under: root)
+                items = await projectSyncItems(under: root)
             }
 
             let synced = await guestSync.push(items, session: .shared)
@@ -1176,10 +1305,9 @@ final class WorkspaceModel: ObservableObject {
                     + (flags.isEmpty ? "" : " " + flags)
             }
 
-            guard guestToolchain.contains("cc") || guestToolchain.contains("gcc") else {
-                console += "error: the guest has no C compiler, so \(relativePath) cannot be compiled.\n"
-                return
-            }
+            // No compiler check here any more: `singleFileBuildCommand` already
+            // returned nil (and said so) unless the guest has the tool this file
+            // needs, and the old check hard-coded C for every language.
 
             setProgress(step: 1, detail: command)
             let started = Date()
@@ -1193,6 +1321,54 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
+    /// What the individual-compile sweep remembers about one file, so an
+    /// unchanged source is not compiled twice.
+    ///
+    /// This is what the "Incremental build" switch in Compiler Configuration
+    /// actually drives. It used to only export `CROSSBUILD_INCREMENTAL_BUILD`, a
+    /// variable that neither the app nor the guest reads, which is the same as
+    /// the switch not existing.
+    private struct CompileRecord: Codable {
+        var modified: Date
+        var size: Int64
+        var command: String
+    }
+
+    private let compileRecordsKey = "crossbuild.compileRecords"
+    private lazy var compileRecords: [String: CompileRecord] = {
+        guard let data = UserDefaults.standard.data(forKey: compileRecordsKey),
+              let decoded = try? JSONDecoder().decode([String: CompileRecord].self, from: data) else { return [:] }
+        return decoded
+    }()
+
+    private func persistCompileRecords() {
+        guard let data = try? JSONEncoder().encode(compileRecords) else { return }
+        UserDefaults.standard.set(data, forKey: compileRecordsKey)
+    }
+
+    /// The object files the guest still has, in one round trip.
+    ///
+    /// A record only counts as reusable when its object is really there, so a
+    /// guest root that was recreated (the app copies a fresh image whenever the
+    /// directory is missing) cannot turn a stale record into a skipped compile.
+    private func existingGuestObjects() async -> Set<String> {
+        let directory = GuestWorkspaceSync.quoted(Self.objectDirectory)
+        let result = await LinuxGuestSession.shared.run("ls -1 \(directory) 2>/dev/null || true", timeout: 30)
+        guard result.code >= 0 else { return [] }
+        return Set(result.output.split(whereSeparator: { $0 == "\n" || $0 == " " }).map(String.init))
+    }
+
+    /// True when the recorded compile still describes the file on disk, the exact
+    /// command that would run now, and an object the guest still has.
+    private func canReuseObject(_ relative: String, command: String, file: WorkspaceFile?,
+                                availableObjects: Set<String>) -> Bool {
+        guard let file, let record = compileRecords[relative] else { return false }
+        guard availableObjects.contains(Self.objectName(for: relative)) else { return false }
+        return record.command == command
+            && record.size == file.size
+            && abs(record.modified.timeIntervalSince(file.modified)) < 0.5
+    }
+
     /// Compiles every source file in the project, one after another.
     ///
     /// The guest is synchronised once for the whole run rather than per file: the
@@ -1204,7 +1380,10 @@ final class WorkspaceModel: ObservableObject {
             console += "error: Another command is already running.\n"
             return
         }
-        let sources = individualSourceFiles().map { relativePath($0.path) }
+        let sourceFiles = individualSourceFiles()
+        let sources = sourceFiles.map { relativePath($0.path) }
+        let sourceByRelative = Dictionary(sourceFiles.map { (relativePath($0.path), $0) },
+                                          uniquingKeysWith: { first, _ in first })
         guard !sources.isEmpty else {
             console += "No source files found in the active project.\n"
             return
@@ -1214,8 +1393,14 @@ final class WorkspaceModel: ObservableObject {
         Task {
             beginProgress(label: "Compile \(sources.count) source(s)", detail: "Copying into the guest", stepCount: sources.count + 1)
             defer { endProgress() }
+            // Every other build entry point asks the guest what it has first. This
+            // one did not, so choosing "Compile All Sources" as the first action of
+            // a launch reported that the guest had no compiler -- its `guestToolchain`
+            // was still empty because nothing had probed yet.
+            await probeGuestToolchain()
 
-            let synced = await guestSync.push(projectSyncItems(under: root), session: .shared)
+            let syncItems = await projectSyncItems(under: root)
+            let synced = await guestSync.push(syncItems, session: .shared)
             if !synced.output.isEmpty { console += synced.output }
             console += "Guest sync: \(guestSync.lastSummary)\n"
             guard synced.pushed > 0 else {
@@ -1224,15 +1409,36 @@ final class WorkspaceModel: ObservableObject {
             }
             setProgress(step: 1, detail: "Guest synchronised")
 
-            guard guestToolchain.contains("cc") || guestToolchain.contains("gcc") else {
-                console += "error: the guest has no C compiler, so there is nothing to compile with.\n"
+            // Per file now, not per project: a source list of one language must be
+            // judged by that language's compiler, not by whether `cc` exists.
+            guard sources.contains(where: { singleFileBuildCommand(for: $0) != nil }) else {
+                console += "error: the guest has none of the compilers this project's sources need, "
+                    + "so there is nothing to compile with.\n"
                 return
             }
+
+            // Only asked for when the switch is on: one extra round trip for the
+            // chance to skip many.
+            let incremental = compilerConfiguration.incrementalBuild
+            var availableObjects: Set<String> = []
+            if incremental { availableObjects = await existingGuestObjects() }
+            var reused = 0
+            var failedThisRun = 0
+            var recordsChanged = false
 
             for (index, relative) in sources.enumerated() {
                 guard let built = singleFileBuildCommand(for: relative) else {
                     console += "skipped \(relative): no single-file compile for that language.\n"
                     setProgress(step: index + 2, detail: "Skipped \(relative)")
+                    continue
+                }
+                let sourceFile = sourceByRelative[relative]
+                if incremental,
+                   canReuseObject(relative, command: built, file: sourceFile, availableObjects: availableObjects) {
+                    reused += 1
+                    setProgress(step: index + 2, detail: "\(relative) — unchanged")
+                    // The previous run's result is left in place: it records when
+                    // this file was actually compiled, which is the truth.
                     continue
                 }
                 setProgress(step: index + 2, detail: relative)
@@ -1243,10 +1449,26 @@ final class WorkspaceModel: ObservableObject {
                 individualResults[relative] = RunRecord(label: relative,
                                                         seconds: Date().timeIntervalSince(started),
                                                         succeeded: result.succeeded)
+                if !result.succeeded { failedThisRun += 1 }
+                if let sourceFile, result.succeeded {
+                    compileRecords[relative] = CompileRecord(modified: sourceFile.modified,
+                                                             size: sourceFile.size,
+                                                             command: built)
+                    recordsChanged = true
+                } else if compileRecords.removeValue(forKey: relative) != nil {
+                    recordsChanged = true
+                }
             }
+            if recordsChanged { persistCompileRecords() }
             setProgress(step: sources.count + 1)
-            let failed = individualResults.filter { !$0.value.succeeded }.count
-            console += "Individual compile finished: \(sources.count - failed) ok, \(failed) failed.\n"
+            // Counted from this run, not from `individualResults`, which keeps every
+            // file's last result -- so a file that failed in an earlier run made
+            // every later summary report a failure that was not there.
+            let reusedNote = reused > 0 ? ", \(reused) unchanged (Incremental build)" : ""
+            console += "Individual compile finished: \(sources.count - failedThisRun - reused) ok, \(failedThisRun) failed\(reusedNote).\n"
+            if !incremental {
+                console += "Incremental build is off, so every source was compiled.\n"
+            }
         }
     }
 
@@ -1256,7 +1478,8 @@ final class WorkspaceModel: ObservableObject {
         Task {
             beginProgress(label: "Sync to guest", detail: "Copying project files", stepCount: 1)
             defer { endProgress() }
-            let result = await guestSync.push(projectSyncItems(under: root), session: .shared)
+            let syncItems = await projectSyncItems(under: root)
+            let result = await guestSync.push(syncItems, session: .shared)
             if !result.output.isEmpty { console += result.output }
             console += "Guest sync: \(guestSync.lastSummary)\n"
             setProgress(step: 1)

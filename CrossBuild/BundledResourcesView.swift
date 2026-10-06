@@ -56,7 +56,9 @@ struct BundledResourcesView: View {
             }
 
             Section {
-                let missing = items.filter { !$0.present }
+                // A row the guest satisfies is not absent from the IPA, so it is
+                // shown as "Via guest" above rather than under "Missing".
+                let missing = items.filter { !$0.present && $0.guestBacked == nil }
                 if missing.isEmpty {
                     Label("All declared in-app components were discovered.", systemImage: "checkmark.seal.fill")
                         .foregroundStyle(.green)
@@ -71,7 +73,7 @@ struct BundledResourcesView: View {
             } header: {
                 Text("Bundle scan")
             } footer: {
-                Text("Missing components must be linked or bundled into the IPA; setup no longer offers host package installation or helper workarounds.")
+                Text("These components are absent from this IPA. Entries the Linux guest provides are shown as \u{201C}Via guest\u{201D} above instead. Setup no longer offers host package installation or helper workarounds.")
                     .font(.caption)
             }
 

@@ -6,6 +6,8 @@ struct WorkspaceHomeView: View {
     // class changes.
     let clone:()->Void
     let configure:()->Void
+    /// Counted off the render path: `projectFiles` rebuilds the whole file tree.
+    @State private var projectFileCount = 0
 
     var body: some View {
         ScrollView {
@@ -25,7 +27,7 @@ struct WorkspaceHomeView: View {
 
                 ForgeCard("Project Overview",subtitle:"Current workspace at a glance") {
                     LazyVGrid(columns:[GridItem(.adaptive(minimum:130),spacing:12)],spacing:12) {
-                        ForgeMetric(title:"Project Files",value:"\(workspace.projectFiles.count)",icon:"doc.on.doc")
+                        ForgeMetric(title:"Project Files",value:"\(projectFileCount)",icon:"doc.on.doc")
                         ForgeMetric(title:"Toolchain",value:shortToolchain,icon:"cpu")
                         ForgeMetric(title:"Open Editors",value:"\(workspace.editor.documents.count)",icon:"rectangle.stack")
                         ForgeMetric(title:"Execution",value:workspace.executionStatus,icon:"play.circle")
@@ -72,6 +74,10 @@ struct WorkspaceHomeView: View {
             .padding(ForgeTheme.Space.xl)
             .frame(maxWidth:900)
             .frame(maxWidth:.infinity)
+        }
+        // Re-read when the file tree is rebuilt, rather than on every render.
+        .task(id: workspace.files.roots.count) {
+            projectFileCount = workspace.projectFiles.count
         }
     }
 

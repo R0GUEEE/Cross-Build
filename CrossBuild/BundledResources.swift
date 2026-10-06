@@ -53,13 +53,21 @@ enum BundledResources {
             icon: "terminal.fill"
         ))
 
-        let sdkCount = IOSSDKDiscovery.availableSDKs().count
+        // "Bundled" means shipped inside the app. The old count also included
+        // SDKs the user put in Documents/SDKs, so a build that ships none could
+        // still display a non-zero "Bundled SDKs" value.
+        let bundledSDKs = IOSSDKDiscovery.bundledSDKs().count
+        let availableSDKs = IOSSDKDiscovery.availableSDKs().count
         items.append(BundledResource(
             id: "sdks",
             name: "Bundled SDKs",
-            detail: sdkCount > 0 ? "\(sdkCount) SDK payload(s) discovered." : "No SDK payload was discovered in the app bundle.",
+            detail: bundledSDKs > 0
+                ? "\(bundledSDKs) SDK payload(s) ship inside the app."
+                : (availableSDKs > 0
+                   ? "No SDK ships in the app; \(availableSDKs) user-supplied SDK(s) found under Documents/SDKs."
+                   : "No SDK payload was discovered in the app bundle or in Documents/SDKs."),
             location: "SDKs/",
-            present: sdkCount > 0,
+            present: availableSDKs > 0,
             sizeBytes: 0,
             execution: .supportData,
             icon: "square.stack.3d.up"

@@ -20,9 +20,12 @@ struct LinuxGuestExecutionBackend: ExecutionBackend {
         canInstallPackages: true       // apk runs inside the guest
     )
 
-    /// Timeout used when the caller asks for "no timeout" (0), matching the
-    /// CrossBuild Helper backend's convention so the two behave the same.
-    private static let unlimitedCommandTimeout: TimeInterval = 900
+    /// Timeout used when the caller asks for "no timeout" (0).
+    ///
+    /// This used to be 900 s while the Settings screen said "Unlimited" and
+    /// `CommandRequest` documents 0 as unlimited, so a build marked unlimited was
+    /// killed after fifteen minutes. The guest session applies the same ceiling.
+    private static let unlimitedCommandTimeout: TimeInterval = 24 * 60 * 60
 
     func execute(_ request: CommandRequest) async -> CommandResult {
         let started = Date()
@@ -35,8 +38,7 @@ struct LinuxGuestExecutionBackend: ExecutionBackend {
         // timeout: Unlimited" setting and `CommandRequest`'s own default both
         // document. Passing it straight through as `max(1, ...)` used to give
         // every guest command one second, which made the whole backend useless
-        // for anything but the fastest command. The helper backend translates 0
-        // to an hour; do the same here.
+        // for anything but the fastest command.
         let timeout = request.timeout > 0
             ? TimeInterval(request.timeout)
             : Self.unlimitedCommandTimeout
@@ -58,6 +60,10 @@ struct LinuxGuestExecutionBackend: ExecutionBackend {
             workingDirectory: request.workingDirectory,
             environment: request.environment
         )
+        // The per-request initialization command was built from the setting and
+        // then dropped, so editing it after launch did nothing. Run it once, the
+        // first time a command carries it.
+        await LinuxGuestSession.shared.runInitCommandIfNeeded(request.initCommand)
         let result = await LinuxGuestSession.shared.run(request.command, timeout: timeout, invocation: invocation)
         guard result.code >= 0 else {
             return .init(exitCode: 125, stdout: "", stderr: result.output, duration: Date().timeIntervalSince(started))

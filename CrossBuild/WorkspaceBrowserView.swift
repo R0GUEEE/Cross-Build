@@ -200,11 +200,4 @@ struct WorkspaceBrowserView: View {
     }
 
 
-    private func icon(for name: String) -> String {
-        let ext = (name as NSString).pathExtension.lowercased()
-        if ["swift","m","mm","c","cpp","cc","rs","go","zig","py","js","ts","xm","x"].contains(ext) { return "chevron.left.forwardslash.chevron.right" }
-        if ["png","jpg","jpeg","heic","svg"].contains(ext) { return "photo" }
-        if ["zip","tar","gz","xz","deb","ipa"].contains(ext) { return "shippingbox" }
-        return "doc.text"
-    }
 }

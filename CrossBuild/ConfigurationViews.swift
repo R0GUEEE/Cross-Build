@@ -34,7 +34,7 @@ struct AppConfigurationView: View {
                 LabeledContent("Execution", value: "Embedded / In-App")
                 LabeledContent("POSIX runtime", value: "ios-linuxkit")
                 Toggle("Forward configured environment", isOn: $settings.forwardEnvironment)
-                Stepper(settings.commandTimeout == 0 ? "Command timeout: Unlimited" : "Command timeout: \(settings.commandTimeout)s",
+                Stepper(settings.commandTimeout == 0 ? "Command timeout: Unlimited (24 h cap)" : "Command timeout: \(settings.commandTimeout)s",
                         value: $settings.commandTimeout, in: 0...3600, step: 15)
                 Text("Compiler engines and support libraries are discovered from the app bundle. Shell/POSIX commands execute inside the embedded ios-linuxkit environment.")
                     .font(.caption).foregroundStyle(.secondary)
