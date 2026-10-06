@@ -82,7 +82,13 @@ final class LinuxGuestSession: ObservableObject {
         // A boot has already been attempted and failed. The interpreter cannot be
         // initialised twice, so retrying here could only produce a second, less
         // accurate error (cblk_session_start answers -1 for "already booted").
-        if case .failed = state { return }
+        // A boot that failed before the interpreter initialised (no pipes, no
+        // thread) is still retryable; once it has initialised it is not, and the
+        // shim says which happened. Treating both as permanent meant one transient
+        // failure disabled the guest -- and with it every toolchain probe -- for
+        // the rest of the session.
+        if case .failed = state, LinuxGuestEngine.hasBooted { return }
+        if case .failed = state { state = .idle }
         if let bootTask {
             let failure = await bootTask.value
             if let failure { state = .failed(failure) } else { state = .running }
@@ -103,7 +109,13 @@ final class LinuxGuestSession: ObservableObject {
                 let root = try LinuxGuestEngine.prepareWritableRoot()
                 #if canImport(CrossBuildLinux)
                 let code = cblk_session_start(root, "/root")
-                return code == 0 ? nil : "The guest failed to start (code \(code))."
+                if code == 0 { return nil }
+                if code == -4 {
+                    return "The guest started but its shell did not answer within "
+                        + "\(Self.readinessWindowSeconds) seconds, so no command can be run. "
+                        + "Relaunch Cross Build to try again."
+                }
+                return "The guest failed to start (code \(code))."
                 #else
                 return "The Linux engine was not linked into this build."
                 #endif
@@ -265,6 +277,11 @@ final class LinuxGuestSession: ObservableObject {
         guard let first = name.first, first.isLetter || first == "_" else { return false }
         return name.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
     }
+
+    /// How long the boot waits for the guest's shell to answer a marker, in
+    /// seconds. Mirrors the window in `cblk_session_start`; the two are quoted
+    /// together in the failure message so they cannot drift silently.
+    static let readinessWindowSeconds = 120
 
     /// Upper bound for a single command, in seconds. This is what "no timeout"
     /// means in practice: the C shim is handed `Int32` milliseconds, so ~24.8 days

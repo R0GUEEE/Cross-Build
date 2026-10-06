@@ -13,6 +13,9 @@ struct CompilerDashboardView: View {
     /// `scanBundle()` inside the ForEach ran a fresh full bundle scan for every
     /// row on every body evaluation.
     @State private var toolchainPresence: [String: Bool] = [:]
+    /// Which rows the Linux guest satisfies, and with what. `present` alone marked
+    /// every guest-provided row with a warning triangle.
+    @State private var guestProvided: [String: String] = [:]
 
     var body: some View {
         NavigationStack {
@@ -92,10 +95,13 @@ struct CompilerDashboardView: View {
                             LabeledContent("Integrated", value: "\(AppToolchainLibraries.all.count)")
                             ForEach(AppToolchainLibraries.all.prefix(6)) { lib in
                                 HStack {
-                                    Image(systemName: toolchainPresence[lib.id] == true ? "checkmark.seal.fill" : "exclamationmark.triangle")
+                                    Image(systemName: toolchainPresence[lib.id] == true ? "checkmark.seal.fill"
+                                          : (guestProvided[lib.id] == nil ? "exclamationmark.triangle" : "checkmark.circle"))
                                     VStack(alignment: .leading) {
                                         Text(lib.name).font(.subheadline.weight(.medium))
-                                        Text("\(lib.module) • \(lib.availability.rawValue)").font(.caption2).foregroundStyle(.secondary)
+                                        Text(guestProvided[lib.id].map { "Provided by the Linux guest: \($0)" }
+                                             ?? "\(lib.module) • \(lib.availability.rawValue)")
+                                            .font(.caption2).foregroundStyle(.secondary)
                                     }
                                     Spacer()
                                     Text(lib.version).font(.caption2).monospaced()
@@ -188,9 +194,15 @@ struct CompilerDashboardView: View {
             .task(id: "\(workspace.files.roots.count)-\(workspace.activeProjectRoot ?? "")-\(workspace.editor.selected?.path ?? "")") {
                 buildItems = workspace.individualBuildItems()
             }
-            .task(id: workspace.files.roots.count) {
-                toolchainPresence = Dictionary(AppToolchainLibraries.scanBundle().map { ($0.id, $0.present) },
+            // Also keyed on the guest's tool list: which rows the guest satisfies
+            // cannot be known until the probe has answered.
+            .task(id: "\(workspace.files.roots.count)-\(workspace.guestToolchain.joined(separator: ","))") {
+                let scan = AppToolchainLibraries.scanBundle()
+                toolchainPresence = Dictionary(scan.map { ($0.id, $0.present) },
                                                uniquingKeysWith: { first, _ in first })
+                guestProvided = Dictionary(scan.compactMap { item in
+                    item.guestBacked.map { (item.id, $0) }
+                }, uniquingKeysWith: { first, _ in first })
             }
             .sheet(isPresented: $showManager) { CompilerManagerView().environmentObject(workspace) }
             .sheet(isPresented: $showCatalog) { CompilerCatalogView().environmentObject(workspace) }

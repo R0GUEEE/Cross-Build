@@ -109,7 +109,11 @@ struct BundledResourcesView: View {
             }
         }
         .navigationTitle("Bundled Components")
-        .onAppear { items = BundledResources.inventory() }
+        // Re-read when the guest's tool list arrives. A row is only marked "Via
+        // guest" once the probe has answered, and computing the inventory once in
+        // .onAppear left the screen saying "Not bundled" for the rest of the visit
+        // even after the probe succeeded.
+        .task(id: workspace.guestToolchain) { items = BundledResources.inventory() }
     }
 
     private func runPythonSelfTest() {
