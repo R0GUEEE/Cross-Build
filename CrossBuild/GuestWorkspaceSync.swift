@@ -66,6 +66,9 @@ final class GuestWorkspaceSync: ObservableObject {
     /// symbols. Every caller pushes the whole project, so nothing is lost by
     /// starting from an empty directory.
     func push(_ items: [Item],
+              // Not `GuestWorkspaceSync.guestRoot` here: a default argument cannot
+              // reference a static member of its own type. `/workspace` is the value.
+              root guestDestination: String = "/workspace",
               session: LinuxGuestSession) async -> PushResult {
         var skipped: [String] = []
         var accepted: [Item] = []
@@ -84,7 +87,7 @@ final class GuestWorkspaceSync: ObservableObject {
         // Base64-encoding a project is proportional to its size and has no reason
         // to run on the main actor.
         let batches = await Task.detached(priority: .utility) {
-            Self.batches(for: accepted)
+            Self.batches(for: accepted, root: guestDestination)
         }.value
 
         var pushed = 0
@@ -98,8 +101,8 @@ final class GuestWorkspaceSync: ObservableObject {
         // header that had been copied a moment earlier.
         if !batches.isEmpty {
             let reset = "( set -e\n"
-                + "rm -rf \(Self.quoted(Self.guestRoot))\n"
-                + "mkdir -p \(Self.quoted(Self.guestRoot))\n)"
+                + "rm -rf \(Self.quoted(guestDestination))\n"
+                + "mkdir -p \(Self.quoted(guestDestination))\n)"
             let result = await session.run(reset, timeout: 60)
             if result.code != 0 || result.status != 0 {
                 output += result.output
@@ -140,7 +143,7 @@ final class GuestWorkspaceSync: ObservableObject {
             lastSyncedAt = Date()
             lastSummary = pushed == 0
                 ? "Nothing was copied into the guest."
-                : "\(pushed) file(s) copied to \(Self.guestRoot) inside the guest."
+                : "\(pushed) file(s) copied to \(guestDestination) inside the guest."
         }
         return PushResult(pushed: pushed, skipped: skipped, output: output,
                           complete: complete, failedBatch: failedBatch)
@@ -150,13 +153,13 @@ final class GuestWorkspaceSync: ObservableObject {
     ///
     /// `nonisolated` and static so the encoding can run off the main actor; it
     /// touches nothing but its argument.
-    private nonisolated static func batches(for items: [Item]) -> [[String]] {
+    private nonisolated static func batches(for items: [Item], root: String) -> [[String]] {
         var batches: [[String]] = []
         var current: [String] = []
         var currentBytes = 0
 
         for item in items {
-            let destination = guestRoot + "/" + item.relativePath
+            let destination = root + "/" + item.relativePath
             let directory = (destination as NSString).deletingLastPathComponent
             let encoded = item.data.base64EncodedString()
             // The budget has to include the shell syntax around the payload, or

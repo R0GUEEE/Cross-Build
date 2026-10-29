@@ -135,6 +135,8 @@ struct SandboxDiagnosticsView: View {
     private func guestRows() -> [Row] {
         var rows: [Row] = []
         rows.append(.init(label: "Engine", value: LinuxGuestEngine.version, ok: LinuxGuestEngine.isLinked))
+        rows.append(.init(label: "Execution", value: LinuxGuestEngine.buildConfiguration,
+                          ok: true, hint: LinuxGuestEngine.buildConfiguration))
         rows.append(.init(label: "Root filesystem in bundle", value: LinuxGuestEngine.isRootBundled ? "present" : "missing",
                           ok: LinuxGuestEngine.isRootBundled))
 
