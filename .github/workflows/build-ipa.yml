@@ -286,6 +286,13 @@ jobs:
               report "$p"; rm -f "$p" 2>/dev/null || true
             done
 
+            # CMake ships its documentation as 2300 files under Help/. The binary,
+            # the Modules and the platform files are what a build needs; --help-module
+            # is what this pays for.
+            for p in /usr/share/cmake/Help /usr/share/cmake/man; do
+              report "$p"; rm -rf "$p" 2>/dev/null || true
+            done
+
             # The apk index cache from provisioning time: ~3 MB, and the guest
             # cannot reach a repository anyway.
             report /var/cache/apk; rm -rf /var/cache/apk 2>/dev/null || true
