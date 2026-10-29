@@ -125,6 +125,9 @@ final class WorkspaceModel: ObservableObject {
         var label: String = ""
         var seconds: TimeInterval = 0
         var succeeded = true
+        /// When the run ended. The banner that reports the outcome keys off this,
+        /// so dismissing one run's banner does not dismiss the next one's.
+        var finishedAt = Date.distantPast
     }
 
     @Published private(set) var runProgress = RunProgress()
@@ -674,7 +677,8 @@ final class WorkspaceModel: ObservableObject {
             // the status bar still had it.
             lastRun = RunRecord(label: runProgress.label,
                                 seconds: runProgress.elapsed,
-                                succeeded: progressSucceeded)
+                                succeeded: progressSucceeded,
+                                finishedAt: Date())
         }
         runProgress = RunProgress()
     }

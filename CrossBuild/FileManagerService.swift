@@ -533,7 +533,9 @@ final class FileManagerService: ObservableObject {
         return !trimmed.isEmpty && trimmed != "." && trimmed != ".." && !trimmed.contains("/")
     }
 
-    private func uniqueURL(_ url: URL) -> URL {
+    /// A non-colliding name beside `url`. Used by "New Project" as well as by
+    /// create/duplicate, so it is not private.
+    func uniqueURL(_ url: URL) -> URL {
         var candidate = url
         var index = 2
         while FileManager.default.fileExists(atPath: candidate.path) {

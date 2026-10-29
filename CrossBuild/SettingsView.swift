@@ -1,5 +1,13 @@
 import SwiftUI
+import UIKit
 
+/// Settings, grouped by what a person came here to change.
+///
+/// The old screen was one list of ten sections and six navigation links in no
+/// particular order, mixing a font slider with the embedded runtime's inventory.
+/// This one has four short groups at the top (the things people actually change),
+/// then a single "Advanced" group holding the diagnostic screens that used to be
+/// top-level tabs.
 struct SettingsView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
     @ObservedObject var settings: AppSettings
@@ -7,12 +15,63 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Configuration") {
-                    NavigationLink("Full Setup") {
+                Section("Editor") {
+                    HStack {
+                        Text("Font size")
+                        Slider(value: $settings.editorFontSize, in: 11...24, step: 1)
+                        Text("\(Int(settings.editorFontSize))").monospacedDigit()
+                    }
+                    Toggle("Autosave", isOn: $settings.autosave)
+                    Toggle("Trim trailing whitespace", isOn: $settings.trimWhitespace)
+                    Toggle("Line numbers", isOn: $settings.editorLineNumbers)
+                    Toggle("Word wrap", isOn: $settings.editorWordWrap)
+                    Toggle("Highlight current line", isOn: $settings.editorHighlightCurrentLine)
+                    Toggle("Auto-close brackets & quotes", isOn: $settings.editorAutoClosePairs)
+                    Picker("Tab width", selection: $settings.editorTabWidth) {
+                        Text("2").tag(2)
+                        Text("4").tag(4)
+                        Text("8").tag(8)
+                    }
+                    Toggle("Insert spaces for tabs", isOn: $settings.editorInsertSpaces)
+                }
+
+                Section("Build") {
+                    Toggle("Clean before build", isOn: $settings.cleanBeforeBuild)
+                    Toggle("Parallel builds", isOn: $settings.parallelBuilds)
+                    if settings.parallelBuilds {
+                        Stepper("Build jobs: \(settings.buildJobs)", value: $settings.buildJobs, in: 1...32)
+                    }
+                    Toggle("Warnings as errors", isOn: $settings.warningsAsErrors)
+                    Toggle("Verbose output", isOn: $settings.verboseBuild)
+                    Toggle("Stop on first failure", isOn: $settings.stopOnFirstError)
+                    Stepper(settings.buildTimeout == 0 ? "Timeout: Unlimited" : "Timeout: \(settings.buildTimeout)s",
+                            value: $settings.buildTimeout, in: 0...3600, step: 30)
+                }
+
+                Section("Project") {
+                    Toggle("Detect project automatically", isOn: $settings.autoDetect)
+                    Toggle("Open last workspace", isOn: $settings.openLastWorkspace)
+                    Toggle("Show welcome screen", isOn: $settings.showWelcomeScreen)
+                    NavigationLink("Project Settings") {
+                        WorkspaceConfigurationView(config: workspace.configuration).environmentObject(workspace)
+                    }
+                    NavigationLink("Compiler, SDK & Toolchain") {
+                        CompilerConfigurationView(config: workspace.compilerConfiguration).environmentObject(workspace)
+                    }
+                }
+
+                Section("Advanced") {
+                    NavigationLink("Toolchains & Compilers") {
+                        CompilerDashboardView(settings: settings).environmentObject(workspace)
+                    }
+                    NavigationLink("Components in this build") {
+                        BundledResourcesView().environmentObject(workspace)
+                    }
+                    NavigationLink("Setup & System Scan") {
                         FullSetupView(settings: settings).environmentObject(workspace)
                     }
-                    NavigationLink("Bundled with the app") {
-                        BundledResourcesView().environmentObject(workspace)
+                    NavigationLink("Diagnostics") {
+                        FeatureDiagnosticsView(settings: settings).environmentObject(workspace)
                     }
                     NavigationLink("App Configuration") {
                         AppConfigurationView(settings: settings)
@@ -20,88 +79,28 @@ struct SettingsView: View {
                     NavigationLink("Agent Configuration") {
                         AgentConfigurationView(settings: settings)
                     }
-                    NavigationLink("Workspace & Project") {
-                        WorkspaceConfigurationView(config: workspace.configuration).environmentObject(workspace)
-                    }
-                    NavigationLink("Compiler, SDK & Toolchain") {
-                        CompilerConfigurationView(config: workspace.compilerConfiguration).environmentObject(workspace)
-                    }
-                    NavigationLink("Feature Diagnostics") {
-                        FeatureDiagnosticsView(settings: settings).environmentObject(workspace)
-                    }
-                }
-
-                Section("Editor") {
-                    HStack {
-                        Text("Font Size")
-                        Slider(value: $settings.editorFontSize, in: 11...24, step: 1)
-                        Text("\(Int(settings.editorFontSize))").monospacedDigit()
-                    }
-                    Toggle("Global autosave", isOn: $settings.autosave)
-                    Toggle("Trim trailing whitespace", isOn: $settings.trimWhitespace)
-                    Toggle("Line numbers", isOn: $settings.editorLineNumbers)
-                    Toggle("Highlight current line", isOn: $settings.editorHighlightCurrentLine)
-                    Toggle("Word wrap", isOn: $settings.editorWordWrap)
-                    Toggle("Auto-close brackets & quotes", isOn: $settings.editorAutoClosePairs)
-                    Toggle("Show invisible characters", isOn: $settings.editorShowInvisibles)
-                    Toggle("Insert spaces for tabs", isOn: $settings.editorInsertSpaces)
-                    Picker("Tab width", selection: $settings.editorTabWidth) {
-                        Text("2").tag(2)
-                        Text("4").tag(4)
-                        Text("8").tag(8)
-                    }
-                    LabeledContent("Editor engine", value: "Cross Build Code Editor")
-                }
-
-                Section("Build Policy") {
-                    // Offered in App Configuration → Startup instead of twice:
-                    // two identically-labelled switches on one key is a control
-                    // nobody can tell the difference between.
-                    LabeledContent("Auto-detect project on launch",
-                                   value: settings.autoDetect ? "On" : "Off")
-                    Toggle("Parallel builds", isOn: $settings.parallelBuilds)
-                    if settings.parallelBuilds {
-                        Stepper("Build jobs: \(settings.buildJobs)", value: $settings.buildJobs, in: 1...32)
-                    }
-                    Toggle("Clean before build", isOn: $settings.cleanBeforeBuild)
-                    Toggle("Verbose build output", isOn: $settings.verboseBuild)
-                    Toggle("Warnings as errors", isOn: $settings.warningsAsErrors)
-                    Toggle("Stop workflow on first failure", isOn: $settings.stopOnFirstError)
-                    Toggle("Capture execution environment", isOn: $settings.captureEnvironment)
-                    Toggle("Timestamp build output", isOn: $settings.timestampBuildOutput)
-                    Stepper(settings.buildTimeout == 0 ? "Build timeout: Unlimited" : "Build timeout: \(settings.buildTimeout)s",
-                            value: $settings.buildTimeout, in: 0...3600, step: 30)
-                }
-
-                Section("Diagnostics") {
-                    Toggle("Clear previous output before build", isOn: $settings.clearDiagnosticsOnBuild)
-                    Toggle("Include warnings", isOn: $settings.includeWarnings)
-                    Toggle("Include notes", isOn: $settings.includeNotes)
-                    Stepper("Maximum problems: \(settings.maxProblems)", value: $settings.maxProblems, in: 25...1000, step: 25)
-                }
-
-                Section("Files & Storage") {
-                    Toggle("Show hidden files globally", isOn: Binding(
+                    Toggle("Show hidden files", isOn: Binding(
                         get: { settings.showHiddenFiles },
                         set: { settings.showHiddenFiles = $0; workspace.syncFileConfiguration() }))
-                    LabeledContent("Workspace", value: workspace.files.workspaceRoot.path)
-                    LabeledContent("Documents", value: workspace.files.documentsRoot.path)
-                    LabeledContent("Library", value: workspace.files.libraryRoot.path)
-                    LabeledContent("Temporary", value: workspace.files.temporaryRoot.path)
                 }
 
-                Section("Runtime Status") {
-                    LabeledContent("Selected toolchain", value: workspace.selectedToolchain.rawValue)
-                    LabeledContent("Execution", value: workspace.executionStatus)
-                    LabeledContent("Open editors", value: "\(workspace.editor.documents.count)")
-                    LabeledContent("Project files", value: "\(workspace.projectFiles.count)")
-                    if let code = workspace.lastExitCode {
-                        LabeledContent("Last exit code", value: "\(code)")
+                Section("About") {
+                    LabeledContent("Version", value: Self.version)
+                    LabeledContent("Workspace", value: workspace.files.workspaceRoot.lastPathComponent)
+                    Button("Copy workspace path") {
+                        UIPasteboard.general.string = workspace.files.workspaceRoot.path
                     }
                 }
             }
             .navigationTitle("Settings")
-            .toolbar { ToolbarItem(placement: .topBarLeading) { AppMenuButton(settings: settings) } }
+            .navigationBarTitleDisplayMode(.large)
         }
+    }
+
+    private static var version: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let short = info["CFBundleShortVersionString"] as? String ?? "1.0"
+        let build = info["CFBundleVersion"] as? String ?? "?"
+        return "\(short) (\(build))"
     }
 }

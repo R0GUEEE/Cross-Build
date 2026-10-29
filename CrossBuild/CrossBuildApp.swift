@@ -41,28 +41,35 @@ struct CrossBuildApp: App {
 struct RootView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
     @ObservedObject var settings: AppSettings
-    @State private var section: AppSection = .workspace
+    @State private var section: AppSection = .projects
 
     var body: some View {
-        // A fixed application shell: menu bar, content, tab bar.
+        // A fixed application shell: content, tab bar.
         //
-        // This used to be a `TabView`, which on iPad reshapes its own bar as the
-        // content scrolls -- the window appearing to change size under your
-        // finger rather than the app navigating. Fixed heights and a plain switch
-        // mean the chrome is the same shape on every device and every scroll
-        // position.
+        // A `TabView` on iPad reshapes its own bar as the content scrolls -- the
+        // window appearing to change size under your finger rather than the app
+        // navigating. Fixed heights and a plain switch mean the chrome is the same
+        // shape on every device and every scroll position.
         VStack(spacing: 0) {
             Group {
                 switch section {
-                case .workspace: IDEView(settings: settings)
-                case .compiler: CompilerDashboardView(settings: settings)
-                case .agent: AgentDashboardView(settings: settings)
+                case .projects: ProjectsView(settings: settings) { section = .editor }
+                case .editor: IDEView(settings: settings)
                 case .settings: SettingsView(settings: settings)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
             RootTabBar(section: $section)
+        }
+        // Launch into the editor when a project is already open, and into the
+        // project list otherwise: the first screen should answer "what am I
+        // working on?" without a tap.
+        .task {
+            if workspace.activeProjectRoot == nil, !workspace.projectFiles.isEmpty {
+                workspace.detectSampleProject()
+            }
+            section = workspace.activeProjectRoot == nil ? .projects : .editor
         }
         .background(ForgeTheme.Surface.background)
         .alert("Allow Agent Commands?", isPresented: Binding(
