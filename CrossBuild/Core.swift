@@ -1940,11 +1940,6 @@ final class WorkspaceModel: ObservableObject {
         "cd \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.guestRoot)) && " + command
     }
 
-    /// Copies the project into the guest and reports what happened.
-    ///
-    /// Returns false when nothing reached the guest, which is the caller's cue to
-    /// stop rather than run a command against a copy that is not there.
-    @discardableResult
     /// Makes the selected Apple SDK available in the guest, once per SDK.
     ///
     /// Called before every build rather than behind a button: a build that needs an
@@ -1967,12 +1962,20 @@ final class WorkspaceModel: ObservableObject {
     /// Where the last successfully imported SDK lives inside the guest.
     private var guestSDKRoot: String?
 
+    /// Copies the project into the guest and reports what happened.
+    ///
+    /// Returns false when nothing reached the guest, which is the caller's cue to
+    /// stop rather than run a command against a copy that is not there.
+    @discardableResult
     private func syncProjectToGuest() async -> Bool {
-        let root = activeProjectRoot ?? files.workspaceRoot.path
-        let syncItems = await projectSyncItems(under: root)
+        // Import first: it writes to /opt, and the project push below replaces
+        // /workspace. Doing it the other way round would copy the whole project
+        // before discovering the guest is not up.
         if let sdk = await ensureSDKInGuest() {
             guestSDKRoot = sdk.sysroot
         }
+        let root = activeProjectRoot ?? files.workspaceRoot.path
+        let syncItems = await projectSyncItems(under: root)
         let synced = await guestSync.push(syncItems, session: .shared)
         if !synced.output.isEmpty { console += synced.output }
         console += "Guest sync: \(guestSync.lastSummary)\n"

@@ -65,7 +65,8 @@ enum SDKInjection {
         let existing = await session.run("cat \(guestRoot)/.stamp 2>/dev/null || true", timeout: 30)
         if existing.output.trimmingCharacters(in: .whitespacesAndNewlines) == stamp {
             notes.append("Apple SDK already in the guest (\(sdk.lastPathComponent)).")
-            return .init(sysroot: guestRoot, frameworkPaths: frameworks(in: sdk).map { guestRoot + $0 },
+            return .init(sysroot: sysroot(in: sdk, at: guestRoot),
+                         frameworkPaths: frameworks(in: sdk).map { guestRoot + $0 },
                          notes: notes, applied: true)
         }
 
@@ -123,11 +124,30 @@ enum SDKInjection {
             return .init(sysroot: nil, frameworkPaths: [], notes: notes, applied: false)
         }
         notes.append("\(pushed.pushed) file(s) imported: \(sync.lastSummary)")
-        notes.append("Builds now use --sysroot=\(guestRoot).")
+        notes.append("Builds now use --sysroot=\(sysroot(in: sdk, at: guestRoot)).")
 
-        return .init(sysroot: guestRoot,
+        return .init(sysroot: sysroot(in: sdk, at: guestRoot),
                      frameworkPaths: frameworks(in: sdk).map { guestRoot + $0 },
                      notes: notes, applied: true)
+    }
+
+    /// Which directory is the sysroot *inside* the imported copy.
+    ///
+    /// Two shapes arrive in practice: a `.sdk` bundle already rooted at the SDK
+    /// (`Documentation/`, `usr/`, `SDKSettings.plist`), and a folder that merely
+    /// *contains* an SDK (`iPhoneOS18.2.sdk/`). One level down is checked for the
+    /// markers of the first shape; the extra level is added only when it holds one.
+    private static func sysroot(in sdk: URL, at root: String) -> String {
+        let markers = ["SDKSettings.plist", "usr"]
+        let hasMarkers = { (dir: URL) in
+            markers.contains { FileManager.default.fileExists(atPath: dir.appendingPathComponent($0).path) }
+        }
+        if hasMarkers(sdk) { return root }
+        let inner = root + "/" + sdk.lastPathComponent
+        if hasMarkers(sdk.appendingPathComponent(sdk.lastPathComponent)) { return inner }
+        // Neither shape: point at the copied root and let the linker say what it
+        // could not find, rather than guessing a level that may not exist.
+        return root
     }
 
     /// Swift framework directories that exist inside the SDK, as guest paths.
