@@ -46,10 +46,16 @@ enum LinuxGuestEngine {
 
     enum GuestError: LocalizedError {
         case rootNotBundled
+        case insufficientSpace(required: Int64, available: Int64)
         var errorDescription: String? {
             switch self {
             case .rootNotBundled:
                 return "The Linux rootfs image is not present in this build."
+            case .insufficientSpace(let required, let available):
+                let need = ByteCountFormatter.string(fromByteCount: required, countStyle: .file)
+                let have = ByteCountFormatter.string(fromByteCount: available, countStyle: .file)
+                return "The Linux guest needs about \(need) of free space to unpack its root filesystem; "
+                    + "\(have) is available. Free some space and relaunch."
             }
         }
     }
@@ -79,6 +85,18 @@ enum LinuxGuestEngine {
         guard let documents = fm.urls(for: .documentDirectory, in: .userDomainMask).first else {
             throw GuestError.rootNotBundled
         }
+        // The guest root is a full copy of the bundled tree -- hundreds of megabytes
+        // -- and the failure mode when the device is short of space is a boot error
+        // with an unhelpful code. Say what is needed and what is free.
+        let needed = directorySize(bundled)
+        var free: Int64 = 0
+        if let values = try? documents.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+           let capacity = values.volumeAvailableCapacityForImportantUsage {
+            free = capacity
+        }
+        if needed > 0, free > 0, free < needed + needed / 4 {
+            throw GuestError.insufficientSpace(required: needed, available: free)
+        }
         let destination = documents.appendingPathComponent("CrossBuild/linux-root", isDirectory: true)
         let marker = documents.appendingPathComponent("CrossBuild/linux-root.build")
         let build = bundledBuildID
@@ -99,6 +117,20 @@ enum LinuxGuestEngine {
         try fm.moveItem(at: staging, to: destination)
         try? build.write(to: marker, atomically: true, encoding: .utf8)
         return destination.path
+    }
+
+    /// Total size of every file below `path`.
+    private static func directorySize(_ path: String) -> Int64 {
+        guard let walker = FileManager.default.enumerator(atPath: path) else { return 0 }
+        var total: Int64 = 0
+        for case let name as String in walker {
+            let full = (path as NSString).appendingPathComponent(name)
+            if let attributes = try? FileManager.default.attributesOfItem(atPath: full),
+               let size = attributes[.size] as? Int64 {
+                total += size
+            }
+        }
+        return total
     }
 
     /// Identifies the bundled rootfs: its recorded build number when there is one,

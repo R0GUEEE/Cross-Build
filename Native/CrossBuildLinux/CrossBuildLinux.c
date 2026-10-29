@@ -153,6 +153,13 @@ static void *guest_thread_main(void *opaque) {
 // single "guest is gone" flag here would fire on the first `make` child. Only
 // init's exit means the session is over, and init is pid 1.
 static volatile int g_guest_init_exited = 0;
+// Set once the readiness round trip has succeeded. The init-exit flag is only
+// meaningful after that: during boot the engine can retire short-lived task groups,
+// and treating one of those as "the shell is gone" made the very first command
+// return -3 and the app report "The guest failed to start (code -2)".
+static volatile int g_session_ready = 0;
+// Why the last cblk_session_start failed, for the app to show.
+static char g_boot_error[512];
 
 // Replaces the engine's handler, which calls exit(). Recording the code and
 // unwinding just this thread keeps the host app alive.
@@ -494,6 +501,7 @@ int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory)
     int rc = cblk_session_run(":", 120000, &ready, &readyStatus);
     if (rc < 0 && ready != NULL) { free(ready); }
     if (rc == 124) {
+        snprintf(g_boot_error, sizeof(g_boot_error), "the shell did not answer the readiness round trip");
         // The round trip timed out. `124` is a *positive* return, so the old
         // `if (rc < 0)` never saw it and the boot reported success with no shell
         // answering -- every later command then paid the full timeout. Close
@@ -510,13 +518,20 @@ int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory)
         // g_booted stays set: the interpreter really has been initialised and
         // cannot be initialised again, so a retry could only produce a less
         // accurate error.
+        snprintf(g_boot_error, sizeof(g_boot_error), "%s",
+                 (ready != NULL && ready[0] != '\0') ? ready : "the guest shell exited while starting up");
         g_session_running = 0;
         if (g_session_in >= 0) { close(g_session_in); g_session_in = -1; }
         if (g_session_out >= 0) { close(g_session_out); g_session_out = -1; }
         restore_stdio();
         return -2;
     }
+    g_session_ready = 1;
     return 0;
+}
+
+const char *cblk_session_error(void) {
+    return g_boot_error[0] != '\0' ? g_boot_error : "";
 }
 
 int32_t cblk_session_is_running(void) {
@@ -612,9 +627,9 @@ int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombi
     if (outCombined != NULL) { *outCombined = NULL; }
     // -1 means "unknown", which is different from a command that exited with 1.
     if (outStatus != NULL) { *outStatus = -1; }
-    if (!g_session_running || g_guest_init_exited) {
+    if (!g_session_running || (g_session_ready && g_guest_init_exited)) {
         if (outCombined != NULL) { *outCombined = cblk_strdup("The Linux guest is not running."); }
-        return g_guest_init_exited ? -3 : -1;
+        return (g_session_ready && g_guest_init_exited) ? -3 : -1;
     }
     if (command == NULL) { command = ""; }
 
@@ -664,7 +679,7 @@ int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombi
         // has exited there is nothing left to answer, and waiting for the pipe to
         // reach EOF cannot work: the host itself still holds a duplicate of the
         // write end (fd 1/2 are redirected to it), so `read` never returns 0.
-        if (g_guest_init_exited) { guest_gone = 1; break; }
+        if (g_session_ready && g_guest_init_exited) { guest_gone = 1; break; }
         int64_t remaining = deadline - cblk_monotonic_ms();
         if (remaining <= 0) { break; }
         if (remaining > 100) { remaining = 100; }

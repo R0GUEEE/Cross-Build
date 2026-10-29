@@ -41,6 +41,10 @@ int32_t cblk_boot_and_run(const char *fakefsRoot,
 int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory);
 int32_t cblk_session_is_running(void);
 
+// Why the last cblk_session_start failed (empty when it succeeded). Points at a
+// static buffer owned by the shim; copy it before the next call.
+const char *cblk_session_error(void);
+
 // Send one command to the running shell and collect its output. Uses a sentinel
 // written after the command to know when the output is complete, and gives up
 // after timeoutMs (measured with the monotonic clock) so a hung command cannot

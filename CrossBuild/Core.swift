@@ -147,6 +147,8 @@ final class WorkspaceModel: ObservableObject {
     @Published var generatedConfigurationSummary: [String] = []
     @Published var activeProjectRoot: String?
     static let activeProjectKey = "crossbuild.activeProject"
+    /// What the last detection printed, so an identical result is not reprinted.
+    private var lastDetectionFingerprint = ""
     @Published var recommendedBuildCommand: String?
     @Published var pendingAgentConfirmation: String?
     private var pendingAgentPlan: [AgentExecution] = []
@@ -389,14 +391,39 @@ final class WorkspaceModel: ObservableObject {
     ]
 
     func detectSampleProject() {
-        detectProject(rootOverride: nil)
+        Task { await detectProject(rootOverride: nil) }
     }
 
     func detectProject(at root: String) {
-        detectProject(rootOverride: root)
+        Task { await detectProject(rootOverride: root) }
     }
 
-    private func detectProject(rootOverride: String?) {
+    /// Points the app at a project: records it, focuses the explorer, waits for that
+    /// tree, and only then detects.
+    ///
+    /// Detection used to run before the focus had rebuilt the tree, so it analysed
+    /// whatever the previous screen had loaded -- often nothing, which is why every
+    /// project reported "Make / CMake / Ninja / Meson, 55%, source-language
+    /// inference" with no languages and no build systems.
+    func selectProject(_ path: String, name: String? = nil) {
+        registerProject(path: path, name: name)
+        activeProjectRoot = path
+        UserDefaults.standard.set(path, forKey: Self.activeProjectKey)
+        files.focus(on: URL(fileURLWithPath: path))
+        Task {
+            await files.waitForTree()
+            await detectProject(rootOverride: path)
+        }
+    }
+
+    private func detectProject(rootOverride: String?) async {
+        // The detector reads the file tree; analysing one that is still being built
+        // produces an empty result that looks like a project with no sources.
+        await files.waitForTree()
+        runDetection(rootOverride: rootOverride)
+    }
+
+    private func runDetection(rootOverride: String?) {
         // Detection runs *inside* the selected project, and never moves the
         // selection on its own.
         //
@@ -465,15 +492,26 @@ final class WorkspaceModel: ObservableObject {
         }
         generatedConfigurationSummary = generated.summary
         projectContext = ProjectContext.detected(root: root, analysis: result, compiler: compilerConfiguration)
-        console += "Configuration: " + generated.summary.joined(separator: " • ") + "\n"
-        console += "Auto-detect: \(result.primaryToolchain.rawValue) [\(Int(result.confidence * 100))%]\n"
-        console += "Languages: \(result.languages.map(\.rawValue).sorted().joined(separator: ", "))\n"
-        console += "Build systems: \(result.buildSystems.map(\.rawValue).sorted().joined(separator: ", "))\n"
-        if let type = result.theosType {
-            console += "Theos type: \(type.rawValue) • \(result.isRootlessHinted ? "rootless hint" : "scheme unspecified")\n"
-        }
-        if let candidate = result.candidates.first {
-            console += "Recommended: \(candidate.command) — \(candidate.reason)\n"
+        // One block per distinct result. Detection runs from several places (launch,
+        // project switch, the Build tab), and printing the whole summary each time
+        // buried the console under identical lines.
+        let fingerprint = generated.summary.joined(separator: " • ")
+            + "|\(result.primaryToolchain.rawValue)|\(result.languages.map(\.rawValue).sorted())"
+            + "|\(result.buildSystems.map(\.rawValue).sorted())"
+        if fingerprint != lastDetectionFingerprint {
+            lastDetectionFingerprint = fingerprint
+            console += "Configuration: " + generated.summary.joined(separator: " • ") + "\n"
+            console += "Auto-detect: \(result.primaryToolchain.rawValue) [\(Int(result.confidence * 100))%]\n"
+            let languages = result.languages.map(\.rawValue).sorted()
+            if !languages.isEmpty { console += "Languages: \(languages.joined(separator: ", "))\n" }
+            let systems = result.buildSystems.map(\.rawValue).sorted()
+            if !systems.isEmpty { console += "Build systems: \(systems.joined(separator: ", "))\n" }
+            if let type = result.theosType {
+                console += "Theos type: \(type.rawValue) • \(result.isRootlessHinted ? "rootless hint" : "scheme unspecified")\n"
+            }
+            if let candidate = result.candidates.first {
+                console += "Recommended: \(candidate.command) — \(candidate.reason)\n"
+            }
         }
     }
 
@@ -649,7 +687,7 @@ final class WorkspaceModel: ObservableObject {
     /// touched: that field is the explicit answer, and detection is the default.
     func autoConfigureBuildOptions(settings: AppSettings?) {
         if analysis == nil, let root = activeProjectRoot {
-            detectProject(rootOverride: root)
+            Task { await detectProject(rootOverride: root) }
         }
         guard let settings, settings.autoDetect else { return }
 
@@ -2178,12 +2216,7 @@ final class WorkspaceModel: ObservableObject {
     /// built by moving it.
     func useFolderAsActiveProject(_ folder: WorkspaceFile) {
         guard folder.isDirectory else { return }
-        registerProject(path: folder.path)
-        detectProject(at: folder.path)
-        // Take the browser with it. Changing only the header left the explorer
-        // showing every other folder beside the one that had just been "selected".
-        files.focus(on: URL(fileURLWithPath: folder.path))
-        console += "Active project: \(relativePath(folder.path))/\n"
+        selectProject(folder.path)
     }
 
     func selectDocument(_ id: UUID) {
