@@ -276,8 +276,8 @@ jobs:
               report "$p"; rm -f "$p" 2>/dev/null || true
             done
 
-            # apk's own indexes from provisioning time: ~3 MB, and the guest cannot
-            # reach a repository anyway.
+            # The apk index cache from provisioning time: ~3 MB, and the guest
+            # cannot reach a repository anyway.
             report /var/cache/apk; rm -rf /var/cache/apk 2>/dev/null || true
 
             # Perl POD is the bulk of the perl tree and is pure documentation.
