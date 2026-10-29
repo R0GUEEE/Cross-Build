@@ -15,7 +15,12 @@ final class WorkspaceConfiguration: ObservableObject {
     private var defaultsObserver: NSObjectProtocol?
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
+        // `addObserver(forName:object:queue:using:)` is a *block* observer, and a
+        // block observer is removed by the token it returned -- not by passing
+        // `self`, which matches only selector-based registrations and therefore
+        // removed nothing. Reading a stored property in `deinit` is legal, so use
+        // the token.
+        if let defaultsObserver { NotificationCenter.default.removeObserver(defaultsObserver) }
     }
 
     init() {

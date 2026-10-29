@@ -67,8 +67,6 @@ final class LinuxGuestSession: ObservableObject {
 
     private init() {}
 
-    var isRunning: Bool { state == .running }
-
     /// Records the setup command run once after the guest boots. Call before the
     /// first command; later calls only take effect if the guest never booted.
     func configure(initCommand: String) {
@@ -172,42 +170,45 @@ final class LinuxGuestSession: ObservableObject {
     /// documented Unlimited setting into a one-second kill.
     func run(_ command: String,
              timeout: TimeInterval = 120,
-             invocation: GuestShellInvocation = GuestShellInvocation()) async -> (code: Int32, output: String) {
+             invocation: GuestShellInvocation = GuestShellInvocation()) async -> (code: Int32, status: Int32, output: String) {
         await startIfNeeded()
         guard state == .running else {
             switch state {
-            case .unavailable(let message), .failed(let message): return (-1, message)
-            default: return (-1, "The Linux guest is not running.")
+            case .unavailable(let message), .failed(let message): return (-1, -1, message)
+            default: return (-1, -1, "The Linux guest is not running.")
             }
         }
 
         // Chain onto the queue so two commands cannot interleave their output,
         // then hop off the main actor because the guest does real work.
         let previous = queue
-        let seconds = Self.effectiveTimeout(timeout)
+        // A non-finite timeout would trap on the Int32 conversion below rather
+        // than time out; clamp instead of trusting the caller.
+        let seconds = Self.effectiveTimeout(timeout.isFinite ? timeout : 0)
         let milliseconds = Int32(min(seconds, Self.maximumTimeoutSeconds) * 1000)
         let script = Self.script(for: command, invocation: invocation)
-        let task = Task { () -> (Int32, String) in
+        let task = Task { () -> (Int32, Int32, String) in
             await previous?.value
-            let result = await Task.detached(priority: .userInitiated) { () -> (Int32, String) in
+            let result = await Task.detached(priority: .userInitiated) { () -> (Int32, Int32, String) in
                 #if canImport(CrossBuildLinux)
                 var outPointer: UnsafeMutablePointer<CChar>?
-                let code = cblk_session_run(script, milliseconds, &outPointer)
+                var exitStatus: Int32 = -1
+                let code = cblk_session_run(script, milliseconds, &outPointer, &exitStatus)
                 let output = outPointer.map { String(cString: $0) } ?? ""
                 // cblk_session_run returns its internal scratch buffer on success,
                 // but strdup()s the message on its error paths (negative code).
                 // Those are the only ones we own, and leaking them leaks once per
                 // failure for the life of the process.
                 if code < 0, let outPointer { cblk_free(outPointer) }
-                return (code, output)
+                return (code, exitStatus, output)
                 #else
-                return (Int32(-1), "The Linux engine was not linked into this build.")
+                return (Int32(-1), Int32(-1), "The Linux engine was not linked into this build.")
                 #endif
             }.value
             if result.0 == Self.shellExitedCode {
                 // Terminal: there is no shell left to send anything to, and the
                 // interpreter cannot be booted again in this process.
-                self.state = .failed(result.1)
+                self.state = .failed(result.2)
             }
             return result
         }
@@ -215,7 +216,7 @@ final class LinuxGuestSession: ObservableObject {
         var result = await task.value
         if let setupOutput = pendingInitOutput {
             pendingInitOutput = nil
-            result.1 = result.1.isEmpty ? setupOutput : setupOutput + "\n" + result.1
+            result.2 = result.2.isEmpty ? setupOutput : setupOutput + "\n" + result.2
         }
         return result
     }

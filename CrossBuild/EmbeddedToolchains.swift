@@ -63,7 +63,10 @@ final class EmbeddedToolchainManager: ObservableObject {
     func probe() {
         available[javascript.id]=javascript.version
         available[logos.id]=logos.version
-        if python.isLinked { available[python.id]=python.version }
+        // The bridge being compiled in says nothing about the standard library.
+        // Without this check Diagnostics showed "Python • Ready" on a build whose
+        // every run failed at `ensureStarted` with "stdlib missing".
+        if python.isLinked, PythonEmbeddedEngine.hasStandardLibrary { available[python.id]=python.version }
         if LinuxGuestEngine.isLinked { available[LinuxGuestEngine.id]=LinuxGuestEngine.version }
         // Not `clang.isLinked`: the bridge module is compiled into every build, so
         // that is always true -- and the catalogue then reported Clang as
@@ -73,10 +76,26 @@ final class EmbeddedToolchainManager: ObservableObject {
         if ToolchainRuntimeArchitecture.hasLinkedCompiler { available["clang"]=clang.version }
     }
 
-    func isAvailable(_ id:String)->Bool { available[id] != nil }
+    /// Catalogue id -> embedded engine id.
+    ///
+    /// These are two different namespaces and nothing translated between them, so
+    /// every caller that asked `isAvailable(item.id)` was comparing "python" (the
+    /// catalogue entry) against "python3" (the registered engine) and getting
+    /// false -- while `python3` was linked and working. "node"/"typescript" have
+    /// no engine of their own; JavaScriptCore runs that source.
+    static func engineID(for catalogID: String) -> String {
+        switch catalogID {
+        case "python": return "python3"
+        case "node", "typescript": return "javascriptcore"
+        case "theos", "logos": return "logos-preprocessor"
+        default: return catalogID
+        }
+    }
+
+    func isAvailable(_ id:String)->Bool { available[Self.engineID(for: id)] != nil }
 
     func run(id:String, source:String, options:[String:String]=[:]) async -> EmbeddedToolchainResult {
-        switch id {
+        switch Self.engineID(for: id) {
         case javascript.id: return await javascript.run(source:source,options:options)
         case logos.id: return await logos.run(source:source,options:options)
         case python.id: return await python.run(source:source,options:options)
@@ -100,6 +119,7 @@ final class EmbeddedToolchainManager: ObservableObject {
     /// produced a diagnostic in `console`, which the Compiler tab never displays
     /// -- a control whose only outcome was an invisible failure.
     func runsBuffer(_ id: String) -> Bool {
+        let id = Self.engineID(for: id)
         switch id {
         case javascript.id, logos.id, python.id: return available[id] != nil
         default: return false

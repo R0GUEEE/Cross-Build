@@ -138,6 +138,8 @@ final class WorkspaceModel: ObservableObject {
     /// Keys already reported as unusable, so the note is printed once rather than
     /// on every command.
     private var reportedEnvironmentKeys = Set<String>()
+    /// Whether everything that ran under the current progress run succeeded.
+    private var progressSucceeded = true
 
     @Published var generatedConfigurationSummary: [String] = []
     @Published var activeProjectRoot: String?
@@ -636,6 +638,7 @@ final class WorkspaceModel: ObservableObject {
     func beginProgress(label: String, detail: String = "", stepCount: Int = 1) {
         progressDepth += 1
         guard progressDepth == 1 else { return }
+        progressSucceeded = true
         runProgress = RunProgress(phase: .running(fraction: stepCount > 1 ? 0 : nil),
                                   label: label,
                                   detail: detail,
@@ -661,9 +664,17 @@ final class WorkspaceModel: ObservableObject {
         progressDepth = max(0, progressDepth - 1)
         guard progressDepth == 0 else { return }
         if runProgress.isRunning {
+            // Success is tracked per run, not read from `lastExitCode`.
+            //
+            // `lastExitCode` belongs to whichever command ran last, which is not
+            // the same thing as "did this run succeed": a workflow that ends with
+            // an action rather than a command, or any probe in between, decided
+            // the outcome of the build the user actually started. The agent layer
+            // already had this exact bug fixed for itself (see AgentActionOutcome);
+            // the status bar still had it.
             lastRun = RunRecord(label: runProgress.label,
                                 seconds: runProgress.elapsed,
-                                succeeded: (lastExitCode ?? 0) == 0)
+                                succeeded: progressSucceeded)
         }
         runProgress = RunProgress()
     }
@@ -724,6 +735,7 @@ final class WorkspaceModel: ObservableObject {
         appendResultOutput(result, settings: resolvedSettings)
         recordDiagnostics(from: result, command: command, settings: resolvedSettings)
         lastExitCode = result.exitCode
+        if !result.succeeded { progressSucceeded = false }
         executionStatus = result.succeeded ? "Succeeded" : "Failed (\(result.exitCode))"
         isExecuting = false
         if resolvedSettings?.timestampBuildOutput == true {
@@ -782,7 +794,13 @@ final class WorkspaceModel: ObservableObject {
         }
         if !result.stderr.isEmpty {
             let lines = result.stderr.components(separatedBy: "\n").filter(passesFilter)
-            if !lines.isEmpty { console += "error: " + lines.joined(separator: "\n") + "\n" }
+            // Only the first line is labelled. Prefixing the whole block put "error:"
+            // in front of output that already had its own prefixes, and the console
+            // then showed one long line with every newline visually swallowed.
+            if let first = lines.first {
+                console += (first.hasPrefix("error:") ? "" : "error: ") + first + "\n"
+                for line in lines.dropFirst() { console += line + "\n" }
+            }
         }
     }
 
@@ -1234,52 +1252,60 @@ final class WorkspaceModel: ObservableObject {
         String(objectPath(for: relativePath).split(separator: "/").last ?? "")
     }
 
-    /// A file the guest sync should carry, described without its bytes so the
-    /// read can happen off the main actor.
-    private struct SyncCandidate: Sendable {
-        var relative: String
-        var path: String
-    }
-
-    /// Files above this size are not copied into the guest. The workspace lives
-    /// beside `Documents/CrossBuild/linux-root` (the guest's own filesystem
-    /// image); reading a file this size had no upper bound at all before.
-    static let maximumSyncItemBytes: Int64 = 16 * 1024 * 1024
+    /// Files above this size are not copied into the guest. There is exactly one
+    /// cap: it is the same constant the push enforces, so nothing is read off
+    /// disk only to be refused after it has been encoded.
+    static var maximumSyncItemBytes: Int64 { Int64(GuestWorkspaceSync.maximumItemBytes) }
 
     /// Every non-hidden file under `root`, ready to be copied into the guest.
+    ///
+    /// The listing comes from **the filesystem**, not from `files.flattened`.
+    /// The in-memory tree is whatever the last `reload()` saw, and a save, a file
+    /// dropped in from Files.app or anything iCloud delivered afterwards is not in
+    /// it -- so those files never reached the guest while the build reported
+    /// success. There is nothing to gain from the cached tree here: this walk is
+    /// the same one, done once, off the main actor.
     ///
     /// Files are read as **bytes**, not as UTF-8 text. The transport is base64,
     /// so an image, archive or object file is copied intact; decoding as text
     /// silently dropped every binary from the sync, and published a
     /// `FileManagerService.errorMessage` for each one because `contents(of:)`
-    /// reports its failures on a `@Published` property. The listing comes from
-    /// the in-memory tree; only the byte reads leave the main actor.
+    /// reports its failures on a `@Published` property.
     func projectSyncItems(under root: String) async -> [GuestWorkspaceSync.Item] {
-        let prefix = root + "/"
-        var candidates: [SyncCandidate] = []
-        var oversized = 0
-        for file in files.flattened {
-            guard !file.isDirectory,
-                  file.path.hasPrefix(prefix),
-                  !file.name.hasPrefix("."),
-                  !file.path.contains("/.git/") else { continue }
-            guard file.size <= Self.maximumSyncItemBytes else { oversized += 1; continue }
-            candidates.append(SyncCandidate(relative: relativePath(file.path), path: file.path))
-        }
-        if oversized > 0 {
-            console += "Guest sync: skipped \(oversized) file(s) larger than "
-                + "\(Self.maximumSyncItemBytes / (1024 * 1024)) MB.\n"
-        }
-        let limited = candidates
-        // Returned as plain tuples: `GuestWorkspaceSync.Item` is not marked
-        // `Sendable`, and a pair of `String`/`Data` is.
-        let read: [(String, Data)] = await Task.detached(priority: .utility) {
-            limited.compactMap { candidate -> (String, Data)? in
-                guard let data = FileManager.default.contents(atPath: candidate.path) else { return nil }
-                return (candidate.relative, data)
+        let limit = Self.maximumSyncItemBytes
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        let listing = await Task.detached(priority: .utility) {
+            () -> (items: [GuestWorkspaceSync.Item], oversized: Int) in
+            let fm = FileManager.default
+            var items: [GuestWorkspaceSync.Item] = []
+            var oversized = 0
+            guard let walker = fm.enumerator(at: URL(fileURLWithPath: root, isDirectory: true),
+                                             includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+                                             options: [.skipsHiddenFiles, .skipsPackageDescendants]) else {
+                return (items, oversized)
             }
+            for case let url as URL in walker {
+                if url.lastPathComponent == ".git" {
+                    walker.skipDescendants()
+                    continue
+                }
+                guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                      values.isRegularFile == true else { continue }
+                let size = Int64(values.fileSize ?? 0)
+                guard size <= limit else { oversized += 1; continue }
+                let path = url.path
+                guard path.hasPrefix(prefix) else { continue }
+                guard let data = fm.contents(atPath: path) else { continue }
+                items.append(.init(relativePath: String(path.dropFirst(prefix.count)), data: data))
+            }
+            return (items, oversized)
         }.value
-        return read.map { GuestWorkspaceSync.Item(relativePath: $0.0, data: $0.1) }
+        if listing.oversized > 0 {
+            console += "Guest sync: skipped \(listing.oversized) file(s) larger than "
+                + "\(Self.maximumSyncItemBytes / 1024) KB. Raise nothing here -- the cap is a "
+                + "single constant -- but note the file will not be in the guest.\n"
+        }
+        return listing.items
     }
 
     /// Builds one item instead of the whole project.
@@ -1300,26 +1326,16 @@ final class WorkspaceModel: ObservableObject {
             defer { endProgress() }
             await probeGuestToolchain()
 
-            // Push what the item needs: the one file for a file build, the whole
-            // project for a target, whose recipe may touch anything in the tree.
-            let items: [GuestWorkspaceSync.Item]
-            switch item.kind {
-            case .file(let relative):
-                guard let file = files.flattened.first(where: { relativePath($0.path) == relative }),
-                      let text = files.contents(of: file, encoding: editorEncoding) else {
-                    console += "error: \(relative) could not be read.\n"
-                    return
-                }
-                items = [.init(relativePath: relative, data: Data(text.utf8))]
-            case .makeTarget:
-                items = await projectSyncItems(under: root)
-            }
-
+            // The whole project, not just the file being built: the push replaces
+            // what is in the guest, and a single file on its own has no headers or
+            // sources beside it. Building one file is about the quick command, not
+            // about a partial tree.
+            let items = await projectSyncItems(under: root)
             let synced = await guestSync.push(items, session: .shared)
             if !synced.output.isEmpty { console += synced.output }
             console += "Guest sync: \(guestSync.lastSummary)\n"
-            guard synced.pushed > 0 else {
-                console += "error: nothing reached the guest, so there is nothing to build.\n"
+            guard synced.complete, synced.pushed > 0 else {
+                console += "error: the project did not reach the guest, so there is nothing to build there.\n"
                 return
             }
 
@@ -1435,8 +1451,8 @@ final class WorkspaceModel: ObservableObject {
             let synced = await guestSync.push(syncItems, session: .shared)
             if !synced.output.isEmpty { console += synced.output }
             console += "Guest sync: \(guestSync.lastSummary)\n"
-            guard synced.pushed > 0 else {
-                console += "error: nothing reached the guest, so there is nothing to compile.\n"
+            guard synced.complete, synced.pushed > 0 else {
+                console += "error: the project did not reach the guest, so there is nothing to compile there.\n"
                 return
             }
             setProgress(step: 1, detail: "Guest synchronised")
@@ -1527,7 +1543,10 @@ final class WorkspaceModel: ObservableObject {
         let synced = await guestSync.push(syncItems, session: .shared)
         if !synced.output.isEmpty { console += synced.output }
         console += "Guest sync: \(guestSync.lastSummary)\n"
-        return synced.pushed > 0
+        // "Something landed" is not the question. A push that dies on batch 3 of 5
+        // has pushed files, and building against that half-tree is worse than not
+        // building at all.
+        return synced.complete
     }
 
     /// Copies the project into the guest, explicitly.

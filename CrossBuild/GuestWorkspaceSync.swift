@@ -15,36 +15,60 @@ import Foundation
 @MainActor
 final class GuestWorkspaceSync: ObservableObject {
     /// Where a project lands inside the guest.
-    static let guestRoot = "/workspace"
+    ///
+    /// `nonisolated` on the immutable constants and the string helpers: the class
+    /// is `@MainActor`, and `batches(for:)` runs off the main actor, so anything
+    /// it touches must be reachable from a nonisolated context.
+    nonisolated static let guestRoot = "/workspace"
 
-    struct Item {
-        let relativePath: String
-        let data: Data
-    }
-
-    /// Largest single file pushed. Anything bigger is reported rather than
-    /// silently truncated.
-    static let maximumItemBytes = 512 * 1024
+    /// The one file-size cap for the sync: `WorkspaceModel` filters by this
+    /// constant before reading anything, and `push` refuses anything larger.
+    ///
+    /// There used to be two: 16 MB in the workspace model, which decided what to
+    /// read, and this one, which decided what to send. A 2 MB asset was therefore
+    /// read off disk, base64-encoded, and only then dropped by a push that had
+    /// already decided it was too big.
+    nonisolated static let maximumItemBytes = 512 * 1024
 
     /// Roughly how much base64 text to put in one shell invocation. A project's
     /// worth of files in a single command is a very long line for the session to
     /// carry, so it is sent in batches.
-    private static let batchBytes = 96 * 1024
+    private nonisolated static let batchBytes = 96 * 1024
+
+    struct Item: Sendable {
+        let relativePath: String
+        let data: Data
+    }
+
+    /// What a push actually did.
+    ///
+    /// `complete` exists because the result used to be judged by `pushed > 0`
+    /// alone: a push that failed on its third batch out of five still reported the
+    /// files that had landed, the caller took that as success, and the build ran
+    /// against a half-copied tree.
+    struct PushResult: Sendable {
+        var pushed: Int
+        var skipped: [String]
+        var output: String
+        var complete: Bool
+        /// 1-based index of the batch that failed, when one did.
+        var failedBatch: Int?
+    }
 
     @Published private(set) var lastSyncedAt: Date?
     @Published private(set) var lastSummary = "Not synced yet."
 
-    /// Pushes `items` under `guestRoot`, creating directories as needed.
+    /// Pushes `items` under `guestRoot`, replacing what was there.
     ///
-    /// Returns how many landed, which were too large, and the shell output so the
-    /// caller can show something when it fails.
+    /// The guest root is wiped first. The copy used to be create/overwrite only,
+    /// so a deleted or renamed source file stayed in the guest: `make` kept
+    /// compiling the deleted one, and a rename produced two files with the same
+    /// symbols. Every caller pushes the whole project, so nothing is lost by
+    /// starting from an empty directory.
     func push(_ items: [Item],
-              session: LinuxGuestSession) async -> (pushed: Int, skipped: [String], output: String) {
+              session: LinuxGuestSession) async -> PushResult {
         var skipped: [String] = []
-        var batches: [[String]] = []
-        var current: [String] = []
-        var currentBytes = 0
-
+        var accepted: [Item] = []
         for item in items {
             // A path that climbs out of the guest workspace is refused outright:
             // the guest is writable and this is remote input.
@@ -54,30 +78,31 @@ final class GuestWorkspaceSync: ObservableObject {
                 skipped.append(item.relativePath)
                 continue
             }
-            let destination = Self.guestRoot + "/" + item.relativePath
-            let directory = (destination as NSString).deletingLastPathComponent
-            let encoded = item.data.base64EncodedString()
-            // Flush *before* the batch would exceed the budget. Measuring after
-            // appending let a single 512 KB file produce a ~700 KB command line,
-            // which is exactly the long line the batching exists to avoid.
-            if !current.isEmpty && currentBytes + encoded.count > Self.batchBytes {
-                batches.append(current)
-                current = []
-                currentBytes = 0
-            }
-            current.append("mkdir -p \(Self.quoted(directory))")
-            current.append("printf '%s' \(Self.quoted(encoded)) | base64 -d > \(Self.quoted(destination))")
-            currentBytes += encoded.count
+            accepted.append(item)
         }
-        if !current.isEmpty { batches.append(current) }
+
+        // Base64-encoding a project is proportional to its size and has no reason
+        // to run on the main actor.
+        let batches = await Task.detached(priority: .utility) {
+            Self.batches(for: accepted)
+        }.value
 
         var pushed = 0
         var output = ""
         var failedBatch: Int?
         for (index, batch) in batches.enumerated() {
-            let script = (["mkdir -p \(Self.quoted(Self.guestRoot))"] + batch).joined(separator: "\n")
+            // A subshell, so `set -e` stops this batch at its first failed write
+            // without leaving the option set on the long-lived session shell,
+            // where the next failing command would take the shell down with it.
+            let script = "( set -e\n"
+                + "rm -rf \(Self.quoted(Self.guestRoot))\n"
+                + "mkdir -p \(Self.quoted(Self.guestRoot))\n"
+                + batch.joined(separator: "\n")
+                + "\n)"
             let result = await session.run(script, timeout: 180)
-            if result.code != 0 {
+            // `code` is the transport's verdict; `status` is the script's own
+            // exit status, which is what says whether the writes landed.
+            if result.code != 0 || result.status != 0 {
                 output += result.output
                 failedBatch = index
                 break
@@ -87,6 +112,7 @@ final class GuestWorkspaceSync: ObservableObject {
         if !skipped.isEmpty {
             output += "\nSkipped (larger than \(Self.maximumItemBytes / 1024) KB): \(skipped.joined(separator: ", "))\n"
         }
+        let complete = failedBatch == nil
         if let failedBatch {
             // A partial copy is not a sync. Reporting one as a success made the
             // caller say "N file(s) copied" after a failure, and the earlier
@@ -98,12 +124,44 @@ final class GuestWorkspaceSync: ObservableObject {
                 ? "Nothing was copied into the guest."
                 : "\(pushed) file(s) copied to \(Self.guestRoot) inside the guest."
         }
-        return (pushed, skipped, output)
+        return PushResult(pushed: pushed, skipped: skipped, output: output,
+                          complete: complete, failedBatch: failedBatch)
+    }
+
+    /// Turns items into shell scripts, `batchBytes` of base64 at a time.
+    ///
+    /// `nonisolated` and static so the encoding can run off the main actor; it
+    /// touches nothing but its argument.
+    private nonisolated static func batches(for items: [Item]) -> [[String]] {
+        var batches: [[String]] = []
+        var current: [String] = []
+        var currentBytes = 0
+
+        for item in items {
+            let destination = guestRoot + "/" + item.relativePath
+            let directory = (destination as NSString).deletingLastPathComponent
+            let encoded = item.data.base64EncodedString()
+            // The budget has to include the shell syntax around the payload, or
+            // it bounds nothing: an empty file costs 0 by payload length but ~90
+            // bytes by command length, and 5000 of them would make one 400 KB
+            // script while the accounting still said "0 / 96 KB".
+            let cost = encoded.count + destination.utf8.count + directory.utf8.count + 64
+            if !current.isEmpty && currentBytes + cost > batchBytes {
+                batches.append(current)
+                current = []
+                currentBytes = 0
+            }
+            current.append("mkdir -p \(quoted(directory))")
+            current.append("printf '%s' \(quoted(encoded)) | base64 -d > \(quoted(destination))")
+            currentBytes += cost
+        }
+        if !current.isEmpty { batches.append(current) }
+        return batches
     }
 
     /// POSIX single-quoting, so a path or a base64 blob cannot break out of its
     /// quotes and become part of the command.
-    static func quoted(_ text: String) -> String {
+    nonisolated static func quoted(_ text: String) -> String {
         guard !text.isEmpty else { return "''" }
         return "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }

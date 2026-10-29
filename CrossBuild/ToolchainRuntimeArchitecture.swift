@@ -8,9 +8,6 @@ import Foundation
 /// resource payloads such as SDK headers). The Linux guest remains a minimal
 /// ios-linuxkit userland for shell/POSIX compatibility and project tooling.
 enum ToolchainRuntimeArchitecture {
-    static let linuxRuntimeProvider = "rcarmo/ios-linuxkit"
-    static let linuxRuntimeMode = "AOT-ready / no runtime emission"
-
     /// Packages intentionally allowed in the shipped Alpine image.
     ///
     /// This used to be runtime-only, on the reasoning that compilers belong to
@@ -81,7 +78,15 @@ enum ToolchainRuntimeArchitecture {
     /// UI has to be able to state plainly rather than discover through
     /// `command not found` in a console nobody is reading.
     static var hasLinkedCompiler: Bool {
-        hasPayload(for: "clang") && ClangEmbeddedBridge().isLinked
+        // A directory is not a compiler. `hasPayload` only proves that
+        // NativeToolchains/clang exists, and `isLinked` is a compile-time
+        // `#if canImport` that is true in every build -- so both together said
+        // "Clang is available" while `cb_clang_compile` returned 125 for every
+        // request. The manifest is written by the workflow that actually builds
+        // and links the LLVM payload, so its presence plus at least one library
+        // is the smallest honest evidence available here.
+        guard ClangEmbeddedBridge().isLinked, let manifest = manifest(for: "clang") else { return false }
+        return (manifest.libraries ?? 0) > 0
     }
 
     // `unavailableReason` used to live here and said "the Linux guest

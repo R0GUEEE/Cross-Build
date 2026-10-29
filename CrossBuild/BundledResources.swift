@@ -6,7 +6,6 @@ struct BundledResource: Identifiable {
     var detail: String
     var location: String
     var present: Bool
-    var sizeBytes: Int64
     var execution: BundledExecution
     var icon: String
     /// The guest executables that satisfy this entry, when the app ships no
@@ -30,7 +29,6 @@ enum BundledResources {
                 detail: scan.detail,
                 location: scan.location,
                 present: scan.present,
-                sizeBytes: 0,
                 execution: .inProcess,
                 icon: scan.present ? "shippingbox.fill" : "shippingbox",
                 // Carried through rather than dropped: the scan knows the guest
@@ -48,7 +46,6 @@ enum BundledResources {
                 : "The engine is linked but the bundled rootfs is missing.",
             location: LinuxGuestEngine.isRootBundled ? "Statically linked + fakefs-root" : "Statically linked",
             present: LinuxGuestEngine.isLinked && LinuxGuestEngine.isRootBundled,
-            sizeBytes: 0,
             execution: .inProcess,
             icon: "terminal.fill"
         ))
@@ -67,15 +64,14 @@ enum BundledResources {
                    ? "No SDK ships in the app; \(availableSDKs) user-supplied SDK(s) found under Documents/SDKs."
                    : "No SDK payload was discovered in the app bundle or in Documents/SDKs."),
             location: "SDKs/",
-            present: availableSDKs > 0,
-            sizeBytes: 0,
+            // "Bundled" means shipped inside the app. Counting user-supplied SDKs
+            // here made the row read "Ready" while its own detail line said none
+            // ships -- and coloured a component green that a fresh install does
+            // not have.
+            present: bundledSDKs > 0,
             execution: .supportData,
             icon: "square.stack.3d.up"
         ))
         return items
-    }
-
-    static var missingToolchains: [AppToolchainScan] {
-        AppToolchainLibraries.missing
     }
 }

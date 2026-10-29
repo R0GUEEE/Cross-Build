@@ -30,6 +30,15 @@ struct PythonEmbeddedEngine: EmbeddedToolchainEngine {
         #endif
     }
 
+    /// Whether the vendored standard library is actually in this bundle.
+    ///
+    /// Cheap and side-effect free, unlike `ensureStarted()`, so availability
+    /// screens can ask it without booting the interpreter.
+    static var hasStandardLibrary: Bool {
+        guard let resourcePath = Bundle.main.resourceURL?.path else { return false }
+        return FileManager.default.fileExists(atPath: resourcePath + "/python/lib/python3.13")
+    }
+
     func run(source: String, options: [String: String]) async -> EmbeddedToolchainResult {
         #if canImport(CrossBuildPython)
         let startError = PythonEmbeddedEngine.ensureStarted()
@@ -56,19 +65,19 @@ struct PythonEmbeddedEngine: EmbeddedToolchainEngine {
     }
 
     #if canImport(CrossBuildPython)
-    private static var didAttemptStart = false
-    private static var startFailure: String?
-
     /// Starts the interpreter once per process. Py_Initialize must not be called
     /// twice, so the attempt is memoised and a failure is reported on every run
     /// rather than retried silently.
-    static func ensureStarted() -> String? {
-        if didAttemptStart { return startFailure }
-        didAttemptStart = true
+    ///
+    /// This is a `static let`, not two `static var`s guarded by an `if`: the
+    /// function is nonisolated and reachable from the cooperative pool, so the old
+    /// check-then-set was a data race that could enter Py_Initialize twice. A lazy
+    /// global's initialiser runs exactly once, thread-safely.
+    static func ensureStarted() -> String? { startResult }
 
+    private static let startResult: String? = {
         guard let resourcePath = Bundle.main.resourceURL?.path else {
-            startFailure = "No bundle resource path available."
-            return startFailure
+            return "No bundle resource path available."
         }
         let pythonHome = resourcePath + "/python"
         let libPath = pythonHome + "/lib/python3.13"
@@ -76,18 +85,15 @@ struct PythonEmbeddedEngine: EmbeddedToolchainEngine {
         let appPath = resourcePath + "/app"
 
         guard FileManager.default.fileExists(atPath: libPath) else {
-            startFailure = "Standard library missing at python/lib/python3.13 in the app bundle."
-            return startFailure
+            return "Standard library missing at python/lib/python3.13 in the app bundle."
         }
 
         let searchPath = [libPath, dynloadPath, appPath].joined(separator: ":")
         let code = cbpy_start(pythonHome, searchPath)
         if code != 0 {
-            startFailure = "Python failed to start (code \(code))."
-            return startFailure
+            return "Python failed to start (code \(code))."
         }
-        startFailure = nil
         return nil
-    }
+    }()
     #endif
 }

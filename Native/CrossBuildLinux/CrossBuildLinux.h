@@ -46,12 +46,18 @@ int32_t cblk_session_is_running(void);
 // after timeoutMs (measured with the monotonic clock) so a hung command cannot
 // block the app forever.
 //
+// The sentinel carries the command's own exit status, which is written to
+// *outStatus. That is the shell's `$?` for the command (0-255, or 128+signal) and
+// is distinct from the return value below, which describes the *transport*.
+// *outStatus is -1 when no status could be read (timeout, dead shell).
+//
 // Returns 0 on success, 124 if the deadline passed before the sentinel appeared,
 // and -3 if the guest shell itself exited (a command ran `exit`, or the guest
 // died). -3 is terminal: the session is closed and the app must report it rather
 // than retry. On any negative return the caller owns *outCombined and must free
 // it; on 0 or 124 it is the shim's internal scratch buffer and must not be freed.
-int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombined);
+int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombined,
+                         int32_t *outStatus);
 
 void cblk_session_stop(void);
 

@@ -2,12 +2,17 @@
 
 #include <Python/Python.h>
 
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
 // g_started guards against re-initialising (Py_InitializeFromConfig must run once)
 // and against running code before the interpreter exists.
 static int g_started = 0;
+// Serialises start/stop. `cbpy_start` used to be a bare check-then-set, so two
+// callers arriving together could both enter Py_InitializeFromConfig -- which
+// CPython does not support and which typically crashes.
+static pthread_mutex_t g_state_lock = PTHREAD_MUTEX_INITIALIZER;
 // Set once the interpreter has been finalized. CPython does not support
 // re-initialisation after Py_FinalizeEx, so a later cbpy_start is refused
 // instead of pretending to succeed.
@@ -38,16 +43,23 @@ static char *cbpy_take_stringio(PyObject *globals, const char *name) {
         return cbpy_strdup("");
     }
     const char *utf8 = PyUnicode_AsUTF8(value);
+    // A failed conversion leaves an exception set. Carrying it out of this
+    // helper means the *next* run's PyRun_SimpleString fails with a stale,
+    // unrelated error and reports the wrong snippet as broken.
+    if (utf8 == NULL) { PyErr_Clear(); }
     char *result = cbpy_strdup(utf8 == NULL ? "" : utf8);
     Py_DECREF(value);
     return result;
 }
 
 int32_t cbpy_start(const char *pythonHome, const char *pythonPath) {
+    pthread_mutex_lock(&g_state_lock);
     if (g_started) {
+        pthread_mutex_unlock(&g_state_lock);
         return 0;
     }
     if (g_finalized) {
+        pthread_mutex_unlock(&g_state_lock);
         return 4;
     }
     if (pythonHome != NULL && pythonHome[0] != '\0') {
@@ -68,6 +80,7 @@ int32_t cbpy_start(const char *pythonHome, const char *pythonPath) {
         PyStatus status = PyConfig_SetBytesString(&config, &config.home, pythonHome);
         if (PyStatus_Exception(status)) {
             PyConfig_Clear(&config);
+            pthread_mutex_unlock(&g_state_lock);
             return 2;
         }
     }
@@ -75,9 +88,17 @@ int32_t cbpy_start(const char *pythonHome, const char *pythonPath) {
     PyStatus status = Py_InitializeFromConfig(&config);
     PyConfig_Clear(&config);
     if (PyStatus_Exception(status)) {
+        pthread_mutex_unlock(&g_state_lock);
         return 3;
     }
     g_started = 1;
+    // This thread now holds the GIL, and it is not the thread that will run user
+    // code: `cbpy_run` is nonisolated Swift and lands on a cooperative-pool
+    // thread. PyGILState_Ensure on that other thread can only acquire a GIL this
+    // thread has released. Without this, the first run succeeded (same thread,
+    // recursive take) and the second one blocked forever.
+    PyEval_SaveThread();
+    pthread_mutex_unlock(&g_state_lock);
     return 0;
 }
 
@@ -159,11 +180,23 @@ int32_t cbpy_run(const char *source, char **outStdout, char **outStderr) {
     char *outText = cbpy_take_stringio(globals, "_cb_out");
     char *errText = cbpy_take_stringio(globals, "_cb_err");
     PyObject *raised = PyDict_GetItemString(globals, "_cb_raised");
-    if (raised != NULL && PyObject_IsTrue(raised) == 1) {
-        result = 1;
+    if (raised != NULL) {
+        // -1 means the truth test itself failed and set an exception; treating
+        // that as "not raised" and returning to Swift leaves a pending error the
+        // next run inherits.
+        int truth = PyObject_IsTrue(raised);
+        if (truth < 0) {
+            PyErr_Clear();
+        } else if (truth == 1) {
+            result = 1;
+        }
     }
-    // Drop the marker so a later run cannot inherit this one's result.
-    PyDict_DelItemString(globals, "_cb_raised");
+    // Drop the marker so a later run cannot inherit this one's result. KeyError is
+    // the expected case when the wrapper failed before creating it.
+    if (PyDict_DelItemString(globals, "_cb_raised") < 0) { PyErr_Clear(); }
+    // Belt and braces: nothing below needs a live exception, and a sticky one is
+    // the hardest kind of bug to attribute later.
+    PyErr_Clear();
 
     PyGILState_Release(gil);
 

@@ -147,15 +147,22 @@ static void *guest_thread_main(void *opaque) {
     return NULL;
 }
 
+// True once the guest's init task (the shell the session streams to) has exited.
+//
+// The engine calls this hook for *every* thread group that exits, so setting a
+// single "guest is gone" flag here would fire on the first `make` child. Only
+// init's exit means the session is over, and init is pid 1.
+static volatile int g_guest_init_exited = 0;
+
 // Replaces the engine's handler, which calls exit(). Recording the code and
 // unwinding just this thread keeps the host app alive.
 static void cblk_exit_hook(struct task *task, int code) {
-    (void)task;
     if (code & 0xff) {
         g_guest_exit_code = 128 + (code & 0xff);
     } else {
         g_guest_exit_code = code >> 8;
     }
+    if (task != NULL && task->pid == 1) { g_guest_init_exited = 1; }
     g_guest_finished = 1;
     pthread_exit(NULL);
 }
@@ -302,14 +309,33 @@ static size_t g_session_scratch_len = 0;
 static size_t g_session_scratch_capacity = 0;
 static unsigned g_session_serial = 0;
 
+// Random per-process prefix for the end-of-command sentinel.
+//
+// The sentinel used to be `__CB_DONE_<serial>__` with a serial counting from 1,
+// so a command that merely *printed* that text -- a build echoing its own command
+// line, `set -x`, a test fixture -- ended the read early and left everything after
+// it queued for the next command. A 64-bit random prefix makes that accidental
+// collision impossible rather than merely unlikely.
+static char g_session_prefix[32] = "";
+
+static void ensure_session_prefix(void) {
+    if (g_session_prefix[0] != '\0') { return; }
+    uint64_t nonce = 0;
+    arc4random_buf(&nonce, sizeof(nonce));
+    snprintf(g_session_prefix, sizeof(g_session_prefix), "__CB%016llx_", (unsigned long long)nonce);
+}
+
 static int write_all(int fd, const char *text, size_t length) {
     size_t written = 0;
     while (written < length) {
         ssize_t n = write(fd, text + written, length - written);
-        if (n <= 0) {
+        if (n < 0) {
             if (errno == EINTR) { continue; }
             return -1;
         }
+        // A zero-length write for a non-zero request is not a retryable event and
+        // does not set errno; branching on stale errno there could spin.
+        if (n == 0) { return -1; }
         written += (size_t)n;
     }
     return 0;
@@ -464,16 +490,31 @@ int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory)
     // costs nothing when the shell answers promptly, because the round trip
     // returns as soon as the marker arrives.
     char *ready = NULL;
-    int rc = cblk_session_run(":", 120000, &ready);
+    int32_t readyStatus = -1;
+    int rc = cblk_session_run(":", 120000, &ready, &readyStatus);
     if (rc < 0 && ready != NULL) { free(ready); }
+    if (rc == 124) {
+        // The round trip timed out. `124` is a *positive* return, so the old
+        // `if (rc < 0)` never saw it and the boot reported success with no shell
+        // answering -- every later command then paid the full timeout. Close
+        // what was opened, so a -4 is a clean state rather than a half-booted
+        // session the next call would believe in.
+        g_session_running = 0;
+        if (g_session_in >= 0) { close(g_session_in); g_session_in = -1; }
+        if (g_session_out >= 0) { close(g_session_out); g_session_out = -1; }
+        restore_stdio();
+        return -4;
+    }
     if (rc < 0) {
-        // The shell never answered. Callers used to get an undocumented 124 here
-        // (the round trip's own timeout) and report it as a *command* timeout.
+        // The shell never answered, or it exited during the round trip.
         // g_booted stays set: the interpreter really has been initialised and
         // cannot be initialised again, so a retry could only produce a less
-        // accurate error -- but -4 tells the app this was a slow start rather
-        // than a broken one.
-        return rc == 124 ? -4 : -2;
+        // accurate error.
+        g_session_running = 0;
+        if (g_session_in >= 0) { close(g_session_in); g_session_in = -1; }
+        if (g_session_out >= 0) { close(g_session_out); g_session_out = -1; }
+        restore_stdio();
+        return -2;
     }
     return 0;
 }
@@ -552,22 +593,45 @@ static int64_t cblk_monotonic_ms(void) {
     return (int64_t)now.tv_sec * 1000 + (int64_t)(now.tv_nsec / 1000000);
 }
 
-int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombined) {
+// Parses the exit status carried on the sentinel line: `<marker> <status>`.
+// Returns -1 when the marker is missing or the number cannot be read (which is
+// the only case a caller should treat as "status unknown").
+static int32_t parse_status_after(const char *text, const char *marker) {
+    const char *at = strstr(text, marker);
+    if (at == NULL) { return -1; }
+    at += strlen(marker);
+    while (*at == ' ' || *at == '\t') { at++; }
+    if (!((*at >= '0' && *at <= '9') || (*at == '-' && at[1] >= '0' && at[1] <= '9'))) { return -1; }
+    long value = strtol(at, NULL, 10);
+    if (value < -2147483647L) { value = -2147483647L; }
+    if (value > 2147483647L) { value = 2147483647L; }
+    return (int32_t)value;
+}
+
+int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombined, int32_t *outStatus) {
     if (outCombined != NULL) { *outCombined = NULL; }
-    if (!g_session_running) {
+    // -1 means "unknown", which is different from a command that exited with 1.
+    if (outStatus != NULL) { *outStatus = -1; }
+    if (!g_session_running || g_guest_init_exited) {
         if (outCombined != NULL) { *outCombined = cblk_strdup("The Linux guest is not running."); }
-        return -1;
+        return g_guest_init_exited ? -3 : -1;
     }
+    if (command == NULL) { command = ""; }
 
+    ensure_session_prefix();
     unsigned serial = ++g_session_serial;
-    char marker[64];
-    snprintf(marker, sizeof(marker), "__CB_DONE_%u__", serial);
+    char marker[96];
+    snprintf(marker, sizeof(marker), "%sDONE_%u__", g_session_prefix, serial);
 
-    // The command, then an echoed sentinel on its own line. The trailing newline
-    // after the marker keeps it unambiguous even if the command's own output
-    // lacks one.
+    // The command, then its exit status on an echoed sentinel line.
+    //
+    // The sentinel used to be printed on its own with no status, so the shim
+    // could only report "the command finished", and every command -- a failing
+    // `make` included -- came back to the app as exit code 0. `$?` is captured
+    // immediately after the command, before printf runs, so it describes the
+    // command and not the printf.
     char *script = NULL;
-    if (asprintf(&script, "%s\nprintf '\\n%s\\n'\n", command, marker) < 0 || script == NULL) {
+    if (asprintf(&script, "%s\n__cb_status=$?\nprintf '\\n%s %%d\\n' \"$__cb_status\"\n", command, marker) < 0 || script == NULL) {
         if (outCombined != NULL) { *outCombined = cblk_strdup("Out of memory building the command."); }
         return -1;
     }
@@ -596,6 +660,11 @@ int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombi
     int truncated = 0;
     int64_t deadline = cblk_monotonic_ms() + (int64_t)timeoutMs;
     for (;;) {
+        // The shell this session streams to is the guest's init process. Once it
+        // has exited there is nothing left to answer, and waiting for the pipe to
+        // reach EOF cannot work: the host itself still holds a duplicate of the
+        // write end (fd 1/2 are redirected to it), so `read` never returns 0.
+        if (g_guest_init_exited) { guest_gone = 1; break; }
         int64_t remaining = deadline - cblk_monotonic_ms();
         if (remaining <= 0) { break; }
         if (remaining > 100) { remaining = 100; }
@@ -657,8 +726,11 @@ int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombi
         // return is what tells the caller this command timed out.
     }
 
-    // Trim the sentinel and the echoed command tail from the captured text.
+    // Trim the sentinel and record the command's exit status before the marker
+    // is overwritten by the terminator.
+    int32_t status = -1;
     if (g_session_scratch != NULL) {
+        status = parse_status_after(g_session_scratch, marker);
         char *at = strstr(g_session_scratch, marker);
         if (at != NULL) { *at = '\0'; }
         // Drop the leading newline the sentinel printf emitted.
@@ -666,7 +738,12 @@ int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombi
         while (len > 0 && (g_session_scratch[len - 1] == '\n' || g_session_scratch[len - 1] == '\r')) {
             g_session_scratch[--len] = '\0';
         }
+        // The trim shortened the content; leaving the length stale would make the
+        // truncation note below append past an embedded NUL, where String(cString:)
+        // cannot see it.
+        g_session_scratch_len = len;
     }
+    if (outStatus != NULL) { *outStatus = status; }
     if (truncated) {
         static const char note[] = "\n[crossbuild: output truncated at 8 MB; the command continued]\n";
         scratch_append(note, sizeof(note) - 1);
@@ -695,6 +772,14 @@ int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombi
             } else {
                 *outCombined = cblk_strdup(note);
             }
+        }
+        // No further run can free it: `cblk_session_run` now returns at its
+        // "not running" guard. Release the scratch buffer here or leak it.
+        if (g_session_scratch != NULL) {
+            free(g_session_scratch);
+            g_session_scratch = NULL;
+            g_session_scratch_len = 0;
+            g_session_scratch_capacity = 0;
         }
         return -3;
     }

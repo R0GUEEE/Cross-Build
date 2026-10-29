@@ -92,7 +92,11 @@ struct CompilerDashboardView: View {
 
                     GroupBox("App Toolchain Libraries") {
                         VStack(alignment: .leading, spacing: 8) {
-                            LabeledContent("Integrated", value: "\(AppToolchainLibraries.all.count)")
+                            // The catalogue's size is not how many are integrated.
+                            // It listed 18 entries of which this build typically has
+                            // two; the rows below already report the truth.
+                            LabeledContent("Integrated",
+                                           value: "\(toolchainPresence.values.filter { $0 }.count)")
                             ForEach(AppToolchainLibraries.all.prefix(6)) { lib in
                                 HStack {
                                     Image(systemName: toolchainPresence[lib.id] == true ? "checkmark.seal.fill"
