@@ -338,6 +338,51 @@ jobs:
             'printf "#include <string>\n#include <iostream>\nint main(){std::string s=\"ok\";std::cout<<s;return 0;}\n" > /tmp/t3.cpp && c++ /tmp/t3.cpp -o /tmp/t3pp && test "$(/tmp/t3pp)" = ok' \
             || { echo "::error::the guest cannot link C++ after the trim"; exit 1; }
 
+      - name: Verify every bundled toolchain
+        # The image having /usr/bin/cmake is not the same as cmake building a
+        # project. Each toolchain below is exercised the way the app will use it,
+        # so a broken one fails the build instead of the user's first build.
+        run: |
+          set -euo pipefail
+          cd Vendor/linuxkit
+          ROOT="$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root"
+          sh_() { ./build-host/ish -f "$ROOT" /bin/sh -c "$1"; }
+          sh_e() { ./build-host/ish -f "$ROOT" /bin/sh -ec "$1"; }
+          fail() { echo "::error::$1"; exit 1; }
+
+          echo "=== versions ==="
+          for t in gcc g++ make cmake ninja meson python3 pip3 node npm dpkg-deb; do
+            v=$(sh_ "$t --version 2>&1 | head -1") || fail "$t --version failed"
+            printf '  %-10s %s\n' "$t" "$v"
+          done
+
+          echo "=== C and C++ ==="
+          sh_e 'printf "int main(void){return 0;}\n" > /tmp/v.c && cc /tmp/v.c -o /tmp/v && /tmp/v' \
+            || fail "cc cannot compile and run a C program"
+          sh_e 'printf "#include <string>\n#include <iostream>\nint main(){std::string s=\"ok\";std::cout<<s;}\n" > /tmp/v.cpp && c++ /tmp/v.cpp -o /tmp/vpp && test "$(/tmp/vpp)" = ok' \
+            || fail "c++ cannot compile and run a C++ program"
+
+          echo "=== CMake + Ninja ==="
+          sh_e 'rm -rf /tmp/vcm && mkdir -p /tmp/vcm && printf "cmake_minimum_required(VERSION 3.10)\nproject(v C)\nadd_executable(v main.c)\n" > /tmp/vcm/CMakeLists.txt && printf "int main(void){return 0;}\n" > /tmp/vcm/main.c && cd /tmp/vcm && cmake -S . -B build -G Ninja >/dev/null && cmake --build build >/dev/null && ./build/v' \
+            || fail "cmake + ninja cannot configure and build a project"
+
+          echo "=== Meson ==="
+          sh_e 'rm -rf /tmp/vme && mkdir -p /tmp/vme && printf "project(\"v\", \"c\")\nexecutable(\"v\", \"main.c\")\n" > /tmp/vme/meson.build && printf "int main(void){return 0;}\n" > /tmp/vme/main.c && cd /tmp/vme && meson setup build >/dev/null && meson compile -C build >/dev/null' \
+            || fail "meson cannot configure and build a project"
+
+          echo "=== Python ==="
+          sh_e 'python3 -c "import sqlite3, ssl, json, zlib; print(\"python3: ok\")"' \
+            || fail "the guest python3 is missing standard extensions"
+          sh_e 'python3 -m pip --version >/dev/null' || fail "pip is not runnable in the guest"
+
+          echo "=== Node ==="
+          sh_e 'node -e "console.log(1)" >/dev/null' || fail "node cannot run a script"
+          sh_e 'npm --version >/dev/null' || fail "npm does not run"
+
+          echo "=== Debian packaging ==="
+          sh_e 'rm -rf /tmp/vpkg && mkdir -p /tmp/vpkg/DEBIAN && printf "Package: v\nVersion: 1.0\nArchitecture: all\nMaintainer: ci <ci@example.com>\nDescription: v\n" > /tmp/vpkg/DEBIAN/control && dpkg-deb --build /tmp/vpkg /tmp/v.deb >/dev/null && test -s /tmp/v.deb' \
+            || fail "dpkg-deb cannot build a package"
+
       - name: Generate project
         env:
           CROSSBUILD_BUILD_NUMBER: ${{ github.run_number }}

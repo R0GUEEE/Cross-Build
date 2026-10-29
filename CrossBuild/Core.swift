@@ -160,6 +160,21 @@ final class WorkspaceModel: ObservableObject {
     let editor = EditorSession()
     let embeddedToolchains = EmbeddedToolchainManager()
     let toolchainRuntime = ToolchainRuntimeManager()
+    /// Projects the user brought into the app, by path.
+    ///
+    /// The project menu used to list whatever directories happened to sit in the
+    /// workspace, including ones the app had never seen opened. A project belongs in
+    /// the menu because it was created or imported here, so that is what is recorded.
+    struct KnownProject: Codable, Identifiable, Hashable {
+        var path: String
+        var name: String
+        var addedAt: Date
+        var id: String { path }
+    }
+
+    @Published private(set) var knownProjects: [KnownProject] = []
+    private let knownProjectsKey = "crossbuild.knownProjects"
+
     @Published var projectContext: ProjectContext?
     @Published var buildDiagnostics: [BuildDiagnostic] = []
 
@@ -183,6 +198,53 @@ final class WorkspaceModel: ObservableObject {
         editor.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
         syncFileConfiguration()
         restoreOpenDocuments()
+        loadKnownProjects()
+    }
+
+    // MARK: - Project registry
+
+    private func loadKnownProjects() {
+        if let data = UserDefaults.standard.data(forKey: knownProjectsKey),
+           let saved = try? JSONDecoder().decode([KnownProject].self, from: data) {
+            knownProjects = saved
+        }
+        // Repositories imported before the registry existed are still projects the
+        // user brought in; seed them once so the menu is not empty on upgrade.
+        for repository in github.repositories where !knownProjects.contains(where: { $0.path == repository.localPath }) {
+            knownProjects.append(.init(path: repository.localPath,
+                                       name: repository.name,
+                                       addedAt: repository.clonedAt))
+        }
+        persistKnownProjects()
+    }
+
+    private func persistKnownProjects() {
+        if let data = try? JSONEncoder().encode(knownProjects) {
+            UserDefaults.standard.set(data, forKey: knownProjectsKey)
+        }
+    }
+
+    /// Records a folder as a project and makes it the active one.
+    func registerProject(path: String, name: String? = nil) {
+        let standard = URL(fileURLWithPath: path).standardizedFileURL.path
+        guard FileManager.default.fileExists(atPath: standard) else { return }
+        if let index = knownProjects.firstIndex(where: { $0.path == standard }) {
+            knownProjects[index].name = name ?? knownProjects[index].name
+        } else {
+            knownProjects.append(.init(path: standard,
+                                       name: name ?? URL(fileURLWithPath: standard).lastPathComponent,
+                                       addedAt: Date()))
+        }
+        knownProjects.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        persistKnownProjects()
+    }
+
+    func forgetProject(_ project: KnownProject) {
+        knownProjects.removeAll { $0.path == project.path }
+        persistKnownProjects()
+        if activeProjectRoot == project.path {
+            files.focus(on: nil)
+        }
     }
 
     func syncFileConfiguration() {
@@ -314,9 +376,14 @@ final class WorkspaceModel: ObservableObject {
     }
 
     private func detectProject(rootOverride: String?) {
+        // Detection has to see the whole workspace to infer a root, even when the
+        // explorer is focused on one project.
         let allFiles = projectFiles
         let root = rootOverride ?? inferProjectRoot(from: allFiles)
         activeProjectRoot = root
+        if files.focusedRoot?.path != root, FileManager.default.fileExists(atPath: root) {
+            files.focus(on: URL(fileURLWithPath: root))
+        }
         // Deliberately NOT written into `configuration.workingDirectory`: that is
         // the user's "Working directory override" and `executeCommand` already
         // prefers it when it is set. Overwriting it here meant the override was
@@ -424,7 +491,13 @@ final class WorkspaceModel: ObservableObject {
 
         if settings.parallelBuilds {
             let jobs = max(1, settings.buildJobs)
-            if command.hasPrefix("make") {
+            if command.hasPrefix("cmake --build") {
+                command += " -j \(jobs)"
+            } else if command.hasPrefix("meson compile") {
+                command += " -j \(jobs)"
+            } else if command.hasPrefix("ninja") {
+                command += " -j \(jobs)"
+            } else if command.hasPrefix("make") {
                 command += " -j \(jobs)"
             } else if command.hasPrefix("swift build") {
                 command += " -j \(jobs)"
@@ -477,6 +550,72 @@ final class WorkspaceModel: ObservableObject {
         let extra = configuration.buildArguments.trimmingCharacters(in: .whitespacesAndNewlines)
         if !extra.isEmpty { command += " " + extra }
         return command
+    }
+
+    /// Compiles something with every bundled toolchain and prints the result.
+    ///
+    /// The Build screen lists what the guest reports; this proves it. A toolchain
+    /// that is present but cannot produce a binary is the failure mode that matters,
+    /// and it looks exactly like a toolchain that works until someone tries it.
+    func runToolchainSelfTest() {
+        Task {
+            beginProgress(label: "Toolchain test", detail: "Running each compiler in the guest", stepCount: 1)
+            defer { endProgress() }
+            // `\\n` reaches the shell as a backslash-n for printf; a bare `\n` here
+            // would be a Swift newline inside a quoted argument.
+            let script = """
+            echo "== versions =="
+            for t in gcc g++ make cmake ninja meson python3 pip3 node npm dpkg-deb git; do
+              if command -v "$t" >/dev/null 2>&1; then
+                printf '%-10s %s\\n' "$t" "$("$t" --version 2>&1 | head -1)"
+              else
+                printf '%-10s MISSING\\n' "$t"
+              fi
+            done
+            echo "== C =="
+            printf 'int main(void){return 0;}\\n' > /tmp/st.c
+            cc /tmp/st.c -o /tmp/st && /tmp/st && echo "cc: ok"
+            echo "== C++ =="
+            printf '#include <string>\\n#include <iostream>\\nint main(){std::string s="ok";std::cout<<s;}\\n' > /tmp/st.cpp
+            c++ /tmp/st.cpp -o /tmp/stpp && test "$(/tmp/stpp)" = ok && echo "c++: ok"
+            echo "== CMake + Ninja =="
+            rm -rf /tmp/stcm && mkdir -p /tmp/stcm
+            printf 'cmake_minimum_required(VERSION 3.10)\\nproject(st C)\\nadd_executable(st main.c)\\n' > /tmp/stcm/CMakeLists.txt
+            printf 'int main(void){return 0;}\\n' > /tmp/stcm/main.c
+            cd /tmp/stcm && cmake -S . -B build -G Ninja >/dev/null && cmake --build build >/dev/null && ./build/st && echo "cmake+ninja: ok"
+            echo "== Python =="
+            python3 -c 'import sqlite3, ssl, json; print("python3: ok")'
+            echo "== Node =="
+            node -e 'console.log("node: ok")'
+            """
+            let result = await LinuxGuestSession.shared.run(script, timeout: 300)
+            console += "\n$ toolchain self-test\n" + result.output
+            if result.code != 0 || result.status != 0 {
+                console += "Self-test finished with errors (status \(result.status)).\n"
+            }
+        }
+    }
+
+    /// Applies the build settings the detected project implies.
+    ///
+    /// Called when the Build screen appears and when the active project changes, so
+    /// the options reflect the project in front of you instead of whatever the last
+    /// project left behind. A command the user typed in the override field is never
+    /// touched: that field is the explicit answer, and detection is the default.
+    func autoConfigureBuildOptions(settings: AppSettings?) {
+        if analysis == nil, let root = activeProjectRoot {
+            detectProject(rootOverride: root)
+        }
+        guard let settings, settings.autoDetect else { return }
+
+        // Parallel by default, sized to the device rather than to a guess. The
+        // shipped default of 4 is used as the "untouched" marker: a user who picks
+        // 1 or 16 keeps their number.
+        settings.parallelBuilds = true
+        if settings.buildJobs == 4 {
+            let cores = ProcessInfo.processInfo.activeProcessorCount
+            settings.buildJobs = max(2, min(8, cores))
+        }
     }
 
     func newFileName() -> String {
@@ -1946,7 +2085,11 @@ final class WorkspaceModel: ObservableObject {
     /// built by moving it.
     func useFolderAsActiveProject(_ folder: WorkspaceFile) {
         guard folder.isDirectory else { return }
+        registerProject(path: folder.path)
         detectProject(at: folder.path)
+        // Take the browser with it. Changing only the header left the explorer
+        // showing every other folder beside the one that had just been "selected".
+        files.focus(on: URL(fileURLWithPath: folder.path))
         console += "Active project: \(relativePath(folder.path))/\n"
     }
 
