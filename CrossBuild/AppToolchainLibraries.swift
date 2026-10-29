@@ -71,6 +71,16 @@ enum AppToolchainLibraries {
             return guestTools.contains("make") ? "make" : nil
         case "dpkg":
             return guestTools.contains("dpkg-deb") ? "dpkg-deb" : nil
+        case "cmake":
+            return guestTools.contains("cmake") ? "cmake" : nil
+        case "ninja":
+            return guestTools.contains("ninja") ? "ninja" : nil
+        case "meson":
+            return guestTools.contains("meson") ? "meson" : nil
+        case "node":
+            return guestTools.contains("node") ? "node + npm" : nil
+        case "python":
+            return guestTools.contains("python3") ? "python3" : nil
         case "theos":
             // Theos itself is a makefile framework, not a compiler: what the guest
             // can contribute is the packaging step it ends with.

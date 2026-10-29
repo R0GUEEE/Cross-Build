@@ -56,6 +56,9 @@ final class AppSettings: ObservableObject {
     @AppStorage("app.navigatorWidth") var navigatorWidth = 300.0
     @AppStorage("app.activityLimit") var activityHistoryLimit = 100
 
+    /// Replaces the detected build command when set. Kept empty by default so the
+    /// project's own manifest keeps deciding what Build runs.
+    @AppStorage("build.commandOverride") var buildCommandOverride = ""
     @AppStorage("build.parallel") var parallelBuilds = true
     @AppStorage("build.autoDetect") var autoDetect = true
     @AppStorage("build.cleanBefore") var cleanBeforeBuild = false
@@ -110,12 +113,12 @@ final class AppSettings: ObservableObject {
 /// Settings → Advanced and from the editor's menu, which is where someone looks
 /// when they already want them.
 enum AppSection: String, CaseIterable, Identifiable {
-    case projects = "Projects", editor = "Editor", settings = "Settings"
+    case projects = "Projects", build = "Build", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
         switch self {
-        case .projects: return "square.grid.2x2"
-        case .editor: return "chevron.left.forwardslash.chevron.right"
+        case .projects: return "folder"
+        case .build: return "hammer"
         case .settings: return "gearshape"
         }
     }
