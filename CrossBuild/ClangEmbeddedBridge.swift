@@ -115,9 +115,29 @@ enum IOSSDKDiscovery {
         return roots
     }
 
+    /// Every `.sdk` bundle under `root`, one and two levels deep.
+    ///
+    /// One level is how a single `iPhoneOS18.2.sdk` is dropped in. Two levels is how
+    /// an SDK usually arrives: an unzipped `Xcode.app/Contents/Developer/Platforms/
+    /// iPhoneOS.platform/Developer/SDKs/foo.sdk` copied from Files is too deep to
+    /// find, but a `SDKs/` folder containing one or more `.sdk` bundles is common,
+    /// and so is a `Platforms/…/SDKs` folder dragged in whole.
     private static func sdks(in root: URL) -> [URL] {
-        ((try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [])
-            .filter { $0.pathExtension == "sdk" }
+        let fm = FileManager.default
+        guard let children = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey]) else {
+            return []
+        }
+        var found: [URL] = []
+        for child in children {
+            if child.pathExtension == "sdk" {
+                found.append(child)
+                continue
+            }
+            guard (try? child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true,
+                  let grandchildren = try? fm.contentsOfDirectory(at: child, includingPropertiesForKeys: nil) else { continue }
+            found.append(contentsOf: grandchildren.filter { $0.pathExtension == "sdk" })
+        }
+        return found
     }
 
     /// Creates the folders a user can drop an SDK into, so they are visible in

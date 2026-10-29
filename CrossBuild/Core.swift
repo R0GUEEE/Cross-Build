@@ -147,6 +147,9 @@ final class WorkspaceModel: ObservableObject {
     @Published var generatedConfigurationSummary: [String] = []
     @Published var activeProjectRoot: String?
     static let activeProjectKey = "crossbuild.activeProject"
+    /// The SDK path whose import has already been announced, so the console is not
+    /// told the same thing on every build.
+    private var activeSDKStamp: String?
     /// What the last detection printed, so an identical result is not reprinted.
     private var lastDetectionFingerprint = ""
     @Published var recommendedBuildCommand: String?
@@ -1259,14 +1262,21 @@ final class WorkspaceModel: ObservableObject {
                 environment[key] = value
             }
         }
-        let workspaceSDK = configuration.sdkPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        let compilerSDK = compilerConfiguration.sysroot.trimmingCharacters(in: .whitespacesAndNewlines)
-        let sdkPath = workspaceSDK.isEmpty ? compilerSDK : workspaceSDK
-        if !sdkPath.isEmpty {
-            environment["SDKROOT"] = sdkPath
+        // The compiler runs in the guest, so the SDK it is given has to be the copy
+        // inside the guest. Exporting the host's container path (`Documents/SDKs/…`)
+        // did nothing: that directory does not exist there, and gcc does not read
+        // SDKROOT in the first place. `ensureSDKInGuest` imports the selected SDK
+        // before each build and records where it landed.
+        // `--sysroot` goes into the accumulated flag lists further down; here only
+        // the two variables a driver actually reads are set, so the flag is applied
+        // exactly once per list (duplicating it in CFLAGS and LDFLAGS is harmless
+        // but makes every command line harder to read).
+        if let sdkRoot = guestSDKRoot {
+            environment["SDKROOT"] = sdkRoot
+            environment["APPLE_SDK_SYSROOT"] = sdkRoot
         } else if let discovered = IOSSDKDiscovery.preferred() {
-            // Otherwise a supplied SDK is discovered, counted on a screen, and
-            // then ignored by every command that runs.
+            // Not imported (no guest session). Say so once, rather than exporting a
+            // path the guest cannot see.
             environment["SDKROOT"] = discovered.path
         }
 
@@ -1351,12 +1361,23 @@ final class WorkspaceModel: ObservableObject {
         // than overwritten: `CFLAGS=-march=…` in that field used to be replaced by
         // the generated value with no message, so the field did nothing.
         // Appended, not prepended, so a user's -O2/-std wins (both are last-wins).
+        if let sdkRoot = guestSDKRoot {
+            cFlags.append("--sysroot=\(sdkRoot)")
+            // The Swift standard library modules ship inside the SDK.
+            for framework in ["/usr/lib/swift", "/usr/lib/swift/iphoneos"] {
+                cFlags.append("-F\(sdkRoot + framework)")
+            }
+        }
+        // A user's own CFLAGS from Compiler -> Environment is appended last, so a
+        // flag they typed wins over a generated one.
         if let user = environment["CFLAGS"]?.trimmingCharacters(in: .whitespacesAndNewlines), !user.isEmpty {
             cFlags.append(user)
         }
         if !cFlags.isEmpty { environment["CFLAGS"] = cFlags.joined(separator: " ") }
         // make's implicit C++ rule uses $(CXXFLAGS), not $(CFLAGS), so every
         // option accumulated above was invisible to .cpp/.mm sources.
+        // CXXFLAGS is CFLAGS minus the C standard; `--sysroot` and the Swift module
+        // `-F` paths are already in it and apply to C++ as well.
         var cxxFlags = cFlags.filter { $0 != cStandardFlag }
         if compilerConfiguration.cppStandard != "Default" {
             cxxFlags.append("-std=\(compilerConfiguration.cppStandard)")
@@ -1388,6 +1409,9 @@ final class WorkspaceModel: ObservableObject {
             // -dead_strip belongs to Apple's ld; GNU ld has no such option and
             // fails the link. --gc-sections is its equivalent.
             ldFlags.append(appleClang ? "-Wl,-dead_strip" : "-Wl,--gc-sections")
+        }
+        if let sdkRoot = guestSDKRoot {
+            ldFlags.append("--sysroot=\(sdkRoot)")
         }
         if let user = environment["LDFLAGS"]?.trimmingCharacters(in: .whitespacesAndNewlines), !user.isEmpty {
             ldFlags.append(user)
@@ -1921,9 +1945,34 @@ final class WorkspaceModel: ObservableObject {
     /// Returns false when nothing reached the guest, which is the caller's cue to
     /// stop rather than run a command against a copy that is not there.
     @discardableResult
+    /// Makes the selected Apple SDK available in the guest, once per SDK.
+    ///
+    /// Called before every build rather than behind a button: a build that needs an
+    /// SDK and does not have one fails with a linker error that names nothing.
+    @discardableResult
+    func ensureSDKInGuest(session: LinuxGuestSession = .shared) async -> SDKInjection.Result? {
+        guard let sdk = SDKInjection.selectedSDK(workspace: self) else { return nil }
+        let result = await SDKInjection.inject(sdk, session: session)
+        guard result.applied else {
+            for note in result.notes { console += "SDK: \(note)\n" }
+            return result
+        }
+        if activeSDKStamp != sdk.path {
+            activeSDKStamp = sdk.path
+            for note in result.notes { console += "SDK: \(note)\n" }
+        }
+        return result
+    }
+
+    /// Where the last successfully imported SDK lives inside the guest.
+    private var guestSDKRoot: String?
+
     private func syncProjectToGuest() async -> Bool {
         let root = activeProjectRoot ?? files.workspaceRoot.path
         let syncItems = await projectSyncItems(under: root)
+        if let sdk = await ensureSDKInGuest() {
+            guestSDKRoot = sdk.sysroot
+        }
         let synced = await guestSync.push(syncItems, session: .shared)
         if !synced.output.isEmpty { console += synced.output }
         console += "Guest sync: \(guestSync.lastSummary)\n"
