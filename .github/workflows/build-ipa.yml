@@ -367,7 +367,10 @@ jobs:
             || fail "cmake + ninja cannot configure and build a project"
 
           echo "=== Meson ==="
-          sh_e 'rm -rf /tmp/vme && mkdir -p /tmp/vme && printf "project(\"v\", \"c\")\nexecutable(\"v\", \"main.c\")\n" > /tmp/vme/meson.build && printf "int main(void){return 0;}\n" > /tmp/vme/main.c && cd /tmp/vme && meson setup build >/dev/null && meson compile -C build >/dev/null' \
+          # Meson rejects double-quoted strings in meson.build ("Double quotes are
+          # not supported"), so this fixture uses single quotes -- which is why the
+          # shell string around it is double-quoted, unlike its neighbours.
+          sh_e "rm -rf /tmp/vme && mkdir -p /tmp/vme && printf \"project('v','c')\\nexecutable('v','main.c')\\n\" > /tmp/vme/meson.build && printf \"int main(void){return 0;}\\n\" > /tmp/vme/main.c && cd /tmp/vme && meson setup build >/dev/null && meson compile -C build" \
             || fail "meson cannot configure and build a project"
 
           echo "=== Python ==="
