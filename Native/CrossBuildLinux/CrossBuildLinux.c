@@ -44,6 +44,33 @@ static volatile int g_guest_finished = 0;
 static char *g_stdout_buffer = NULL;
 static char *g_stderr_buffer = NULL;
 
+// Boot log.
+//
+// The session either answers or it does not, and from the app there is nothing in
+// between: "the shell did not answer" covers a failed exec, a mount that never
+// returned, and a pipe misconfigured at step three. This writes each step to a file
+// the app can show, so a boot that stalls says where.
+static FILE *g_log_file = NULL;
+
+void cblk_set_log_path(const char *path) {
+    if (g_log_file != NULL) { fclose(g_log_file); g_log_file = NULL; }
+    if (path != NULL && path[0] != '\0') {
+        g_log_file = fopen(path, "a");
+    }
+}
+
+static void cblk_log(const char *fmt, ...) {
+    if (g_log_file == NULL) { return; }
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(g_log_file, fmt, ap);
+    va_end(ap);
+    fputc('\n', g_log_file);
+    fflush(g_log_file);
+}
+
+static int64_t cblk_monotonic_ms(void);
+
 static char *cblk_strdup(const char *text) {
     if (text == NULL) { text = ""; }
     size_t n = strlen(text);
@@ -139,6 +166,7 @@ static void *guest_thread_main(void *opaque) {
     generic_mkdirat(AT_PWD, "/dev/shm", 01777);
     generic_setattrat(AT_PWD, "/dev/shm", make_attr(mode, 01777), true);
 
+    cblk_log("thread: mounts done, entering task_run_current");
     task_run_current();
 
     // task_run_current() does not return: the root task's exit path calls
@@ -164,6 +192,7 @@ static char g_boot_error[512];
 // Replaces the engine's handler, which calls exit(). Recording the code and
 // unwinding just this thread keeps the host app alive.
 static void cblk_exit_hook(struct task *task, int code) {
+    cblk_log("hook: task pid=%d exited code=%d", task != NULL ? (int)task->pid : -1, code);
     if (code & 0xff) {
         g_guest_exit_code = 128 + (code & 0xff);
     } else {
@@ -356,6 +385,7 @@ struct session_boot_args {
 
 static void *session_thread_main(void *opaque) {
     struct session_boot_args *args = (struct session_boot_args *)opaque;
+    cblk_log("thread: entered");
 
     // Fault recovery is thread-local. The one-shot path installed an alternate
     // signal stack on its calling thread, but the persistent session runs the
@@ -378,6 +408,7 @@ static void *session_thread_main(void *opaque) {
     }
 
     int err = xX_main_Xx(args->argc, args->argv, args->envp);
+    cblk_log("thread: xX_main_Xx -> %d", err);
     if (err < 0) {
         fprintf(stderr, "xX_main_Xx: %s\n", strerror(-err));
         g_session_running = 0;
@@ -498,7 +529,23 @@ int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory)
     // returns as soon as the marker arrives.
     char *ready = NULL;
     int32_t readyStatus = -1;
-    int rc = cblk_session_run(":", 120000, &ready, &readyStatus);
+    cblk_log("start: pthread created, running readiness round trip");
+    int64_t ready_started = cblk_monotonic_ms();
+    int rc = cblk_session_run(":", 300000, &ready, &readyStatus);
+    cblk_log("start: readiness rc=%d in %lld ms status=%d output=%s",
+             rc, (long long)(cblk_monotonic_ms() - ready_started), readyStatus,
+             ready != NULL ? ready : "(null)");
+    // One retry. A shell that is merely slow (first boot, cold flash, a device
+    // under load while the app is being installed) looks exactly like a broken one
+    // from here, and the second round trip costs nothing when the first failed.
+    if (rc == 124) {
+        // Nothing to free: on 124 the buffer is the shim's scratch, and the next
+        // call releases it.
+        cblk_log("start: retrying the readiness round trip");
+        rc = cblk_session_run(":", 300000, &ready, &readyStatus);
+        cblk_log("start: retry rc=%d status=%d output=%s", rc, readyStatus,
+                 ready != NULL ? ready : "(null)");
+    }
     if (rc < 0 && ready != NULL) { free(ready); }
     if (rc == 124) {
         snprintf(g_boot_error, sizeof(g_boot_error), "the shell did not answer the readiness round trip");
@@ -650,7 +697,9 @@ int32_t cblk_session_run(const char *command, int32_t timeoutMs, char **outCombi
         if (outCombined != NULL) { *outCombined = cblk_strdup("Out of memory building the command."); }
         return -1;
     }
-    if (write_all(g_session_in, script, strlen(script)) != 0) {
+    int write_rc = write_all(g_session_in, script, strlen(script));
+    cblk_log("run: wrote %zu bytes -> %d (marker %s)", strlen(script), write_rc, marker);
+    if (write_rc != 0) {
         free(script);
         if (outCombined != NULL) { *outCombined = cblk_strdup("Could not write to the guest."); }
         return -1;

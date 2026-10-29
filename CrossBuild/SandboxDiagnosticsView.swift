@@ -111,6 +111,14 @@ struct SandboxDiagnosticsView: View {
         // Guest
         sections.append(.init(id: "guest", title: "Linux guest", rows: guestRows()))
 
+        // Boot log
+        let tail = LinuxGuestEngine.bootLogTail()
+        if !tail.isEmpty {
+            sections.append(.init(id: "bootlog", title: "Guest boot log", rows: tail.map {
+                .init(label: "", value: $0, ok: nil)
+            }))
+        }
+
         // Toolchains the guest reported
         let tools = workspace.guestToolchain.sorted()
         sections.append(.init(id: "tools", title: "Guest toolchains", rows: [
