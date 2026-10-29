@@ -71,6 +71,12 @@ final class FileManagerService: ObservableObject {
     @Published var query = ""
     @Published var errorMessage: String?
     @Published var includeAppDirectories = true
+    /// When set, the tree shows this folder instead of the whole workspace.
+    ///
+    /// Picking a project used to change the header's name and nothing else: the
+    /// explorer kept listing every other project beside it, so "active project"
+    /// had no visible effect on the screen you browse in.
+    @Published private(set) var focusedRoot: URL?
 
     let workspaceRoot: URL
     let documentsRoot: URL
@@ -238,6 +244,8 @@ final class FileManagerService: ObservableObject {
         var requests: [FileTreeRequest]
         if let root {
             requests = [FileTreeRequest(root: root, displayName: root.lastPathComponent, skipWorkspaceChild: false)]
+        } else if let focused = focusedRoot {
+            requests = [FileTreeRequest(root: focused, displayName: focused.lastPathComponent, skipWorkspaceChild: false)]
         } else {
             requests = [FileTreeRequest(root: workspaceRoot, displayName: "Workspace", skipWorkspaceChild: false)]
             if includeAppDirectories {
@@ -265,6 +273,12 @@ final class FileManagerService: ObservableObject {
             // may point at files that moved or disappeared.
             self.scheduleContentSearch()
         }
+    }
+
+    /// Shows one folder instead of the whole workspace, or everything when nil.
+    func focus(on url: URL?) {
+        focusedRoot = url?.standardizedFileURL
+        reload()
     }
 
     /// Waits for the tree build currently in flight. Callers that need the tree

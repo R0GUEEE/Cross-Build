@@ -1,36 +1,29 @@
 import Foundation
 import SwiftUI
 
-/// The project browser: the file tree of the workspace you are working in.
+/// The project browser: the file tree of the project you are working in.
 ///
-/// This used to be a list of project folders with a separate "editor" tab; opening
-/// a file moved the whole app. Now the tree is the screen, tapping a file opens it
-/// in a popup, and the project you are in is a menu in the header rather than a
-/// destination.
+/// The project menu lists the folders this app actually brought in — created here or
+/// imported from GitHub — and choosing one points the app at it: the tree is
+/// rescoped to that folder, detection runs against it, and the Build tab follows.
 struct ProjectsView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
     @ObservedObject var settings: AppSettings
     /// Switches the app to the build tab.
     var openBuild: () -> Void
 
-    @State private var projects: [ProjectEntry] = []
     @State private var editing = false
     @State private var showSettings = false
     @State private var showNewProject = false
     @State private var newProjectName = ""
     @State private var showGitHub = false
 
-    struct ProjectEntry: Identifiable, Hashable, Sendable {
-        let id: String
-        let name: String
-        let path: String
-        let manifest: String?
-    }
-
     private var projectName: String {
-        guard let root = workspace.activeProjectRoot, !root.isEmpty else { return "Workspace" }
-        let name = URL(fileURLWithPath: root).lastPathComponent
-        return name.isEmpty ? "Workspace" : name
+        if let root = workspace.activeProjectRoot, !root.isEmpty {
+            let name = URL(fileURLWithPath: root).lastPathComponent
+            if !name.isEmpty { return name }
+        }
+        return "Workspace"
     }
 
     var body: some View {
@@ -44,12 +37,9 @@ struct ProjectsView: View {
                                  onOpen: open,
                                  onSetActiveProject: { folder in
                                      workspace.useFolderAsActiveProject(folder)
-                                     Task { await reload() }
                                  })
         }
         .background(ForgeTheme.Surface.background)
-        .task { await reload() }
-        .onChange(of: workspace.files.roots.count) { _ in Task { await reload() } }
         .sheet(isPresented: $editing) {
             EditorSheet(settings: settings).environmentObject(workspace)
         }
@@ -67,11 +57,12 @@ struct ProjectsView: View {
             }
         }
         .sheet(isPresented: $showGitHub, onDismiss: {
-            workspace.files.reload()
             if let imported = workspace.github.lastImportedPath {
+                workspace.registerProject(path: imported)
                 workspace.detectProject(at: imported)
+                workspace.files.focus(on: URL(fileURLWithPath: imported))
             }
-            Task { await reload() }
+            workspace.files.reload()
         }) {
             GitHubCloneView(github: workspace.github)
         }
@@ -82,7 +73,7 @@ struct ProjectsView: View {
             Button("Create") { createProject() }
             Button("Cancel", role: .cancel) { newProjectName = "" }
         } message: {
-            Text("A folder is created in the workspace. Add files to it from the file list.")
+            Text("A folder is created in the workspace and becomes the active project.")
         }
     }
 
@@ -92,9 +83,9 @@ struct ProjectsView: View {
         HStack(spacing: 10) {
             Menu {
                 Section("Projects") {
-                    ForEach(projects) { project in
+                    ForEach(workspace.knownProjects) { project in
                         Button {
-                            workspace.detectProject(at: project.path)
+                            open(project)
                         } label: {
                             if project.path == workspace.activeProjectRoot {
                                 Label(project.name, systemImage: "checkmark")
@@ -103,7 +94,7 @@ struct ProjectsView: View {
                             }
                         }
                     }
-                    if projects.isEmpty {
+                    if workspace.knownProjects.isEmpty {
                         Text("No projects yet")
                     }
                 }
@@ -113,8 +104,10 @@ struct ProjectsView: View {
                     showNewProject = true
                 }
                 Button("Import from GitHub", systemImage: "arrow.down.circle") { showGitHub = true }
-                Button("Use Workspace Root", systemImage: "folder") {
-                    workspace.detectProject(at: workspace.files.workspaceRoot.path)
+                if workspace.files.focusedRoot != nil {
+                    Button("Show Entire Workspace", systemImage: "square.grid.2x2") {
+                        workspace.files.focus(on: nil)
+                    }
                 }
             } label: {
                 HStack(spacing: 5) {
@@ -124,6 +117,13 @@ struct ProjectsView: View {
                     Image(systemName: "chevron.down")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
+                }
+            }
+            .contextMenu {
+                ForEach(workspace.knownProjects) { project in
+                    Button("Remove \(project.name)", role: .destructive) {
+                        workspace.forgetProject(project)
+                    }
                 }
             }
 
@@ -154,6 +154,14 @@ struct ProjectsView: View {
 
     // MARK: - Actions
 
+    /// Points the app at a project: detection, the explorer, and the build tab all
+    /// follow from `activeProjectRoot`.
+    private func open(_ project: WorkspaceModel.KnownProject) {
+        workspace.registerProject(path: project.path, name: project.name)
+        workspace.detectProject(at: project.path)
+        workspace.files.focus(on: URL(fileURLWithPath: project.path))
+    }
+
     private func open(_ file: WorkspaceFile) {
         guard !file.isDirectory else { return }
         workspace.openFile(file)
@@ -175,34 +183,8 @@ struct ProjectsView: View {
             workspace.console += "error: could not create \(name): \(error.localizedDescription)\n"
             return
         }
-        workspace.files.reload()
+        workspace.registerProject(path: url.path, name: name)
         workspace.detectProject(at: url.path)
-        Task { await reload() }
-    }
-
-    private func reload() async {
-        let root = workspace.files.workspaceRoot.path
-        let manifests: Set<String> = ["project.yml", "Package.swift", "Cargo.toml", "go.mod",
-                                      "build.zig", "CMakeLists.txt", "meson.build", "Makefile",
-                                      "makefile", "GNUmakefile", "package.json", "pyproject.toml",
-                                      "controls", "control"]
-        let entries = await Task.detached(priority: .utility) { () -> [ProjectEntry] in
-            let fm = FileManager.default
-            guard let children = try? fm.contentsOfDirectory(at: URL(fileURLWithPath: root, isDirectory: true),
-                                                             includingPropertiesForKeys: [.isDirectoryKey],
-                                                             options: [.skipsHiddenFiles]) else { return [] }
-            var result: [ProjectEntry] = []
-            for url in children {
-                guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
-                let names = (try? fm.contentsOfDirectory(atPath: url.path)) ?? []
-                let manifest = names.first { manifests.contains($0) }
-                result.append(ProjectEntry(id: url.path,
-                                           name: url.lastPathComponent,
-                                           path: url.path,
-                                           manifest: manifest))
-            }
-            return result.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-        }.value
-        projects = entries
+        workspace.files.focus(on: url)
     }
 }

@@ -56,6 +56,12 @@ struct BuildView: View {
         .onChange(of: workspace.isExecuting) { running in
             if running { showLog = true }
         }
+        // The options follow the project. Opening this tab used to show whatever the
+        // previous project had left behind, including a command that no longer
+        // applied.
+        .task(id: workspace.activeProjectRoot) {
+            workspace.autoConfigureBuildOptions(settings: settings)
+        }
     }
 
     // MARK: - Run
@@ -220,9 +226,18 @@ struct BuildView: View {
                     }
                 }
 
-                Button("All toolchains…") { showToolchains = true }
+                HStack(spacing: 8) {
+                    Button("All toolchains…") { showToolchains = true }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    Button("Test toolchains") {
+                        workspace.runToolchainSelfTest()
+                        showLog = true
+                    }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .disabled(workspace.isExecuting)
+                }
             }
         }
     }
