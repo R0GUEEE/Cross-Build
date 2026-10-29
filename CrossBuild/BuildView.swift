@@ -287,6 +287,18 @@ struct BuildView: View {
                     }
                 }
 
+                // What the guest said when it tried to compile against the SDK.
+                if let probe = SDKInjection.lastProbe {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: "info.circle")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                        Text(probe)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 HStack(spacing: 8) {
                     Button("Agent") { showAgent = true }
                     .buttonStyle(.bordered)

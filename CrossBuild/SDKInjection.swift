@@ -123,12 +123,50 @@ enum SDKInjection {
             return .init(sysroot: nil, frameworkPaths: [], notes: notes, applied: false)
         }
         notes.append("\(pushed.pushed) file(s) imported: \(sync.lastSummary)")
-        notes.append("Builds now use --sysroot=\(guestRoot).")
+        let root = sysroot(in: sdk, at: guestRoot)
+        notes.append("Builds now use --sysroot=\(root).")
 
-        return .init(sysroot: guestRoot,
+        // Compile one line against the imported tree. An Apple header set is only
+        // usable by a compiler *aimed at Apple*: the guest's gcc and its aarch64
+        // Linux clang both stop at <sys/cdefs.h> with "#error Unsupported
+        // architecture" when handed a Darwin sysroot. Saying that here is better
+        // than the first project that includes <stdio.h> failing on a line nobody
+        // expects.
+        let probe = await session.run(
+            "printf '#include <stdio.h>\\nint main(void){return 0;}\\n' > /tmp/sdkprobe.c; "
+            + "gcc --sysroot=\(root) -c /tmp/sdkprobe.c -o /tmp/sdkprobe.o 2>&1 | head -2",
+            timeout: 120)
+        let probeText = probe.output
+        if probeText.contains("Unsupported architecture") || probe.status != 0 {
+            lastProbe = "The guest's GNU compiler cannot compile against an Apple sysroot; "
+                + "this project keeps building against the guest's own headers."
+        } else {
+            lastProbe = nil
+        }
+
+        return .init(sysroot: root,
                      frameworkPaths: frameworks(in: sdk).map { guestRoot + $0 },
                      notes: notes, applied: true)
     }
+
+    /// Which directory is the sysroot *inside* the imported copy.
+    ///
+    /// Two shapes arrive: a `.sdk` already rooted at the SDK, and a folder that
+    /// merely contains one. One level down is checked for the markers of the first.
+    static func sysroot(in sdk: URL, at root: String) -> String {
+        let markers = ["SDKSettings.plist", "usr"]
+        func hasMarkers(_ dir: URL) -> Bool {
+            markers.contains { FileManager.default.fileExists(atPath: dir.appendingPathComponent($0).path) }
+        }
+        if hasMarkers(sdk) { return root }
+        if hasMarkers(sdk.appendingPathComponent(sdk.lastPathComponent)) {
+            return root + "/" + sdk.lastPathComponent
+        }
+        return root
+    }
+
+    /// Result of the last compile probe: nil when the guest accepted the SDK.
+    @MainActor private(set) static var lastProbe: String?
 
     /// Swift framework directories that exist inside the SDK, as guest paths.
     private static func frameworks(in sdk: URL) -> [String] {

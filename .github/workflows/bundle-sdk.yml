@@ -13,6 +13,12 @@ name: Bundle iPhoneOS SDK
 #   * in the bundle (SDKs/<name>.sdk) — what this workflow adds;
 #   * inside the Linux guest — done at build time by SDKInjection, which copies the
 #     selected SDK to /opt/apple-sdk and passes --sysroot to the compiler.
+#
+# Defaults point at xybp888/iOS-SDKs, which publishes the iPhoneOS SDKs as release
+# assets. Only the parts a cross compiler reads are kept: a full SDK carries 98 MB of
+# PrivateFrameworks stubs and 31 MB of Swift docs that no compile consumes, and this
+# app already ships a 400 MB guest. Measured on iPhoneOS18.4: 303 MB unpacked,
+# ~87 MB of it the framework stubs and headers a compiler needs, 19 MB gzipped.
 
 on:
   workflow_dispatch:
@@ -20,11 +26,21 @@ on:
       sdk_release_tag:
         description: "Release carrying the SDK archive, as owner/repo#tag"
         required: true
-        default: "R0GUEEE/Cross-Build-assets#iphoneos-sdk"
+        default: "xybp888/iOS-SDKs#iOS18.4-SDKs"
       sdk_asset_name:
         description: "Asset name of the SDK archive (.zip or .tar.gz)"
         required: true
-        default: "iPhoneOS.sdk.zip"
+        default: "iPhoneOS18.4.sdk.zip"
+      sdk_sha256:
+        description: "Expected SHA-256 of the archive (blank to skip)"
+        required: false
+        default: "71e5437222d86860c640134cb2b0cbff03802829e6e1a49439b176611674d612"
+      sdk_mode:
+        description: "full = every file; compiler = headers, stubs and Swift modules only"
+        required: true
+        type: choice
+        options: [compiler, full]
+        default: compiler
 
 permissions:
   contents: read
@@ -62,6 +78,11 @@ jobs:
           mkdir -p /tmp/sdk
           gh release download "$tag" --repo "$repo" --pattern "${{ inputs.sdk_asset_name }}" --dir /tmp/sdk
           cd /tmp/sdk
+          if [ -n "${{ inputs.sdk_sha256 }}" ]; then
+            echo "${{ inputs.sdk_sha256 }}  ${{ inputs.sdk_asset_name }}" | shasum -a 256 -c -
+          else
+            echo "::warning::no checksum supplied; the archive is used as downloaded"
+          fi
           case "${{ inputs.sdk_asset_name }}" in
             *.zip) unzip -q "${{ inputs.sdk_asset_name }}" ;;
             *.tar.gz) tar xzf "${{ inputs.sdk_asset_name }}" ;;
@@ -73,6 +94,47 @@ jobs:
           test -d "$SDK_DIR/usr/include" || { echo "::error::$SDK_DIR has no usr/include"; exit 1; }
           echo "SDK_DIR=$SDK_DIR" >> "$GITHUB_ENV"
           du -sh "$SDK_DIR"
+
+      - name: Reduce the SDK to what a compiler reads
+        if: inputs.sdk_mode == 'compiler'
+        run: |
+          set -euo pipefail
+          # `find … -exec cp` over ~5000 files is slow on a runner; one pass in
+          # Python, copying only what a cross compiler opens.
+          python3 - "$SDK_DIR" <<'PY'
+          import os, shutil, sys
+          src = sys.argv[1]
+          dst = os.path.join('/tmp/sdk-reduced', os.path.basename(src))
+          shutil.rmtree('/tmp/sdk-reduced', ignore_errors=True)
+          # usr/ holds the headers, the .tbd stubs and the Swift modules.
+          shutil.copytree(os.path.join(src, 'usr'), os.path.join(dst, 'usr'))
+          for name in ('SDKSettings.plist', 'SDKSettings.json', 'Entitlements.plist'):
+              path = os.path.join(src, name)
+              if os.path.exists(path):
+                  shutil.copy2(path, os.path.join(dst, name))
+          # Each framework's headers, module map and stub. PrivateFrameworks (98 MB
+          # of stubs for frameworks an app cannot link against anyway) is skipped.
+          copied = 0
+          for root, _, files in os.walk(os.path.join(src, 'System')):
+              if 'PrivateFrameworks' in root:
+                  continue
+              for name in files:
+                  if not (name.endswith(('.tbd', '.modulemap')) or root.endswith('Headers')):
+                      continue
+                  path = os.path.join(root, name)
+                  if os.path.getsize(path) == 0:
+                      continue
+                  out = os.path.join(dst, os.path.relpath(path, src))
+                  os.makedirs(os.path.dirname(out), exist_ok=True)
+                  shutil.copyfile(path, out)
+                  copied += 1
+          total = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(dst) for f in fs)
+          print(f'reduced SDK: {copied} framework files, {total / 1048576:.0f} MB')
+          PY
+          SDK_DIR="/tmp/sdk-reduced/$(basename "$SDK_DIR")"
+          test -f "$SDK_DIR/SDKSettings.plist" || { echo "::error::reduced SDK has no SDKSettings.plist"; exit 1; }
+          test -d "$SDK_DIR/usr/include" || { echo "::error::reduced SDK has no usr/include"; exit 1; }
+          echo "SDK_DIR=$SDK_DIR" >> "$GITHUB_ENV"
 
       - name: Stage the SDK into the app bundle
         run: |
