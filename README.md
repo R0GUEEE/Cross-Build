@@ -18,6 +18,8 @@ The app includes project/build-system detection, a code editor workspace, build 
 ## Build
 GitHub Actions generates the Xcode project with XcodeGen, builds an unsigned iOS application, packages Payload/CrossBuild.app as CrossBuild.ipa, and uploads it as a workflow artifact. Each CI build stamps `CURRENT_PROJECT_VERSION` with the GitHub Actions run number so artifacts from different commits are distinguishable.
 
+**`project.yml` + XcodeGen is the canonical build** — it is what CI runs and what the verification steps assert against. `Package.swift` and `xtool.yml` describe the same app as a SwiftPM package for xtool, which is how it could be built without a Mac, but no workflow exercises that path: treat it as a port that needs a build before it is trusted.
+
 To generate the project locally (on a Mac with XcodeGen installed), export the build-number variable first since `project.yml` references it:
 
 ```sh

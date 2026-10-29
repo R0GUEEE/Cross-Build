@@ -18,9 +18,11 @@ final class AppSettings: ObservableObject {
 
     deinit {
         // The token was stored and never removed, so every instance left an
-        // observer behind. `removeObserver(self)` avoids touching the stored
-        // property from a deinit.
-        NotificationCenter.default.removeObserver(self)
+        // observer behind for the life of the process. `removeObserver(self)` did
+        // not fix that: it matches *selector* registrations, and this is a block
+        // observer, which is removed by the token it returned. Reading a stored
+        // property in `deinit` is legal.
+        if let defaultsObserver { NotificationCenter.default.removeObserver(defaultsObserver) }
     }
 
     init() {

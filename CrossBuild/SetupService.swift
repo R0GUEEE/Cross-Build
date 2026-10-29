@@ -61,7 +61,11 @@ final class SetupService: ObservableObject {
     /// Steps that have finished, one way or another -- what the setup progress
     /// bar counts.
     var completedStepCount: Int {
-        steps.filter { $0.status == .succeeded || $0.status == .failed || $0.status == .skipped }.count
+        // `.notBundled` is a terminal state, not a pending one: it is what the SDK
+        // step reports on every normal sideloaded install (no Apple SDK can ship).
+        // Leaving it out of this count is why the progress bar sat at "4 of 5
+        // checks" forever on a healthy install.
+        steps.filter { $0.status != .pending && $0.status != .running }.count
     }
 
     var presentTools: [AppToolchainScan] { environment.toolchains.filter(\.present) }
@@ -71,7 +75,12 @@ final class SetupService: ObservableObject {
         guard !isRunning else { return }
         isRunning = true
         defer { isRunning = false }
+        await prepareBody(workspace: workspace, settings: settings)
+    }
 
+    /// The scan itself, without the re-entrancy guard, so `run` can call it while
+    /// it owns `isRunning`.
+    private func prepareBody(workspace: WorkspaceModel, settings: AppSettings) async {
         var env = SetupEnvironment()
         env.rootfsPresent = LinuxGuestEngine.isLinked && LinuxGuestEngine.isRootBundled
         env.sdkCount = IOSSDKDiscovery.availableSDKs().count
@@ -180,23 +189,28 @@ final class SetupService: ObservableObject {
             return
         }
         // Nothing is known about the guest's tools, because the guest never
-        // answered. Reporting them as missing is the wrong conclusion.
+        // answered. Reporting them as missing is the wrong conclusion, and
+        // counting it as a failure turned "the guest was still booting" into
+        // "Setup finished with 1 missing/incomplete component".
         steps[index].output = "Not checked — \(note)."
-        steps[index].status = .failed
+        steps[index].status = .skipped
     }
 
     func run(workspace: WorkspaceModel, settings: AppSettings) async {
         guard !isRunning else { return }
-        if !didPrepare { await prepare(workspace: workspace, settings: settings) }
+        // Claim the run *before* the first suspension point. `prepare` and the
+        // guest wait below both clear `isRunning` in their own defer, so a second
+        // tap during either of them passed the guard and the two loops then
+        // interleaved their step updates.
+        isRunning = true
+        defer { isRunning = false }
+        if !didPrepare { await prepareBody(workspace: workspace, settings: settings) }
 
         // The scan deliberately does not wait for the guest. Verification does:
         // judging the guest toolchain from a probe that has not returned yet
         // marked a perfectly good install as failed and wrote that verdict into
         // `summary`, which nothing recomputed afterwards.
         await guestProbeTask?.value
-
-        isRunning = true
-        defer { isRunning = false }
 
         for index in steps.indices {
             runningStepID = steps[index].id

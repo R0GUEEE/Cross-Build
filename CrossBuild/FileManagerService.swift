@@ -288,7 +288,13 @@ final class FileManagerService: ObservableObject {
     }
 
     func isReadOnly(_ file: WorkspaceFile) -> Bool {
-        file.path == appBundleRoot.path || file.path.hasPrefix(appBundleRoot.path + "/")
+        // The tree also exposes the container roots themselves ("App Documents",
+        // "App Library", "Temporary Files"), and none of those are the app bundle.
+        // Deleting the "App Documents" row therefore removed the whole container --
+        // Workspace and the guest's own filesystem image along with it -- behind a
+        // generic "removes the item from the app container" dialog.
+        let protected = [workspaceRoot, documentsRoot, libraryRoot, temporaryRoot, appBundleRoot].map(\.path)
+        return protected.contains(file.path) || file.path.hasPrefix(appBundleRoot.path + "/")
     }
 
     func revealWorkspaceOnly() {
@@ -395,7 +401,7 @@ final class FileManagerService: ObservableObject {
 
     func duplicate(_ file: WorkspaceFile) {
         errorMessage = nil
-        guard !isReadOnly(file) else { errorMessage = "The app bundle is read-only."; return }
+        guard !isReadOnly(file) else { errorMessage = "That location is read-only."; return }
         let src = URL(fileURLWithPath: file.path)
         let ext = src.pathExtension
         let base = src.deletingPathExtension().lastPathComponent + " copy" + (ext.isEmpty ? "" : "." + ext)
@@ -410,7 +416,7 @@ final class FileManagerService: ObservableObject {
 
     func delete(_ file: WorkspaceFile) {
         errorMessage = nil
-        guard !isReadOnly(file) else { errorMessage = "The app bundle is read-only."; return }
+        guard !isReadOnly(file) else { errorMessage = "That location is read-only."; return }
         do {
             try FileManager.default.removeItem(atPath: file.path)
             if selected?.path == file.path || selected?.path.hasPrefix(file.path + "/") == true { selected = nil }
@@ -425,7 +431,7 @@ final class FileManagerService: ObservableObject {
 
     func rename(_ file: WorkspaceFile, to newName: String) {
         errorMessage = nil
-        guard !isReadOnly(file) else { errorMessage = "The app bundle is read-only."; return }
+        guard !isReadOnly(file) else { errorMessage = "That location is read-only."; return }
         guard valid(newName) else { errorMessage = "Invalid name."; return }
         do {
             let src = URL(fileURLWithPath: file.path)

@@ -66,8 +66,12 @@ targets:
     # INFOPLIST_FILE at it, so every key below really ships -- and keys whose
     # value is an array (document types, background modes) become expressible at
     # all, which they never were as build settings.
+    # Written into build/ (gitignored) on purpose. Support/Info.plist is the
+    # *xtool* partial plist, and pointing XcodeGen at the same path meant every
+    # `xcodegen generate` silently rewrote a tracked file -- two build systems
+    # owning one file, with the tracked copy being whichever ran last.
     info:
-      path: Support/Info.plist
+      path: build/Info.plist
       properties:
         CFBundleDisplayName: Cross Build
         CFBundleName: $(PRODUCT_NAME)

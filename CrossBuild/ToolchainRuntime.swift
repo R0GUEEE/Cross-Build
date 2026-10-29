@@ -44,11 +44,22 @@ final class ToolchainRuntimeManager: ObservableObject {
         for (exe,name,packages) in Self.guestTools {
             let command = "if command -v \(exe) >/dev/null 2>&1; then printf 'FOUND\\n'; \(exe) --version 2>&1 | head -1; else printf 'MISSING\\n'; fi"
             let run = await LinuxGuestSession.shared.run(command, timeout: 15)
+            guard run.code >= 0 else {
+                // The guest did not answer. That is not the same as "the tool is
+                // missing", and it certainly does not mean "you can install it":
+                // the old code read a non-FOUND first line as exactly that and
+                // offered a working Install button against a guest that was not
+                // running.
+                result.append(.init(id:exe,name:name,readiness:.unavailable,version:"",
+                                    detail:run.output.isEmpty ? "The Linux guest did not answer." : run.output,
+                                    executable:exe,packages:packages))
+                continue
+            }
             let lines = run.output.split(separator:"\n", omittingEmptySubsequences:true).map(String.init)
             let found = lines.first == "FOUND"
             result.append(.init(id:exe,name:name,readiness:found ? .functional : .availableToInstall,
                                 version:found ? (lines.dropFirst().first ?? "installed") : "",
-                                detail:found ? "Verified inside the Linux guest" : "Available through apk when repository support provides it",
+                                detail:found ? "Verified inside the Linux guest" : "Not present in this guest root",
                                 executable:exe,packages:packages))
         }
         probes = result
@@ -57,10 +68,17 @@ final class ToolchainRuntimeManager: ObservableObject {
     func install(_ id: String) async -> (Bool,String) {
         guard let probe = probes.first(where:{$0.id == id}), !probe.packages.isEmpty else { return (false,"Unknown toolchain") }
         let packages = probe.packages.joined(separator:" ")
+        // `apk update` needs a network the guest does not have
+        // (`ExecutionCapabilities.canUseNetwork` is false), so this can only fail.
+        // Say so instead of running a command that cannot work and then reporting
+        // success because the transport returned 0.
+        guard LinuxGuestExecutionBackend().capabilities.canUseNetwork else {
+            return (false, "The embedded Linux guest has no network access, so apk cannot fetch \(packages). Rebuild the bundled rootfs with the package included.")
+        }
         let result = await LinuxGuestSession.shared.run("apk update && apk add --no-cache \(packages)", timeout: 900)
+        let ok = result.code == 0 && result.status == 0
         await refresh()
-        return (result.code == 0, result.output)
+        return (ok, result.output)
     }
 
-    func probe(_ id:String) -> ToolchainProbe? { probes.first{$0.id == id} }
 }

@@ -15,7 +15,9 @@ final class CompilerConfiguration: ObservableObject {
     private var defaultsObserver: NSObjectProtocol?
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
+        // Block observers are removed by token, not by `self`; see the note in
+        // AppSettings.
+        if let defaultsObserver { NotificationCenter.default.removeObserver(defaultsObserver) }
     }
 
     init() {

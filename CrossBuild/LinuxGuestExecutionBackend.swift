@@ -66,12 +66,21 @@ struct LinuxGuestExecutionBackend: ExecutionBackend {
         await LinuxGuestSession.shared.runInitCommandIfNeeded(request.initCommand)
         let result = await LinuxGuestSession.shared.run(request.command, timeout: timeout, invocation: invocation)
         guard result.code >= 0 else {
-            return .init(exitCode: 125, stdout: "", stderr: result.output, duration: Date().timeIntervalSince(started))
+            let message = result.code == 124
+                ? "The command did not finish within \(Int(timeout)) seconds, so it was abandoned. Its output so far is below."
+                : result.output
+            return .init(exitCode: result.code == 124 ? 124 : 125,
+                         stdout: result.code == 124 ? result.output : "",
+                         stderr: message,
+                         duration: Date().timeIntervalSince(started))
         }
 
+        // `result.status` is the command's own `$?`. `result.code` only describes
+        // how the transport went, so reporting it as the exit code made every
+        // command -- a failed `make` included -- look successful.
         var stdout = result.output
         if !stdout.isEmpty && !stdout.hasSuffix("\n") { stdout += "\n" }
-        return .init(exitCode: result.code, stdout: stdout, stderr: "",
+        return .init(exitCode: result.status >= 0 ? result.status : 0, stdout: stdout, stderr: "",
                      duration: Date().timeIntervalSince(started))
     }
 }

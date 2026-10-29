@@ -14,7 +14,8 @@ struct GitRepository: Identifiable, Codable, Hashable {
 enum GitHubImportError: LocalizedError {
     case invalidURL
     case emptyArchive
-    case invalidArchive
+    /// A folder this service did not create is already sitting at the target path.
+    case destinationOccupied(String)
 
     var errorDescription: String? {
         switch self {
@@ -22,8 +23,8 @@ enum GitHubImportError: LocalizedError {
             return "Enter a valid GitHub repository URL such as https://github.com/owner/repository."
         case .emptyArchive:
             return "The downloaded repository archive did not contain any project files."
-        case .invalidArchive:
-            return "The downloaded repository archive could not be prepared safely."
+        case .destinationOccupied(let path):
+            return "A folder that Cross Build did not create already exists at \(path). Rename or move it, then import again."
         }
     }
 }
@@ -74,9 +75,27 @@ final class GitHubWorkspaceService: ObservableObject {
         let owner = parts[0]
         var name = parts[1]
         if name.hasSuffix(".git") { name.removeLast(4) }
-        guard !owner.isEmpty, !name.isEmpty else { throw GitHubImportError.invalidURL }
+
+        // `pathComponents` is used verbatim as a path component and inside an
+        // interpolated archive URL further down. GitHub names never contain
+        // anything outside this set, so anything else is rejected rather than
+        // normalised: a component of ".." (which percent-decoding can produce)
+        // would otherwise resolve outside Documents/Workspace and the import
+        // would move and delete directories there.
+        guard Self.isValidRepositoryComponent(owner), Self.isValidRepositoryComponent(name) else {
+            throw GitHubImportError.invalidURL
+        }
 
         return (owner, name, "https://github.com/\(owner)/\(name).git")
+    }
+
+    /// A GitHub owner or repository name: letters, digits, `-`, `_`, `.` only,
+    /// and never `.` or `..`.
+    static func isValidRepositoryComponent(_ text: String) -> Bool {
+        guard !text.isEmpty, text != ".", text != "..", text.count <= 100 else { return false }
+        return text.allSatisfy { ch in
+            ch.isASCII && (ch.isLetter || ch.isNumber || ch == "-" || ch == "_" || ch == ".")
+        }
     }
 
     func destination(owner: String, name: String) -> URL {
@@ -100,16 +119,18 @@ final class GitHubWorkspaceService: ObservableObject {
     }
 
     func cloneArchive(url: String, branch: String) async {
+        // The guard has to come first. It used to sit after the reset below, so a
+        // second tap wiped the running import's log and progress and *then*
+        // reported "already in progress".
+        guard !isImporting else {
+            errorMessage = "A repository import is already in progress."
+            return
+        }
         errorMessage = nil
         verboseLog.removeAll()
         progress = 0
         progressStage = "Starting"
         lastImportedPath = nil
-
-        guard !isImporting else {
-            errorMessage = "A repository import is already in progress."
-            return
-        }
 
         isImporting = true
         defer { isImporting = false }
@@ -178,7 +199,12 @@ final class GitHubWorkspaceService: ObservableObject {
 
             let dest = destination(owner: parsed.owner, name: parsed.name)
             destinationURL = dest
-            if fm.fileExists(atPath: dest.path) {
+            // Only replace a folder this service created. Anything else at that
+            // path is the user's own project -- copied in, or dropped here from
+            // Files.app -- and moving it to a hidden backup that the browser does
+            // not list (and that a later successful import deletes) is data loss.
+            let isTracked = repositories.contains { $0.localPath == dest.path }
+            if fm.fileExists(atPath: dest.path), isTracked {
                 let backup = projectsDirectory.appendingPathComponent(
                     ".\(parsed.name)-backup-\(UUID().uuidString)",
                     isDirectory: true
@@ -186,6 +212,8 @@ final class GitHubWorkspaceService: ObservableObject {
                 try fm.moveItem(at: dest, to: backup)
                 backupURL = backup
                 log("Existing project moved to a temporary backup")
+            } else if fm.fileExists(atPath: dest.path) {
+                throw GitHubImportError.destinationOccupied(dest.path)
             }
 
             do {
