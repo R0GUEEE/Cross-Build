@@ -69,6 +69,19 @@ enum LinuxGuestEngine {
 
     static var isRootBundled: Bool { bundledRootPath != nil }
 
+    /// Where the shim appends boot progress. Readable from the diagnostics screen,
+    /// which is the only way to tell a boot that stalled from one that never ran.
+    static var bootLogURL: URL? {
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
+        return documents.appendingPathComponent("CrossBuild/guest-boot.log")
+    }
+
+    /// Last few lines of the boot log, oldest first.
+    static func bootLogTail(_ lines: Int = 24) -> [String] {
+        guard let url = bootLogURL, let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        return text.components(separatedBy: "\n").suffix(lines).map { $0 }
+    }
+
     /// The guest needs a *writable* root — `apk add` and ordinary file writes are
     /// the point — but the copy inside the app bundle is read-only. So the
     /// bundled image is copied into the app's Documents the first time the guest

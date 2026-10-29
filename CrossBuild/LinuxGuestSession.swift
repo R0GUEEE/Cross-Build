@@ -108,6 +108,11 @@ final class LinuxGuestSession: ObservableObject {
             do {
                 let root = try LinuxGuestEngine.prepareWritableRoot()
                 #if canImport(CrossBuildLinux)
+                if let log = LinuxGuestEngine.bootLogURL {
+                    try? FileManager.default.createDirectory(at: log.deletingLastPathComponent(),
+                                                             withIntermediateDirectories: true)
+                    cblk_set_log_path(log.path)
+                }
                 let code = cblk_session_start(root, "/root")
                 if code == 0 { return nil }
                 // The shim records what went wrong (the engine's own error line, or
@@ -290,7 +295,7 @@ final class LinuxGuestSession: ObservableObject {
     /// How long the boot waits for the guest's shell to answer a marker, in
     /// seconds. Mirrors the window in `cblk_session_start`; the two are quoted
     /// together in the failure message so they cannot drift silently.
-    static let readinessWindowSeconds = 120
+    static let readinessWindowSeconds = 300
 
     /// Upper bound for a single command, in seconds. This is what "no timeout"
     /// means in practice: the C shim is handed `Int32` milliseconds, so ~24.8 days
