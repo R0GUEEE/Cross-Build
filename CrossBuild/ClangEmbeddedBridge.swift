@@ -120,6 +120,20 @@ enum IOSSDKDiscovery {
             .filter { $0.pathExtension == "sdk" }
     }
 
+    /// Creates the folders a user can drop an SDK into, so they are visible in
+    /// Files.app and the diagnostic screen has a real path to point at.
+    ///
+    /// Without this the answer to "why is no SDK found" was three paths that did not
+    /// exist, none of which the app ever told anyone about.
+    static func ensureDirectories() {
+        let bundlePath = Bundle.main.resourceURL?.standardizedFileURL.path
+        for root in searchRoots() where root.standardizedFileURL.path != bundlePath {
+            if !FileManager.default.fileExists(atPath: root.path) {
+                try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            }
+        }
+    }
+
     /// SDKs shipped inside the app. Expected to be empty, and not a fault.
     static func bundledSDKs() -> [URL] {
         guard let root = Bundle.main.resourceURL?.appendingPathComponent("SDKs") else { return [] }
