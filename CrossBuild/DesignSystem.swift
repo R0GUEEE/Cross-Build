@@ -1,20 +1,5 @@
 import SwiftUI
 
-// MARK: - Panels
-
-enum ForgePanel: String, CaseIterable, Identifiable {
-    case terminal = "Terminal", problems = "Problems", build = "Build", agent = "Agent"
-    var id: String { rawValue }
-    var icon: String {
-        switch self {
-        case .terminal: return "terminal"
-        case .problems: return "exclamationmark.triangle"
-        case .build: return "hammer"
-        case .agent: return "sparkles"
-        }
-    }
-}
-
 // MARK: - Tokens
 
 /// The design tokens everything else is built from.

@@ -13,6 +13,7 @@ struct BuildView: View {
 
     @State private var showLog = false
     @State private var showToolchains = false
+    @State private var showAgent = false
 
     private var projectName: String {
         guard let root = workspace.activeProjectRoot, !root.isEmpty else { return "Workspace" }
@@ -35,6 +36,17 @@ struct BuildView: View {
         .background(ForgeTheme.Surface.background)
         .sheet(isPresented: $showLog) {
             BuildLogSheet().environmentObject(workspace)
+        }
+        .sheet(isPresented: $showAgent) {
+            NavigationStack {
+                AgentDashboardView(settings: settings)
+                    .environmentObject(workspace)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") { showAgent = false }
+                        }
+                    }
+            }
         }
         .sheet(isPresented: $showToolchains) {
             NavigationStack {
@@ -228,7 +240,10 @@ struct BuildView: View {
                 }
 
                 HStack(spacing: 8) {
-                    Button("All toolchains…") { showToolchains = true }
+                    Button("Agent") { showAgent = true }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                Button("All toolchains…") { showToolchains = true }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                     Button("Test toolchains") {

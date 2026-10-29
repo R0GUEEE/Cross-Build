@@ -7,21 +7,13 @@ struct AppConfigurationView: View {
         Form {
             Section("Interface") {
                 Toggle("Compact interface", isOn: $settings.compactUI)
-                Toggle("Show status badges", isOn: $settings.showStatusBadges)
-                Picker("Default bottom panel", selection: $settings.defaultBottomPanel) {
-                    ForEach(ForgePanel.allCases) { Text($0.rawValue).tag($0.rawValue) }
-                }
-                Toggle("Open bottom panel by default", isOn: $settings.defaultBottomPanelExpanded)
-                HStack {
-                    Text("Navigator width")
-                    Slider(value: $settings.navigatorWidth, in: 220...480, step: 10)
-                    Text("\(Int(settings.navigatorWidth))").monospacedDigit()
-                }
+                // The bottom panel and the navigator column are gone, so their
+                // settings are gone with them rather than left as switches that
+                // change nothing.
             }
 
             Section("Startup") {
                 Toggle("Open last workspace", isOn: $settings.openLastWorkspace)
-                Toggle("Show welcome screen for empty workspace", isOn: $settings.showWelcomeScreen)
                 Toggle("Auto-detect project on launch", isOn: $settings.autoDetect)
             }
 

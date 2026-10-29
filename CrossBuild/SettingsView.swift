@@ -51,7 +51,6 @@ struct SettingsView: View {
                 Section("Project") {
                     Toggle("Detect project automatically", isOn: $settings.autoDetect)
                     Toggle("Open last workspace", isOn: $settings.openLastWorkspace)
-                    Toggle("Show welcome screen", isOn: $settings.showWelcomeScreen)
                     NavigationLink("Project Settings") {
                         WorkspaceConfigurationView(config: workspace.configuration).environmentObject(workspace)
                     }
@@ -61,17 +60,14 @@ struct SettingsView: View {
                 }
 
                 Section("Advanced") {
+                    // One screen per question. "Components in this build", "Setup &
+                    // System Scan" and "Feature Diagnostics" were three more views of
+                    // the same toolchain inventory, two of them with hardcoded rows.
                     NavigationLink("Toolchains & Compilers") {
                         CompilerDashboardView(settings: settings).environmentObject(workspace)
                     }
-                    NavigationLink("Components in this build") {
-                        BundledResourcesView().environmentObject(workspace)
-                    }
-                    NavigationLink("Setup & System Scan") {
-                        FullSetupView(settings: settings).environmentObject(workspace)
-                    }
-                    NavigationLink("Diagnostics") {
-                        FeatureDiagnosticsView(settings: settings).environmentObject(workspace)
+                    NavigationLink("Sandbox Diagnostics") {
+                        SandboxDiagnosticsView(settings: settings).environmentObject(workspace)
                     }
                     NavigationLink("App Configuration") {
                         AppConfigurationView(settings: settings)
