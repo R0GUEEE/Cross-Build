@@ -96,7 +96,7 @@ enum LinuxGuestEngine {
         if fm.fileExists(atPath: destination.path) {
             try? fm.removeItem(at: destination)
         }
-        try fm.moveItem(at: staging.path, to: destination.path)
+        try fm.moveItem(at: staging, to: destination)
         try? build.write(to: marker, atomically: true, encoding: .utf8)
         return destination.path
     }
