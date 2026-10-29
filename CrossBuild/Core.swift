@@ -383,6 +383,15 @@ final class WorkspaceModel: ObservableObject {
             }
 
             let timeout = resolvedBuildTimeout(resolved)
+            let buildCommandText = guestCommand(configuredBuildCommand(settings: resolved))
+
+            // Ask before copying. This used to push the whole project and then run
+            // a command whose program is not in the image, so a Swift or Rust
+            // project paid for the copy and got `sh: swift: not found`.
+            if let missing = blockedReason(for: buildCommandText) {
+                console += missingToolMessage(missing, action: "Build")
+                return
+            }
 
             guard await syncProjectToGuest() else {
                 console += "error: nothing reached the guest, so there is nothing to build there.\n"
@@ -390,16 +399,19 @@ final class WorkspaceModel: ObservableObject {
             }
 
             if resolved?.cleanBeforeBuild == true {
-                let cleaned = await executeCommand(inGuestProject(cleanCommand()), settings: resolved, timeoutOverride: timeout)
-                let stopOnFailure = resolved?.stopOnFirstError ?? true
-                if !cleaned.succeeded && stopOnFailure {
-                    console += "Build stopped after clean failed (Settings → Build Policy → Stop workflow on first failure).\n"
-                    return
+                let clean = guestCommand(cleanCommand())
+                if blockedReason(for: clean) == nil {
+                    let cleaned = await executeCommand(inGuestProject(clean), settings: resolved, timeoutOverride: timeout)
+                    let stopOnFailure = resolved?.stopOnFirstError ?? true
+                    if !cleaned.succeeded && stopOnFailure {
+                        console += "Build stopped after clean failed (Settings → Build Policy → Stop workflow on first failure).\n"
+                        return
+                    }
                 }
                 setProgress(step: 1, detail: "Cleaned; compiling")
             }
 
-            let command = inGuestProject(configuredBuildCommand(settings: resolved))
+            let command = inGuestProject(buildCommandText)
             setProgress(step: stepCount - 1, detail: "Compiling")
             _ = await executeCommand(command, settings: resolved, timeoutOverride: timeout)
             setProgress(step: stepCount)
@@ -605,7 +617,14 @@ final class WorkspaceModel: ObservableObject {
         guard !didProbeGuestToolchain, !isProbingGuestToolchain else { return }
         isProbingGuestToolchain = true
         defer { isProbingGuestToolchain = false }
-        let probe = "for t in make cc gcc c++ g++ cmake ninja python3 git; do "
+        // Every executable any build action can reach for, not just the five
+        // required ones. The old list stopped at make/cc/gcc/c++/g++/cmake/ninja/
+        // python3/git, so a Swift or Rust or Go project was never checked at all:
+        // the app copied the whole project into the guest and only then discovered
+        // there was no `swift` to run.
+        let probe = "for t in make cc gcc c++ g++ as ld ar strip cmake ninja meson "
+            + "python3 swift swiftc cargo rustc go zig node npm npx tsc javac kotlinc "
+            + "dpkg-deb ldid fakeroot git; do "
             + "command -v \"$t\" >/dev/null 2>&1 && printf '%s:yes ' \"$t\" || printf '%s:no ' \"$t\"; done"
         let result = await LinuxGuestSession.shared.run(probe, timeout: 60)
         guard result.code >= 0 else {
@@ -634,6 +653,78 @@ final class WorkspaceModel: ObservableObject {
                 + "supposed to carry make, cc/gcc, c++/g++ and binutils; if one is missing this "
                 + "install's guest root is incomplete or was replaced.\n"
         }
+    }
+
+    // MARK: - Build preflight
+
+    /// The program a shell command will invoke first, ignoring a leading `cd … &&`
+    /// and any `VAR=value` prefixes.
+    ///
+    /// `RUSTFLAGS="-D warnings" cargo build` has to resolve to `cargo`, and
+    /// `cd /workspace && make` to `make`, or the preflight below checks the wrong
+    /// thing.
+    nonisolated static func primaryExecutable(of command: String) -> String? {
+        var rest = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        if rest.hasPrefix("cd "), let and = rest.range(of: "&&") {
+            rest = String(rest[and.upperBound...]).trimmingCharacters(in: .whitespaces)
+        }
+        var inQuotes = false
+        var current = ""
+        for character in rest {
+            if character == "\"" { inQuotes.toggle(); continue }
+            if character == " " && !inQuotes {
+                if current.isEmpty { continue }
+                if current.contains("=") && !current.hasPrefix("-") { current = ""; continue }
+                return current
+            }
+            current.append(character)
+        }
+        guard !current.isEmpty, !(current.contains("=") && !current.hasPrefix("-")) else { return nil }
+        return current
+    }
+
+    /// Why a command cannot run in this guest, or nil when it can.
+    ///
+    /// Nil also covers "the probe has not answered yet": refusing a build because
+    /// a background probe is still in flight would be worse than trying it.
+    func blockedReason(for command: String) -> String? {
+        guard !guestToolchain.isEmpty,
+              let tool = Self.primaryExecutable(of: command) else { return nil }
+        if guestToolchain.contains(tool) { return nil }
+        // The guest carries GNU, not clang. For C and C++ that is the same job under
+        // a different name, and `guestCommand(_:)` rewrites the command to match,
+        // so this is only a block when there is no GNU compiler either.
+        if tool == "clang" || tool == "clang++" {
+            let fallback = tool == "clang++" ? "c++" : "cc"
+            return guestToolchain.contains(fallback) ? nil : tool
+        }
+        return tool
+    }
+
+    /// Rewrites a `clang`/`clang++` command to the guest's GNU equivalent.
+    func guestCommand(_ command: String) -> String {
+        guard !guestToolchain.isEmpty, !guestToolchain.contains("clang") else { return command }
+        var result = command
+        if let range = result.range(of: #"\bclang\+\+"#, options: .regularExpression) {
+            result.replaceSubrange(range, with: "c++")
+        }
+        if let range = result.range(of: #"\bclang\b"#, options: .regularExpression) {
+            result.replaceSubrange(range, with: "cc")
+        }
+        // The fallbacks above also hit the *name* clang when it is present; the
+        // guard at the top makes that unreachable.
+        return result
+    }
+
+    /// One sentence naming what is missing and what the guest does have.
+    private func missingToolMessage(_ tool: String, action: String) -> String {
+        let have = guestToolchain.isEmpty
+            ? "the guest's toolchain probe has not answered"
+            : guestToolchain.sorted().joined(separator: ", ")
+        return "error: \(action) needs `\(tool)`, and this build carries no \(tool). "
+            + "The embedded guest provides: \(have). "
+            + "C and C++ projects build with the GNU toolchain; the other languages need a "
+            + "toolchain that is not bundled.\n"
     }
 
     /// Announces a run. Nested calls are counted: the outermost caller owns the
@@ -942,7 +1033,12 @@ final class WorkspaceModel: ObservableObject {
         var cFlags: [String] = []
         let compilerFlags = compilerConfiguration.compilerFlags.trimmingCharacters(in: .whitespacesAndNewlines)
         if !compilerFlags.isEmpty { cFlags.append(compilerFlags) }
-        if compilerConfiguration.languageStandard != "Default" { cFlags.append("-std=\(compilerConfiguration.languageStandard)") }
+        // Kept out of `cFlags` so it cannot reach CXXFLAGS: pass `-std=c11` and
+        // `-std=c++17` together and g++ warns (clang++ errors) that the C standard
+        // "is valid for C but not for C++", and the later flag wins by luck.
+        let cStandardFlag = compilerConfiguration.languageStandard == "Default"
+            ? nil : "-std=\(compilerConfiguration.languageStandard)"
+        if let cStandardFlag { cFlags.append(cStandardFlag) }
         // CXXFLAGS is assembled below from the same flags; make's implicit C++
         // rule reads $(CXXFLAGS), not $(CFLAGS).
         if compilerConfiguration.positionIndependentCode { cFlags.append("-fPIC") }
@@ -994,12 +1090,22 @@ final class WorkspaceModel: ObservableObject {
         default: cFlags.append("-O0")
         }
         if compilerConfiguration.debugSymbols { cFlags.append("-g") }
+        // Anything the user typed in Compiler -> Environment is appended rather
+        // than overwritten: `CFLAGS=-march=…` in that field used to be replaced by
+        // the generated value with no message, so the field did nothing.
+        // Appended, not prepended, so a user's -O2/-std wins (both are last-wins).
+        if let user = environment["CFLAGS"]?.trimmingCharacters(in: .whitespacesAndNewlines), !user.isEmpty {
+            cFlags.append(user)
+        }
         if !cFlags.isEmpty { environment["CFLAGS"] = cFlags.joined(separator: " ") }
         // make's implicit C++ rule uses $(CXXFLAGS), not $(CFLAGS), so every
         // option accumulated above was invisible to .cpp/.mm sources.
-        var cxxFlags = cFlags
+        var cxxFlags = cFlags.filter { $0 != cStandardFlag }
         if compilerConfiguration.cppStandard != "Default" {
             cxxFlags.append("-std=\(compilerConfiguration.cppStandard)")
+        }
+        if let user = environment["CXXFLAGS"]?.trimmingCharacters(in: .whitespacesAndNewlines), !user.isEmpty {
+            cxxFlags.append(user)
         }
         if !cxxFlags.isEmpty { environment["CXXFLAGS"] = cxxFlags.joined(separator: " ") }
 
@@ -1025,6 +1131,9 @@ final class WorkspaceModel: ObservableObject {
             // -dead_strip belongs to Apple's ld; GNU ld has no such option and
             // fails the link. --gc-sections is its equivalent.
             ldFlags.append(appleClang ? "-Wl,-dead_strip" : "-Wl,--gc-sections")
+        }
+        if let user = environment["LDFLAGS"]?.trimmingCharacters(in: .whitespacesAndNewlines), !user.isEmpty {
+            ldFlags.append(user)
         }
         if !ldFlags.isEmpty { environment["LDFLAGS"] = ldFlags.joined(separator: " ") }
         environment["CROSSBUILD_INCREMENTAL_BUILD"] = compilerConfiguration.incrementalBuild ? "1" : "0"
@@ -1076,11 +1185,16 @@ final class WorkspaceModel: ObservableObject {
         }
         let resolved = settings ?? appSettings
         Task {
+            let prepared = guestCommand(command)
+            if let missing = blockedReason(for: prepared) {
+                console += missingToolMessage(missing, action: "That action")
+                return
+            }
             guard await syncProjectToGuest() else {
                 console += "error: nothing reached the guest, so \(command) was not run there.\n"
                 return
             }
-            _ = await executeCommand(inGuestProject(command), settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved))
+            _ = await executeCommand(inGuestProject(prepared), settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved))
         }
     }
 
@@ -1335,6 +1449,28 @@ final class WorkspaceModel: ObservableObject {
             // sources beside it. Building one file is about the quick command, not
             // about a partial tree.
             let items = await projectSyncItems(under: root)
+            // Resolve the command before copying anything: `singleFileBuildCommand`
+            // already returns nil when the guest has no compiler for that language,
+            // and the make-target path needs the same answer.
+            let planned: String
+            switch item.kind {
+            case .file(let relative):
+                guard let built = singleFileBuildCommand(for: relative) else {
+                    console += "error: Cross Build has no single-file build for \(relative) in this guest. "
+                        + "Use the project build, or check which compilers the guest carries in Settings → Advanced → Toolchains.\n"
+                    return
+                }
+                planned = "cd \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.guestRoot)) && \(guestCommand(built))"
+            case .makeTarget(let target):
+                let flags = compilerConfiguration.theosMakeFlags.trimmingCharacters(in: .whitespacesAndNewlines)
+                planned = "cd \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.guestRoot)) && make \(target)"
+                    + (flags.isEmpty ? "" : " " + flags)
+            }
+            if let missing = blockedReason(for: planned) {
+                console += missingToolMessage(missing, action: "That build")
+                return
+            }
+
             let synced = await guestSync.push(items, session: .shared)
             if !synced.output.isEmpty { console += synced.output }
             console += "Guest sync: \(guestSync.lastSummary)\n"
@@ -1343,23 +1479,9 @@ final class WorkspaceModel: ObservableObject {
                 return
             }
 
-            let command: String
-            switch item.kind {
-            case .file(let relative):
-                guard let built = singleFileBuildCommand(for: relative) else {
-                    console += "error: Cross Build has no single-file build for \(relative). Use the project build.\n"
-                    return
-                }
-                command = "cd \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.guestRoot)) && \(built)"
-            case .makeTarget(let target):
-                let flags = compilerConfiguration.theosMakeFlags.trimmingCharacters(in: .whitespacesAndNewlines)
-                command = "cd \(GuestWorkspaceSync.quoted(GuestWorkspaceSync.guestRoot)) && make \(target)"
-                    + (flags.isEmpty ? "" : " " + flags)
-            }
-
-            // No compiler check here any more: `singleFileBuildCommand` already
-            // returned nil (and said so) unless the guest has the tool this file
-            // needs, and the old check hard-coded C for every language.
+            // One command, resolved before the copy above; the switch that used to
+            // build it again here had drifted from the planned one.
+            let command = planned
 
             setProgress(step: 1, detail: command)
             let started = Date()
@@ -1604,8 +1726,23 @@ final class WorkspaceModel: ObservableObject {
             ? []
             : await Self.snapshotFilesOffMain(under: root)
 
-        let result = await executeCommand(inGuestProject(command), settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved))
+        // Packaging builds its product in the guest, so a marker file tells us
+        // afterwards which files the command created there. Without this the only
+        // thing the app ever looked at was the *host* project root -- where the
+        // package command never ran -- so a successful `make package` reported
+        // "no new files were found" and the .deb stayed inside the guest, to be
+        // deleted by the next sync.
+        _ = await LinuxGuestSession.shared.run(
+            "rm -rf /tmp/crossbuild-pkg && mkdir -p /tmp/crossbuild-pkg && touch /tmp/crossbuild-pkg/marker",
+            timeout: 30)
+
+        let result = await executeCommand(inGuestProject(guestCommand(command)), settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved))
         setProgress(step: 1, detail: "Collecting artifacts")
+
+        if result.succeeded {
+            let collected = await collectGuestArtifacts()
+            if !collected.isEmpty { console += collected }
+        }
 
         guard result.succeeded, !artifactDir.isEmpty else { return result }
 
@@ -1618,6 +1755,67 @@ final class WorkspaceModel: ObservableObject {
         )
         if !outcome.message.isEmpty { console += outcome.message }
         return result
+    }
+
+    /// Copies files the package command produced inside the guest back to the host.
+    ///
+    /// Only the shapes a package step actually emits, only files newer than the
+    /// marker written before the command, and only up to a size that survives the
+    /// session's output capture (base64 inflates by 4/3, and capture is capped at
+    /// 8 MB). Anything larger is named rather than silently dropped.
+    private func collectGuestArtifacts() async -> String {
+        // `-printf` is GNU-only and the guest may be running busybox find, so the
+        // size comes from `wc -c` through `-exec`, which both understand.
+        let listCommand = "find /workspace -type f -newer /tmp/crossbuild-pkg/marker "
+            + "\\( -name '*.deb' -o -name '*.ipa' -o -name '*.zip' -o -name '*.tar.gz' -o -name '*.dylib' \\) "
+            + "-exec sh -c 'echo \"ART $(wc -c < \"$1\") $1\"' sh {} \\; 2>/dev/null || true"
+        let listing = await LinuxGuestSession.shared.run(listCommand, timeout: 60)
+        let entries: [(size: Int, path: String)] = listing.output
+            .components(separatedBy: "\n")
+            .compactMap { line in
+                guard line.hasPrefix("ART ") else { return nil }
+                let parts = line.split(separator: " ", maxSplits: 2).map(String.init)
+                guard parts.count == 3, let size = Int(parts[1]) else { return nil }
+                return (size, parts[2])
+            }
+        guard !entries.isEmpty else { return "" }
+
+        let destination: URL
+        let configured = configuration.artifactDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !configured.isEmpty {
+            destination = URL(fileURLWithPath: configured, isDirectory: true)
+        } else {
+            destination = URL(fileURLWithPath: activeProjectRoot ?? files.workspaceRoot.path, isDirectory: true)
+        }
+        try? FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+
+        var log = ""
+        let limit = 5 * 1024 * 1024
+        for entry in entries {
+            let name = (entry.path as NSString).lastPathComponent
+            guard entry.size > 0, entry.size <= limit else {
+                log += "Package: \(name) is \(entry.size / 1024) KB, which is too large to copy back through the "
+                    + "shell session; it stays in the guest at \(entry.path).\n"
+                continue
+            }
+            let encoded = await LinuxGuestSession.shared.run(
+                "base64 \(GuestWorkspaceSync.quoted(entry.path))", timeout: 120)
+            let cleaned = encoded.output.filter { !$0.isWhitespace }
+            guard encoded.code == 0, encoded.status == 0,
+                  let data = Data(base64Encoded: cleaned), data.count == entry.size else {
+                log += "Package: could not copy \(name) out of the guest.\n"
+                continue
+            }
+            let target = destination.appendingPathComponent(name)
+            do {
+                try? FileManager.default.removeItem(at: target)
+                try data.write(to: target, options: .atomic)
+                log += "Package: \(name) copied to \(target.path)\n"
+            } catch {
+                log += "Package: could not write \(name): \(error.localizedDescription)\n"
+            }
+        }
+        return log
     }
 
     private nonisolated static func snapshotFilesOffMain(under root: String) async -> Set<String> {

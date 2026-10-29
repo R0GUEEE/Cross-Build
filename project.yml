@@ -47,6 +47,10 @@ targets:
       - path: Vendor/linuxkit/fakefs-root
         type: folder
         buildPhase: resources
+      # The notices several of the bundled licences require, readable from
+      # Settings -> About -> Licences.
+      - path: THIRD-PARTY-NOTICES.md
+        buildPhase: resources
     dependencies:
       - package: ZIPFoundation
       - target: CrossBuildClang
@@ -161,7 +165,11 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         MACH_O_TYPE: staticlib
         CLANG_C_LANGUAGE_STANDARD: gnu11
-        GCC_PREPROCESSOR_DEFINITIONS: GUEST_ARM64=1 DEBUG=1
+        # GUEST_ARM64 for the engine's header selection. DEBUG was here too, and
+        # this setting *replaces* the per-configuration default, so the Release
+        # build compiled the shim with DEBUG=1 while the engine itself was built
+        # --buildtype=release -- two halves of one library disagreeing.
+        GCC_PREPROCESSOR_DEFINITIONS: GUEST_ARM64=1
         HEADER_SEARCH_PATHS: "$(SRCROOT)/Vendor/linuxkit $(SRCROOT)/Vendor/linuxkit/build-ios"
         # The engine's headers pull in the SDK's ucontext.h, which refuses to
         # declare the deprecated ucontext routines unless _XOPEN_SOURCE is

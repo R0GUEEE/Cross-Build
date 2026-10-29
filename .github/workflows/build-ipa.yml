@@ -46,8 +46,13 @@ jobs:
           PY_BUILD=${PY_TAG#*-}
           ASSET="Python-${PY_VER}-iOS-support.${PY_BUILD}.tar.gz"
           URL="https://github.com/beeware/Python-Apple-support/releases/download/${PY_TAG}/${ASSET}"
+          # Pinned by content, like the Alpine image below. A release asset that is
+          # replaced (or a tampered mirror) would otherwise become linked code in a
+          # signed app with nothing in the repo recording the change.
+          PY_SHA256=80175765a31babe43b0910395cf86ba4e8412adf1902b069d55b74d523ecc5d1
           echo "Fetching $URL"
           curl -sSL "$URL" -o /tmp/python-support.tar.gz
+          echo "$PY_SHA256  /tmp/python-support.tar.gz" | shasum -a 256 -c -
           mkdir -p Vendor/Python
           tar xzf /tmp/python-support.tar.gz -C Vendor/Python
           test -d Vendor/Python/Python.xcframework || { echo "::error::Python.xcframework missing from the support package"; exit 1; }
@@ -59,6 +64,23 @@ jobs:
           cp -R "Vendor/Python/Python.xcframework/lib/python${PY_VER}/." "$STDLIB/"
           cp -R "Vendor/Python/Python.xcframework/ios-arm64/lib-arm64/python${PY_VER}/lib-dynload" "$STDLIB/lib-dynload"
           test -f "$STDLIB/os.py" || { echo "::error::standard library did not stage correctly (os.py missing)"; exit 1; }
+
+          # CPython's own test suite is 35 MB of the 61 MB standard library, and
+          # nothing in the app imports it. ensurepip cannot install into a
+          # read-only bundle, idlelib and tkinter need Tk, and pydoc_data is
+          # documentation for the pydoc server nobody runs on a phone.
+          rm -rf "$STDLIB/test" "$STDLIB/ensurepip" "$STDLIB/idlelib" "$STDLIB/tkinter" \
+                 "$STDLIB/lib2to3" "$STDLIB/turtledemo" "$STDLIB/pydoc_data" "$STDLIB/turtle.py"
+          rm -f "$STDLIB"/lib-dynload/_test*.so "$STDLIB"/lib-dynload/xxlimited*.so \
+                "$STDLIB"/lib-dynload/xxsubtype*.so "$STDLIB"/lib-dynload/_ctypes_test*.so
+          find "$STDLIB" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+          # The extension modules are the half of the runtime a missing copy breaks
+          # silently: Python still starts, then fails the first `import sqlite3`.
+          test -n "$(ls "$STDLIB"/lib-dynload/_sqlite3*.so 2>/dev/null)" \
+            || { echo "::error::lib-dynload is missing _sqlite3; the C extensions did not stage"; exit 1; }
+          test -n "$(ls "$STDLIB"/lib-dynload/_ssl*.so 2>/dev/null)" \
+            || { echo "::error::lib-dynload is missing _ssl"; exit 1; }
+          echo "stdlib size after pruning: $(du -sh "$STDLIB" | cut -f1)"
           echo "# Placeholder: user Python modules live here at runtime." > Vendor/Python/stdlib/app/README.txt
 
       - name: Build iOS Linux engine
@@ -148,7 +170,11 @@ jobs:
           # gcc + g++ + musl-dev + binutils is the smallest real toolchain: musl-dev
           # supplies the C headers and crt objects, binutils the assembler and
           # linker. This is a deliberate size cost.
-          RUNTIME_PACKAGES="bash coreutils findutils grep sed gawk git tar gzip xz ca-certificates make gcc g++ musl-dev binutils"
+          # dpkg + fakeroot exist because `make package` is one of the four buttons
+          # the app offers: Theos and any Debian-packaging project end in
+          # `dpkg-deb --build`, and neither the tool nor fakeroot was in the image,
+          # so that button could only fail.
+          RUNTIME_PACKAGES="bash coreutils findutils grep sed gawk git tar gzip xz ca-certificates make gcc g++ musl-dev binutils dpkg fakeroot"
           echo "Installing runtime-only packages: $RUNTIME_PACKAGES"
 
           MIRROR_HOST="dl-cdn.alpinelinux.org"
@@ -162,7 +188,7 @@ jobs:
           # Build button that cannot build. `cc` and `make` are what the app's own
           # commands call, so a missing one has to fail here rather than on the
           # user's device.
-          for tool in make cc gcc c++ g++; do
+          for tool in make cc gcc c++ g++ dpkg-deb ar ld; do
             if ! ./build-host/ish -f "$ROOT" /bin/sh -c "command -v $tool >/dev/null 2>&1"; then
               echo "::error::$tool is missing from the Linux rootfs; builds will fail at runtime"
               exit 1
@@ -170,6 +196,22 @@ jobs:
           done
           ./build-host/ish -f "$ROOT" /bin/sh -c "printf 'int main(void){return 0;}\n' > /tmp/t.c && cc /tmp/t.c -o /tmp/t && /tmp/t" \
             || { echo "::error::the guest toolchain is present but cannot compile and link"; exit 1; }
+          # C++ is a separate driver, a separate standard library and its own set of
+          # headers; asserting only the C path left `g++` able to be present and
+          # broken at the same time.
+          ./build-host/ish -f "$ROOT" /bin/sh -ec \
+            'printf "#include <string>\n#include <iostream>\nint main(){std::string s=\"ok\";std::cout<<s;return 0;}\n" > /tmp/t.cpp && c++ /tmp/t.cpp -o /tmp/tpp && test "$(/tmp/tpp)" = ok' \
+            || { echo "::error::the guest cannot compile and run a C++ program"; exit 1; }
+
+          # The forbidden list in ToolchainRuntimeArchitecture and docs/ says CI
+          # enforces it. It did not: nothing ever looked for these, so a package
+          # that pulled in python3 or cmake would ship silently.
+          for tool in clang clang++ ld.lld cmake ninja meson python3 cargo rustc go zig swift swiftc; do
+            if ./build-host/ish -f "$ROOT" /bin/sh -c "command -v $tool >/dev/null 2>&1"; then
+              echo "::error::$tool must not be in the guest image (see forbiddenGuestBuildTools)"
+              exit 1
+            fi
+          done
 
           # The default CFLAGS the app assembles for a build must be accepted by
           # this compiler, or the Build button ships broken. Core.swift emits
@@ -190,7 +232,17 @@ jobs:
           # Reported per path rather than silently: a trim step nobody measures
           # is how you end up unable to say what the guest actually costs.
           ./build-host/ish -f "$ROOT" /bin/sh -ec '
-            report() { [ -e "$1" ] && printf "  %-42s %s\n" "$1" "$(du -sh "$1" 2>/dev/null | cut -f1)"; }
+            # `return 0` matters: under `sh -ec` a test that is false is a failing
+            # command, so the old `[ -e "$1" ] && printf …` aborted the whole block on
+            # the first path that did not exist (/usr/share/doc never does) and every
+            # removal after it silently never ran -- which is why the shipped image
+            # still contains gcov, dwp, libgcc.a and the apk cache.
+            report() {
+              if [ -e "$1" ]; then
+                printf "  %-42s %s\n" "$1" "$(du -sh "$1" 2>/dev/null | cut -f1)"
+              fi
+              return 0
+            }
 
             # Documentation and locale data: nothing reads these at build time.
             for p in /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale \
@@ -215,6 +267,19 @@ jobs:
               report "$p"; rm -f "$p" 2>/dev/null || true
             done
 
+            # LTO frontends (36 MB each) and the static C/C++ runtimes. Nothing in
+            # this guest emits or consumes LTO objects, and nothing links -static:
+            # the app compiles and links dynamically, which the post-trim check
+            # below re-proves. Together these are about a third of the download.
+            for p in /usr/libexec/gcc/*/*/lto1 /usr/bin/lto-dump \
+                     /usr/lib/libc.a /usr/lib/libstdc++.a /usr/lib/gcc/*/*/libstdc++.a; do
+              report "$p"; rm -f "$p" 2>/dev/null || true
+            done
+
+            # apk's own indexes from provisioning time: ~3 MB, and the guest cannot
+            # reach a repository anyway.
+            report /var/cache/apk; rm -rf /var/cache/apk 2>/dev/null || true
+
             # Perl POD is the bulk of the perl tree and is pure documentation.
             report /usr/share/perl5/core_perl/pod; rm -rf /usr/share/perl5/core_perl/pod 2>/dev/null || true
 
@@ -223,7 +288,7 @@ jobs:
 
             # Package caches and build leftovers.
             rm -rf /var/cache/apk /root/.cache /tmp/* 2>/dev/null || true
-          ' || echo "::warning::rootfs trimming did not run cleanly"
+          ' || { echo "::error::rootfs trimming failed"; exit 1; }
 
           echo "=== what the guest costs ==="
           for p in /usr/lib/gcc /usr/libexec/gcc /usr/bin /usr/lib /usr/share /lib /root /etc; do

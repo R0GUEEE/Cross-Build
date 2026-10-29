@@ -60,8 +60,13 @@ let package = Package(
             cxxSettings: [.unsafeFlags(["-std=c++17"])]
         ),
 
+        // Needs the Python framework for its headers. SwiftPM only adds `-F` for a
+        // target's *own* dependencies, and the binaryTarget was declared as a
+        // dependency of the app alone -- so `#include <Python/Python.h>` had no
+        // search path and this target could not compile at all.
         .target(
             name: "CrossBuildPython",
+            dependencies: ["Python"],
             path: "Native/CrossBuildPython",
             publicHeadersPath: "Module"
         ),

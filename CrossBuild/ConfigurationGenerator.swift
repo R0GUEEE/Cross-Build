@@ -3,10 +3,14 @@ import Foundation
 struct GeneratedProjectConfiguration {
     let toolchain: ToolchainKind
     let buildCommand: String
-    let deploymentTarget: String
-    let architectures: String
-    let packageFormat: String
-    let theosScheme: String
+    /// Nil means "the project did not say". `apply` leaves the user's value alone
+    /// in that case; the old non-optional fields were seeded with defaults and
+    /// written on every detection, so a hand-set deployment target, architecture,
+    /// package format or scheme was reset on the next launch.
+    let deploymentTarget: String?
+    let architectures: String?
+    let packageFormat: String?
+    let theosScheme: String?
     let summary: [String]
 }
 
@@ -15,14 +19,14 @@ enum ConfigurationGenerator {
                          files: [WorkspaceFile],
                          fileContents: [String: String] = [:]) -> GeneratedProjectConfiguration {
         let makefile = fileContents["Makefile"] ?? ""
-        var deployment = "16.0"
-        var architectures = "arm64"
-        var format = "binary"
-        var scheme = "rootless"
+        var deployment: String?
+        var architectures: String?
+        var format: String?
+        var scheme: String?
         var notes = ["Detected \(analysis.primaryToolchain.rawValue)"]
 
-        if let value = firstCapture(in: makefile, pattern: #"IPHONEOS_DEPLOYMENT_TARGET\s*[:?+]?=\s*([0-9]+(?:\.[0-9]+)?)"#) ??
-            firstCapture(in: makefile, pattern: #"TARGET\s*[:?+]?=.*?:([0-9]+(?:\.[0-9]+)?)"#) {
+        if let value = firstCapture(in: makefile, pattern: #"IPHONEOS_DEPLOYMENT_TARGET\s*[:?+]?=\s*([0-9]+(?:\.[0-9]+)?)"#)
+            ?? theosDeploymentTarget(in: makefile) {
             deployment = value
             notes.append("Deployment target iOS \(value)")
         }
@@ -79,16 +83,30 @@ enum ConfigurationGenerator {
             workspace.selectedToolchain = generated.toolchain
         }
         workspace.recommendedBuildCommand = generated.buildCommand
-        workspace.compilerConfiguration.deploymentTarget = generated.deploymentTarget
-        workspace.compilerConfiguration.architectures = generated.architectures
-        workspace.compilerConfiguration.packageFormat = generated.packageFormat
-        workspace.compilerConfiguration.theosScheme = generated.theosScheme
-        workspace.configuration.deploymentTarget = generated.deploymentTarget
-        workspace.configuration.architecture = generated.architectures
+        // Only values the project actually declared. Writing "16.0"/"arm64"/
+        // "binary" here overwrote whatever the user had typed, on every launch and
+        // every project switch.
+        if let value = generated.deploymentTarget { workspace.compilerConfiguration.deploymentTarget = value }
+        if let value = generated.architectures { workspace.compilerConfiguration.architectures = value }
+        if let value = generated.packageFormat { workspace.compilerConfiguration.packageFormat = value }
+        if let value = generated.theosScheme { workspace.compilerConfiguration.theosScheme = value }
         // Deliberately NOT setting `autoDetectToolchain = true` here. It was, and
         // because `apply` runs on every detection, the "Auto-detect toolchain"
         // switch could never stay off: turning it off lasted only until the next
         // detection turned it back on and overrode the toolchain the user picked.
+    }
+
+    /// Theos' `TARGET = platform:toolchain:sdk:deployment`.
+    ///
+    /// The old single regex used a lazy `.*?:` and therefore captured the *SDK*
+    /// version, not the deployment target, for the canonical four-field form.
+    private static func theosDeploymentTarget(in makefile: String) -> String? {
+        guard let line = firstCapture(in: makefile, pattern: #"TARGET\s*[:?+]?=\s*([^\n#]+)"#) else { return nil }
+        let fields = line.split(separator: ":").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard fields.count >= 4 else { return nil }
+        let last = fields[fields.count - 1]
+        guard last.first?.isNumber == true else { return nil }
+        return last
     }
 
     private static func firstCapture(in text: String, pattern: String) -> String? {

@@ -78,8 +78,14 @@ struct GitHubCloneView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(repositoryURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || github.isImporting)
 
+                    // Always dismissible. The only exit used to be a "Done" button
+                    // that appeared after a *successful* import, so an error left the
+                    // sheet closable only by dragging it down.
                     if github.progressStage == "Complete" {
                         Button("Done") { dismiss() }
+                    } else {
+                        Button("Cancel", role: .cancel) { dismiss() }
+                            .disabled(github.isImporting)
                     }
                 }
 

@@ -17,7 +17,10 @@ struct LinuxGuestExecutionBackend: ExecutionBackend {
         canSpawnProcesses: true,      // true within the guest, not on the host
         canUseNetwork: false,          // guest networking is not wired up yet
         canAccessWorkspace: false,     // the guest has its own fakefs root
-        canInstallPackages: true       // apk runs inside the guest
+        // There is no package source: the guest has no network, so `apk add` can
+        // only fail. Reporting `true` here is what put an Install button on a
+        // screen where installing was impossible.
+        canInstallPackages: false
     )
 
     /// Timeout used when the caller asks for "no timeout" (0).
