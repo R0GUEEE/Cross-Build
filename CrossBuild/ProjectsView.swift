@@ -58,9 +58,7 @@ struct ProjectsView: View {
         }
         .sheet(isPresented: $showGitHub, onDismiss: {
             if let imported = workspace.github.lastImportedPath {
-                workspace.registerProject(path: imported)
-                workspace.detectProject(at: imported)
-                workspace.files.focus(on: URL(fileURLWithPath: imported))
+                workspace.selectProject(imported)
             }
             workspace.files.reload()
         }) {
@@ -157,9 +155,7 @@ struct ProjectsView: View {
     /// Points the app at a project: detection, the explorer, and the build tab all
     /// follow from `activeProjectRoot`.
     private func open(_ project: WorkspaceModel.KnownProject) {
-        workspace.registerProject(path: project.path, name: project.name)
-        workspace.detectProject(at: project.path)
-        workspace.files.focus(on: URL(fileURLWithPath: project.path))
+        workspace.selectProject(project.path, name: project.name)
     }
 
     private func open(_ file: WorkspaceFile) {
@@ -183,8 +179,6 @@ struct ProjectsView: View {
             workspace.console += "error: could not create \(name): \(error.localizedDescription)\n"
             return
         }
-        workspace.registerProject(path: url.path, name: name)
-        workspace.detectProject(at: url.path)
-        workspace.files.focus(on: url)
+        workspace.selectProject(url.path, name: name)
     }
 }

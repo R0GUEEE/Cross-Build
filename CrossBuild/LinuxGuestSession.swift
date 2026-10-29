@@ -110,12 +110,18 @@ final class LinuxGuestSession: ObservableObject {
                 #if canImport(CrossBuildLinux)
                 let code = cblk_session_start(root, "/root")
                 if code == 0 { return nil }
+                // The shim records what went wrong (the engine's own error line, or
+                // "the shell exited while starting up"). A bare code number is not
+                // something a user can act on.
+                let detail = String(cString: cblk_session_error())
                 if code == -4 {
                     return "The guest started but its shell did not answer within "
-                        + "\(Self.readinessWindowSeconds) seconds, so no command can be run. "
-                        + "Relaunch Cross Build to try again."
+                        + "\(Self.readinessWindowSeconds) seconds"
+                        + (detail.isEmpty ? "." : " (\(detail)).")
+                        + " Relaunch Cross Build to try again."
                 }
-                return "The guest failed to start (code \(code))."
+                return "The guest failed to start (code \(code))"
+                    + (detail.isEmpty ? "." : ": \(detail)")
                 #else
                 return "The Linux engine was not linked into this build."
                 #endif
