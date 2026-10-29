@@ -146,6 +146,7 @@ final class WorkspaceModel: ObservableObject {
 
     @Published var generatedConfigurationSummary: [String] = []
     @Published var activeProjectRoot: String?
+    static let activeProjectKey = "crossbuild.activeProject"
     @Published var recommendedBuildCommand: String?
     @Published var pendingAgentConfirmation: String?
     private var pendingAgentPlan: [AgentExecution] = []
@@ -199,6 +200,13 @@ final class WorkspaceModel: ObservableObject {
         syncFileConfiguration()
         restoreOpenDocuments()
         loadKnownProjects()
+        // Reopen where the user left off. Without this, the first detection of a
+        // session had no selection to respect and picked the workspace root.
+        if let saved = UserDefaults.standard.string(forKey: Self.activeProjectKey),
+           FileManager.default.fileExists(atPath: saved) {
+            activeProjectRoot = saved
+            files.focus(on: URL(fileURLWithPath: saved))
+        }
     }
 
     // MARK: - Project registry
@@ -239,10 +247,23 @@ final class WorkspaceModel: ObservableObject {
         persistKnownProjects()
     }
 
+    /// Leaves the selected project and browses the whole workspace.
+    ///
+    /// This is a deliberate state, not a side effect of detection: nothing is
+    /// "active", so the next launch does not reopen a project the user stepped out
+    /// of, and Build targets the workspace root honestly.
+    func showEntireWorkspace() {
+        activeProjectRoot = nil
+        UserDefaults.standard.removeObject(forKey: Self.activeProjectKey)
+        files.focus(on: nil)
+    }
+
     func forgetProject(_ project: KnownProject) {
         knownProjects.removeAll { $0.path == project.path }
         persistKnownProjects()
         if activeProjectRoot == project.path {
+            activeProjectRoot = nil
+            UserDefaults.standard.removeObject(forKey: Self.activeProjectKey)
             files.focus(on: nil)
         }
     }
@@ -376,12 +397,35 @@ final class WorkspaceModel: ObservableObject {
     }
 
     private func detectProject(rootOverride: String?) {
-        // Detection has to see the whole workspace to infer a root, even when the
-        // explorer is focused on one project.
+        // Detection runs *inside* the selected project, and never moves the
+        // selection on its own.
+        //
+        // It used to fall back to `inferProjectRoot`, which answers "workspace root"
+        // whenever the selected folder has no manifest of its own (or when nested
+        // detection is off). Since detection runs at launch and after every project
+        // switch, the active project kept snapping back to the workspace folder --
+        // the file tree jumped to everything, and Build reported the workspace.
         let allFiles = projectFiles
-        let root = rootOverride ?? inferProjectRoot(from: allFiles)
+        let root: String
+        if let rootOverride {
+            root = rootOverride
+        } else if let current = activeProjectRoot,
+                  FileManager.default.fileExists(atPath: current) {
+            root = current
+        } else if let focused = files.focusedRoot?.path,
+                  FileManager.default.fileExists(atPath: focused) {
+            root = focused
+        } else {
+            root = inferProjectRoot(from: allFiles)
+        }
         activeProjectRoot = root
-        if files.focusedRoot?.path != root, FileManager.default.fileExists(atPath: root) {
+        UserDefaults.standard.set(root, forKey: Self.activeProjectKey)
+        // Follow the project with the explorer, except when the project *is* the
+        // workspace: focusing there would replace the full tree (App Documents,
+        // Library, temporary) with a Workspace-only one.
+        if root != files.workspaceRoot.path,
+           files.focusedRoot?.path != root,
+           FileManager.default.fileExists(atPath: root) {
             files.focus(on: URL(fileURLWithPath: root))
         }
         // Deliberately NOT written into `configuration.workingDirectory`: that is
@@ -480,7 +524,8 @@ final class WorkspaceModel: ObservableObject {
 
             let command = inGuestProject(buildCommandText)
             setProgress(step: stepCount - 1, detail: "Compiling")
-            _ = await executeCommand(command, settings: resolved, timeoutOverride: timeout)
+            let result = await executeCommand(command, settings: resolved, timeoutOverride: timeout)
+            if result.succeeded { await copyGuestChangesBack() }
             setProgress(step: stepCount)
         }
     }
@@ -1339,7 +1384,8 @@ final class WorkspaceModel: ObservableObject {
                 console += "error: nothing reached the guest, so \(command) was not run there.\n"
                 return
             }
-            _ = await executeCommand(inGuestProject(prepared), settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved))
+            let result = await executeCommand(inGuestProject(prepared), settings: resolved, timeoutOverride: resolvedBuildTimeout(resolved))
+            if result.succeeded { await copyGuestChangesBack() }
         }
     }
 
@@ -1814,6 +1860,11 @@ final class WorkspaceModel: ObservableObject {
         let synced = await guestSync.push(syncItems, session: .shared)
         if !synced.output.isEmpty { console += synced.output }
         console += "Guest sync: \(guestSync.lastSummary)\n"
+        if synced.complete {
+            // Everything the build writes from here on is newer than this marker,
+            // which is how `copyGuestChangesBack` knows what to carry home.
+            _ = await LinuxGuestSession.shared.run("touch /tmp/crossbuild-sync-mark", timeout: 30)
+        }
         // "Something landed" is not the question. A push that dies on batch 3 of 5
         // has pushed files, and building against that half-tree is worse than not
         // building at all.
@@ -1900,6 +1951,48 @@ final class WorkspaceModel: ObservableObject {
         )
         if !outcome.message.isEmpty { console += outcome.message }
         return result
+    }
+
+    /// Copies files the build created or changed inside the guest into the project.
+    ///
+    /// The sync has always been one-way, so a code generator, a configure step or a
+    /// package command left its output in the guest and the next push deleted it.
+    /// This is the return path: files newer than the marker written at the end of the
+    /// push, that either do not exist on the host or differ in size. Bounded on
+    /// purpose -- a build tree is not a deliverable.
+    private func copyGuestChangesBack() async {
+        guard appSettings?.copyBuildOutputBack ?? true else { return }
+        guard let root = activeProjectRoot else { return }
+        let listCommand = "cd /workspace && find . -type f -newer /tmp/crossbuild-sync-mark "
+            + "-size -2048k ! -path './build/*' ! -path './.git/*' ! -path './node_modules/*' "
+            + "! -path './dist/*' ! -path './.cache/*' "
+            + "-exec sh -c 'echo \"CHG $(wc -c < \"$1\") $1\"' sh {} \\; 2>/dev/null | head -40"
+        let listing = await LinuxGuestSession.shared.run(listCommand, timeout: 60)
+        var copied = 0
+        for line in listing.output.components(separatedBy: "\n") where line.hasPrefix("CHG ") {
+            let parts = line.split(separator: " ", maxSplits: 2).map(String.init)
+            guard parts.count == 3, let size = Int(parts[1]), size > 0 else { continue }
+            let relative = String(parts[2].dropFirst(2))   // "./path" -> "path"
+            let host = URL(fileURLWithPath: root).appendingPathComponent(relative)
+            if let attributes = try? FileManager.default.attributesOfItem(atPath: host.path),
+               (attributes[.size] as? Int) == size {
+                continue   // unchanged
+            }
+            let encoded = await LinuxGuestSession.shared.run(
+                "base64 \"\(GuestWorkspaceSync.guestRoot)/\(relative)\"", timeout: 120)
+            let cleaned = encoded.output.filter { !$0.isWhitespace }
+            guard encoded.code == 0, encoded.status == 0,
+                  let data = Data(base64Encoded: cleaned), data.count == size else { continue }
+            try? FileManager.default.createDirectory(at: host.deletingLastPathComponent(),
+                                                     withIntermediateDirectories: true)
+            if (try? data.write(to: host, options: .atomic)) != nil {
+                copied += 1
+                console += "Copied back: \(relative)\n"
+            }
+        }
+        if copied > 0 {
+            console += "\(copied) file(s) the build produced were copied into the project.\n"
+        }
     }
 
     /// Copies files the package command produced inside the guest back to the host.

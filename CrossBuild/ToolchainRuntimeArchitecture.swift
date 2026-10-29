@@ -28,7 +28,11 @@ enum ToolchainRuntimeArchitecture {
         // `unbundledToolchains`).
         "cmake", "ninja-build", "meson", "python3", "py3-pip", "py3-setuptools",
         "py3-wheel", "py3-installer", "py3-packaging", "py3-pyproject-hooks",
-        "pkgconf", "autoconf", "automake", "libtool", "nodejs", "npm"
+        "pkgconf", "autoconf", "automake", "libtool", "nodejs", "npm",
+        // Development headers and libraries a real build links against. Without
+        // these the compilers are present and every `#include <zlib.h>` fails.
+        "zlib-dev", "openssl-dev", "libffi-dev", "ncurses-dev", "readline-dev",
+        "sqlite-dev", "bzip2-dev", "linux-headers"
     ]
 
     /// Executables that indicate a packaging regression if they appear in the

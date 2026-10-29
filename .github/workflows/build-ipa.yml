@@ -180,7 +180,7 @@ jobs:
           # npm, and the autotools. Swift, Rust, Go, Zig, the JDK and Kotlin are
           # deliberately not here: each is 170-200 MB installed, which is the whole
           # IPA again, and none has a musl/aarch64 build for Swift or Kotlin.
-          RUNTIME_PACKAGES="bash coreutils findutils grep sed gawk git tar gzip xz ca-certificates make gcc g++ musl-dev binutils dpkg fakeroot cmake ninja-build meson python3 py3-pip py3-setuptools py3-wheel py3-installer py3-packaging py3-pyproject-hooks pkgconf autoconf automake libtool nodejs npm"
+          RUNTIME_PACKAGES="bash coreutils findutils grep sed gawk git tar gzip xz ca-certificates make gcc g++ musl-dev binutils dpkg fakeroot cmake ninja-build meson python3 py3-pip py3-setuptools py3-wheel py3-installer py3-packaging py3-pyproject-hooks pkgconf autoconf automake libtool nodejs npm zlib-dev openssl-dev libffi-dev ncurses-dev readline-dev sqlite-dev bzip2-dev linux-headers"
           echo "Installing runtime-only packages: $RUNTIME_PACKAGES"
 
           MIRROR_HOST="dl-cdn.alpinelinux.org"
@@ -372,6 +372,12 @@ jobs:
           # shell string around it is double-quoted, unlike its neighbours.
           sh_e "rm -rf /tmp/vme && mkdir -p /tmp/vme && printf \"project('v','c')\\nexecutable('v','main.c')\\n\" > /tmp/vme/meson.build && printf \"int main(void){return 0;}\\n\" > /tmp/vme/main.c && cd /tmp/vme && meson setup build >/dev/null && meson compile -C build" \
             || fail "meson cannot configure and build a project"
+
+          echo "=== development headers ==="
+          sh_e 'printf "#include <zlib.h>\nint main(void){return zlibVersion()==0;}\n" > /tmp/vz.c && cc /tmp/vz.c -lz -o /tmp/vz && /tmp/vz; printf "#include <openssl/ssl.h>\nint main(void){return 0;}\n" > /tmp/vs.c && cc /tmp/vs.c -lssl -lcrypto -o /tmp/vs && /tmp/vs' \
+            || fail "the guest cannot compile and link against zlib/openssl headers"
+          sh_e 'pkg-config --exists zlib && pkg-config --modversion zlib' \
+            || fail "pkg-config cannot find the installed libraries"
 
           echo "=== Python ==="
           sh_e 'python3 -c "import sqlite3, ssl, json, zlib; print(\"python3: ok\")"' \
