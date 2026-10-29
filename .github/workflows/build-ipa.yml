@@ -174,7 +174,13 @@ jobs:
           # the app offers: Theos and any Debian-packaging project end in
           # `dpkg-deb --build`, and neither the tool nor fakeroot was in the image,
           # so that button could only fail.
-          RUNTIME_PACKAGES="bash coreutils findutils grep sed gawk git tar gzip xz ca-certificates make gcc g++ musl-dev binutils dpkg fakeroot"
+          # Everything that can actually run in an aarch64 musl chroot and is small
+          # enough to ship: the GNU C/C++ toolchain, CMake/Ninja/Meson (Meson needs
+          # python3), CPython with pip/setuptools/wheel for build scripts, Node with
+          # npm, and the autotools. Swift, Rust, Go, Zig, the JDK and Kotlin are
+          # deliberately not here: each is 170-200 MB installed, which is the whole
+          # IPA again, and none has a musl/aarch64 build for Swift or Kotlin.
+          RUNTIME_PACKAGES="bash coreutils findutils grep sed gawk git tar gzip xz ca-certificates make gcc g++ musl-dev binutils dpkg fakeroot cmake ninja-build meson python3 py3-pip py3-setuptools py3-wheel py3-installer py3-packaging py3-pyproject-hooks pkgconf autoconf automake libtool nodejs npm"
           echo "Installing runtime-only packages: $RUNTIME_PACKAGES"
 
           MIRROR_HOST="dl-cdn.alpinelinux.org"
@@ -188,7 +194,7 @@ jobs:
           # Build button that cannot build. `cc` and `make` are what the app's own
           # commands call, so a missing one has to fail here rather than on the
           # user's device.
-          for tool in make cc gcc c++ g++ dpkg-deb ar ld; do
+          for tool in make cc gcc c++ g++ dpkg-deb ar ld cmake ninja meson python3 pip3 node npm; do
             if ! ./build-host/ish -f "$ROOT" /bin/sh -c "command -v $tool >/dev/null 2>&1"; then
               echo "::error::$tool is missing from the Linux rootfs; builds will fail at runtime"
               exit 1
@@ -206,7 +212,10 @@ jobs:
           # The forbidden list in ToolchainRuntimeArchitecture and docs/ says CI
           # enforces it. It did not: nothing ever looked for these, so a package
           # that pulled in python3 or cmake would ship silently.
-          for tool in clang clang++ ld.lld cmake ninja meson python3 cargo rustc go zig swift swiftc; do
+          # The list shrank on purpose: CMake, Ninja, Meson and python3 are now
+          # included, because "the compiler is not in the image" was the reason the
+          # build buttons did not work, and these four are small enough to ship.
+          for tool in clang clang++ ld.lld cargo rustc go zig swift swiftc javac kotlinc; do
             if ./build-host/ish -f "$ROOT" /bin/sh -c "command -v $tool >/dev/null 2>&1"; then
               echo "::error::$tool must not be in the guest image (see forbiddenGuestBuildTools)"
               exit 1

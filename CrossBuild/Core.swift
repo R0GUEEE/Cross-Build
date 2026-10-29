@@ -485,6 +485,12 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func buildCommand() -> String {
+        // An explicit override wins over detection and over a custom compiler: it is
+        // the field on the Build screen, so it has to be the thing that screen shows.
+        if let override = appSettings?.buildCommandOverride.trimmingCharacters(in: .whitespacesAndNewlines),
+           !override.isEmpty {
+            return override
+        }
         if let custom = activeCompiler, !custom.buildCommand.isEmpty { return custom.buildCommand }
         if let recommendedBuildCommand, !recommendedBuildCommand.isEmpty { return applyingMakeFlags(recommendedBuildCommand) }
         return applyingMakeFlags(ToolchainRegistry.providers.first { $0.kind == selectedToolchain }?.buildCommands.first ?? "make")
@@ -499,7 +505,7 @@ final class WorkspaceModel: ObservableObject {
         case .go: return appendActionArguments("go clean", configuration.cleanArguments)
         case .zig: return appendActionArguments("rm -rf .zig-cache zig-cache zig-out", configuration.cleanArguments)
         case .python: return appendActionArguments("find . -name __pycache__ -type d -prune -exec rm -rf {} +", configuration.cleanArguments)
-        case .javascript: return appendActionArguments("npm run clean", configuration.cleanArguments)
+        case .javascript: return appendActionArguments("npm run clean --if-present", configuration.cleanArguments)
         }
     }
 
@@ -525,7 +531,7 @@ final class WorkspaceModel: ObservableObject {
         case .rust: return appendActionArguments("cargo build --release", configuration.packageArguments)
         case .go: return appendActionArguments("go build -trimpath ./...", configuration.packageArguments)
         case .zig: return appendActionArguments("zig build -Doptimize=ReleaseSafe", configuration.packageArguments)
-        case .python: return appendActionArguments("python3 -m build", configuration.packageArguments)
+        case .python: return appendActionArguments("python3 -m pip wheel . --no-deps -w dist", configuration.packageArguments)
         case .javascript: return appendActionArguments("npm pack", configuration.packageArguments)
         case .clang, .custom: return applyingMakeFlags(appendActionArguments("make package", configuration.packageArguments))
         }

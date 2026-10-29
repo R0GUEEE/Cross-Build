@@ -22,7 +22,13 @@ enum ToolchainRuntimeArchitecture {
         "make", "gcc", "g++", "musl-dev", "binutils",
         // `make package` is one of the app's four actions, and every Debian/Theos
         // packaging rule ends in dpkg-deb. Without these the button could only fail.
-        "dpkg", "fakeroot"
+        "dpkg", "fakeroot",
+        // Build systems and the runtimes their scripts need. Each is small enough
+        // to belong in the image; the heavyweight language toolchains are not (see
+        // `unbundledToolchains`).
+        "cmake", "ninja-build", "meson", "python3", "py3-pip", "py3-setuptools",
+        "py3-wheel", "py3-installer", "py3-packaging", "py3-pyproject-hooks",
+        "pkgconf", "autoconf", "automake", "libtool", "nodejs", "npm"
     ]
 
     /// Executables that indicate a packaging regression if they appear in the
@@ -33,8 +39,23 @@ enum ToolchainRuntimeArchitecture {
     /// whose app-owned equivalents are the better answer, and which would each add
     /// their own large tree.
     static let forbiddenGuestBuildTools = [
-        "clang", "clang++", "ld.lld", "cmake", "ninja",
-        "meson", "python3", "cargo", "rustc", "go", "zig", "swift"
+        "clang", "clang++", "ld.lld", "cargo", "rustc", "go", "zig", "swift", "javac", "kotlinc"
+    ]
+
+    /// Toolchains that are not in the image, with the reason, so the Build screen
+    /// can say what a project needs instead of offering a button that fails.
+    struct UnbundledToolchain: Identifiable {
+        let id: String
+        let reason: String
+    }
+
+    static let unbundledToolchains: [UnbundledToolchain] = [
+        .init(id: "swift", reason: "No Swift toolchain for musl/aarch64; Apple's is macOS-only."),
+        .init(id: "rust", reason: "Rust for aarch64 musl is ~180 MB installed, more than the whole app."),
+        .init(id: "go", reason: "Go is ~173 MB installed."),
+        .init(id: "zig", reason: "Zig is ~196 MB installed."),
+        .init(id: "java", reason: "A headless JDK is ~170 MB installed."),
+        .init(id: "kotlin", reason: "Kotlin needs a JDK plus the compiler, together over 250 MB.")
     ]
 
     /// The tools every build action invokes. CI asserts these are present.

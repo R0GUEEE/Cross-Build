@@ -53,8 +53,8 @@ struct RootView: View {
         VStack(spacing: 0) {
             Group {
                 switch section {
-                case .projects: ProjectsView(settings: settings) { section = .editor }
-                case .editor: IDEView(settings: settings)
+                case .projects: ProjectsView(settings: settings) { section = .build }
+                case .build: BuildView(settings: settings)
                 case .settings: SettingsView(settings: settings)
                 }
             }
@@ -69,7 +69,7 @@ struct RootView: View {
             if workspace.activeProjectRoot == nil, !workspace.projectFiles.isEmpty {
                 workspace.detectSampleProject()
             }
-            section = workspace.activeProjectRoot == nil ? .projects : .editor
+            section = .projects
         }
         .background(ForgeTheme.Surface.background)
         .alert("Allow Agent Commands?", isPresented: Binding(
