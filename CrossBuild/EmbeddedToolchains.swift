@@ -62,7 +62,11 @@ final class EmbeddedToolchainManager: ObservableObject {
 
     func probe() {
         available[javascript.id]=javascript.version
-        available[logos.id]=logos.version
+        // `logos-preprocessor` is not registered: the "engine" only scans for
+        // `%hook` and returns the source unchanged. Registering it made
+        // `isAvailable("theos")` (via the theos -> logos mapping) permanently true,
+        // so the catalogue showed Theos as READY when a tweak could not be built.
+        _ = logos
         // The bridge being compiled in says nothing about the standard library.
         // Without this check Diagnostics showed "Python • Ready" on a build whose
         // every run failed at `ensureStarted` with "stdlib missing".
@@ -87,7 +91,11 @@ final class EmbeddedToolchainManager: ObservableObject {
         switch catalogID {
         case "python": return "python3"
         case "node", "typescript": return "javascriptcore"
-        case "theos", "logos": return "logos-preprocessor"
+        case "theos":
+            // No embedded engine: the guest has make and dpkg-deb, but not the Theos
+            // makefiles, the Logos preprocessor or an iPhoneOS SDK.
+            return "theos"
+        case "logos": return "logos-preprocessor"
         default: return catalogID
         }
     }

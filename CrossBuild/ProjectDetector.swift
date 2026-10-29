@@ -116,7 +116,9 @@ enum ProjectDetector {
         }
         if has("pyproject.toml") || has("setup.py") || has("requirements.txt") {
             systems.insert(.python); hit(.python, 38, "manifest", "Python project metadata")
-            candidates.append(.init(system: .python, toolchain: .python, command: "python3 -m build", confidence: 0.88, reason: "Python packaging metadata"))
+            // `pip wheel` works offline; `python3 -m build` needs PyPA's `build`, which is
+            // not in the image (pip/setuptools/wheel only).
+            candidates.append(.init(system: .python, toolchain: .python, command: "python3 -m pip wheel . --no-deps -w dist", confidence: 0.88, reason: "Python packaging metadata"))
         }
         if has("build.gradle") || has("build.gradle.kts") {
             systems.insert(.gradle); hit(.custom, 35, "build-system", "Gradle build")

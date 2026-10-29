@@ -827,6 +827,9 @@ final class WorkspaceModel: ObservableObject {
     @Published private(set) var guestToolchainError: String?
     private var didProbeGuestToolchain = false
     private var isProbingGuestToolchain = false
+    /// The probe currently in flight, so a Build tap during launch *waits* for the
+    /// answer instead of treating "not answered" as "no compiler".
+    private var guestProbeInFlight: Task<Void, Never>?
 
     /// Asks the guest which build tools it actually has.
     ///
@@ -842,9 +845,31 @@ final class WorkspaceModel: ObservableObject {
         // usually the guest still booting when the app first asks -- left every
         // screen reporting no compilers for the rest of the session, with no way
         // to retry.
-        guard !didProbeGuestToolchain, !isProbingGuestToolchain else { return }
+        if didProbeGuestToolchain { return }
+        if let inFlight = guestProbeInFlight {
+            // A second caller must not run a second probe, and must not return
+            // early either: it has to see the first one's answer.
+            await inFlight.value
+            return
+        }
+        await runGuestProbe()
+    }
+
+    private func runGuestProbe() async {
         isProbingGuestToolchain = true
+        // Task-scoped so a concurrent caller can await it: `probeGuestToolchain`
+        // used to return immediately when another probe was in flight, and a Build
+        // tap right after launch then read an empty tool list as "no compilers".
+        let inFlight = Task { [weak self] in
+            defer { self?.guestProbeInFlight = nil }
+            await self?.performGuestProbe()
+        }
+        guestProbeInFlight = inFlight
         defer { isProbingGuestToolchain = false }
+        await inFlight.value
+    }
+
+    private func performGuestProbe() async {
         // Every executable any build action can reach for, not just the five
         // required ones. The old list stopped at make/cc/gcc/c++/g++/cmake/ninja/
         // python3/git, so a Swift or Rust or Go project was never checked at all:
@@ -908,6 +933,10 @@ final class WorkspaceModel: ObservableObject {
             current.append(character)
         }
         guard !current.isEmpty, !(current.contains("=") && !current.hasPrefix("-")) else { return nil }
+        // `./gradlew` is a script, not a program: what has to exist for it to run is
+        // the interpreter in its shebang, and what it needs to do its job is a JDK.
+        // The JDK is the part this build does not carry.
+        if current == "./gradlew" || current.hasSuffix("/gradlew") { return "java" }
         return current
     }
 

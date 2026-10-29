@@ -1,9 +1,15 @@
 import Foundation
 
+/// What kind of thing an entry would be *if it shipped*.
+///
+/// Nothing here is an availability claim. These labels used to be printed as fact
+/// ("In-App Library", "Bundled Support") for fourteen entries whose modules do not
+/// exist in the repository at all; what the app can actually do comes from
+/// `scanBundle()` and the guest probe, not from this enum.
 enum AppToolchainAvailability: String, Codable {
-    case embedded = "Embedded Engine"
-    case nativeLibrary = "In-App Library"
-    case bundledSupport = "Bundled Support"
+    case embedded = "Embedded engine"
+    case nativeLibrary = "Native library"
+    case bundledSupport = "Support files"
 }
 
 struct AppToolchainLibrary: Identifiable, Codable, Hashable {
@@ -31,7 +37,10 @@ enum AppToolchainLibraries {
     static let all: [AppToolchainLibrary] = [
         .init(id:"clang",name:"LLVM / Clang",module:"CrossBuildClang",availability:.nativeLibrary,version:"native",languages:["C","C++","Objective-C","Objective-C++","Assembly"],resourcePath:"Toolchains/LLVM"),
         .init(id:"swift",name:"Swift / SwiftPM",module:"CrossBuildSwift",availability:.nativeLibrary,version:"native",languages:["Swift"],resourcePath:"Toolchains/Swift"),
-        .init(id:"theos",name:"Theos / Logos",module:"CrossBuildTheos",availability:.bundledSupport,version:"bundled",languages:["Logos","Objective-C","Objective-C++"],resourcePath:"Toolchains/Theos"),
+        // Theos is a makefile framework plus a toolchain, not a library: `make`,
+        // ld, as and dpkg-deb are present in the guest, the Theos makefiles, the
+        // Logos preprocessor and an iPhoneOS SDK are not.
+        .init(id:"theos",name:"Theos / Logos",module:"CrossBuildTheos",availability:.bundledSupport,version:"framework",languages:["Logos"],resourcePath:"Toolchains/Theos"),
         .init(id:"rust",name:"Rust / Cargo",module:"CrossBuildRust",availability:.nativeLibrary,version:"native",languages:["Rust"],resourcePath:"Toolchains/Rust"),
         .init(id:"go",name:"Go",module:"CrossBuildGo",availability:.nativeLibrary,version:"native",languages:["Go"],resourcePath:"Toolchains/Go"),
         .init(id:"zig",name:"Zig",module:"CrossBuildZig",availability:.nativeLibrary,version:"native",languages:["Zig","C","C++"],resourcePath:"Toolchains/Zig"),
@@ -82,9 +91,12 @@ enum AppToolchainLibraries {
         case "python":
             return guestTools.contains("python3") ? "python3" : nil
         case "theos":
-            // Theos itself is a makefile framework, not a compiler: what the guest
-            // can contribute is the packaging step it ends with.
-            return guestTools.contains("dpkg-deb") ? "make + dpkg-deb" : nil
+            // Deliberately nil. Having make and dpkg-deb is the *packaging* half of
+            // Theos; the half that compiles a tweak needs `$THEOS/makefiles`, the
+            // Logos preprocessor and an iPhoneOS SDK, none of which ship. Reporting
+            // it as available meant a tweak project reached `make package` and failed
+            // with "No rule to make target" instead of "not bundled".
+            return nil
         case "clang":
             // The guest carries the GNU toolchain, not clang. It covers the C and
             // C++ languages this entry advertises; Objective-C does not come with

@@ -110,7 +110,31 @@ jobs:
           meson compile -C build-ios
           ls -la build-ios/*.a
 
+      - name: Download a verified rootfs when one is supplied
+        # A repository variable, not a secret: the id of a workflow run whose
+        # CrossBuild-verified-rootfs artifact is known to boot on a device. When set,
+        # CI's own rootfs is not built, because "it works under the macOS host build"
+        # and "it works in the app" are not the same claim.
+        if: vars.VERIFIED_ROOTFS_RUN_ID != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: CrossBuild-verified-rootfs
+          path: /tmp/verified-rootfs
+          run-id: ${{ vars.VERIFIED_ROOTFS_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Use the verified rootfs
+        if: vars.VERIFIED_ROOTFS_RUN_ID != ''
+        run: |
+          set -euo pipefail
+          test -d /tmp/verified-rootfs/fakefs-root || { echo "::error::verified rootfs artifact has no fakefs-root"; exit 1; }
+          rm -rf Vendor/linuxkit/fakefs-root
+          cp -R /tmp/verified-rootfs/fakefs-root Vendor/linuxkit/fakefs-root
+          echo "using the verified rootfs from run ${{ vars.VERIFIED_ROOTFS_RUN_ID }}"
+
       - name: Build Linux rootfs (fakefs image)
+        if: vars.VERIFIED_ROOTFS_RUN_ID == ''
+
         run: |
           set -euo pipefail
           brew install libarchive
@@ -151,6 +175,10 @@ jobs:
           du -sh "$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root"
 
       - name: Provision minimal Linux runtime root
+        # Skipped for a supplied rootfs: it was verified on a device, and rebuilding
+        # it here would replace the thing that is known to work with the thing that
+        # is not.
+        if: vars.VERIFIED_ROOTFS_RUN_ID == ''
         run: |
           set -euo pipefail
           cd Vendor/linuxkit
@@ -343,6 +371,7 @@ jobs:
             || { echo "::error::the guest cannot link C++ after the trim"; exit 1; }
 
       - name: Verify the engine archives
+        if: vars.VERIFIED_ROOTFS_RUN_ID == ''
         # "The Linux shell needs to be rebuilt" is only answered if the rebuild is
         # checked: the app links three static libraries, and an empty or wrong-arch
         # archive fails at the link or, worse, at boot.
@@ -377,6 +406,7 @@ jobs:
           echo "engine archives verified"
 
       - name: Verify every bundled toolchain
+        if: vars.VERIFIED_ROOTFS_RUN_ID == ''
         # The image having /usr/bin/cmake is not the same as cmake building a
         # project. Each toolchain below is exercised the way the app will use it,
         # so a broken one fails the build instead of the user's first build.
@@ -519,6 +549,17 @@ jobs:
           cp -R "$APP" Payload/
           zip -qry CrossBuild.ipa Payload
           shasum -a 256 CrossBuild.ipa | tee CrossBuild.ipa.sha256
+
+      - name: Upload the rootfs for device verification
+        # Only when CI built it. Installs this as `VERIFIED_ROOTFS_RUN_ID` once it has
+        # booted on a device, after which every build uses the same bits instead of
+        # reproducing them from a live repository.
+        if: vars.VERIFIED_ROOTFS_RUN_ID == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: CrossBuild-rootfs
+          path: Vendor/linuxkit/fakefs-root
+          if-no-files-found: error
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
