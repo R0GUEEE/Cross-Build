@@ -19,7 +19,10 @@ enum ToolchainRuntimeArchitecture {
     static let guestRuntimePackages = [
         "bash", "coreutils", "findutils", "grep", "sed", "gawk",
         "git", "tar", "gzip", "xz", "ca-certificates",
-        "make", "gcc", "g++", "musl-dev", "binutils"
+        "make", "gcc", "g++", "musl-dev", "binutils",
+        // `make package` is one of the app's four actions, and every Debian/Theos
+        // packaging rule ends in dpkg-deb. Without these the button could only fail.
+        "dpkg", "fakeroot"
     ]
 
     /// Executables that indicate a packaging regression if they appear in the

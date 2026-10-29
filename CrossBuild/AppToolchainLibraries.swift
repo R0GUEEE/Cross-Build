@@ -69,6 +69,12 @@ enum AppToolchainLibraries {
         switch id {
         case "make":
             return guestTools.contains("make") ? "make" : nil
+        case "dpkg":
+            return guestTools.contains("dpkg-deb") ? "dpkg-deb" : nil
+        case "theos":
+            // Theos itself is a makefile framework, not a compiler: what the guest
+            // can contribute is the packaging step it ends with.
+            return guestTools.contains("dpkg-deb") ? "make + dpkg-deb" : nil
         case "clang":
             // The guest carries the GNU toolchain, not clang. It covers the C and
             // C++ languages this entry advertises; Objective-C does not come with
@@ -97,8 +103,11 @@ enum AppToolchainLibraries {
                              location: "Python.framework")
             }
             if lib.id == "clang" {
-                let payload = hasNativePayload(for: lib)
-                let ok = ClangEmbeddedBridge().isLinked && payload
+                // One definition of "clang is usable", shared with the compile path:
+                // a payload manifest that names at least one linked library. The
+                // local test below only proves a *directory* exists, which is what
+                // let a staged-but-empty payload advertise a working compiler.
+                let ok = ToolchainRuntimeArchitecture.hasLinkedCompiler
                 // This used to return early with no `guestBacked`, which bypassed
                 // the guest lookup directly below it -- so the C/C++ entry read
                 // "Not bundled" on an install whose guest has a working gcc/g++.
@@ -156,7 +165,14 @@ enum AppToolchainLibraries {
         // ToolchainRuntimeArchitecture.payloadURL). Nothing looked there, so a
         // staged payload could never make its own row present.
         if let staged = ToolchainRuntimeArchitecture.payloadURL(for: lib.id),
-           fm.fileExists(atPath: staged.path) { return true }
+           let walker = fm.enumerator(at: staged, includingPropertiesForKeys: [.isRegularFileKey]) {
+            // A directory is not a payload: the CI step that stages it is allowed to
+            // fail, so an empty tree arrives as often as a filled one.
+            for case let url as URL in walker
+            where ["a", "dylib", "framework", "xcframework"].contains(url.pathExtension.lowercased()) {
+                return true
+            }
+        }
 
         guard let relative = lib.resourcePath,
               let resourceRoot = Bundle.main.resourceURL?.appendingPathComponent(relative),

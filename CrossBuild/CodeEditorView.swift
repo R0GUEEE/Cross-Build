@@ -58,7 +58,9 @@ struct CodeEditorView: UIViewRepresentable {
         if uiView.textView.text != text {
             let selected = uiView.textView.selectedRange
             uiView.textView.text = text
-            uiView.textView.selectedRange = NSRange(location: min(selected.location, text.utf16.count), length: 0)
+            let location = min(selected.location, text.utf16.count)
+            uiView.textView.selectedRange = NSRange(location: location,
+                                                    length: min(selected.length, text.utf16.count - location))
             context.coordinator.highlight(text: text, fileName: fileName)
         }
         // The text view reports selection changes upward but never accepts them,
@@ -155,8 +157,14 @@ struct CodeEditorView: UIViewRepresentable {
             let location = min(textView.selectedRange.location, ns.length)
             let prefix = ns.substring(to: location)
             let line = prefix.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
-            let lastBreak = prefix.lastIndex(of: "\n")
-            let column = lastBreak.map { prefix.distance(from: $0, to: prefix.endIndex) } ?? prefix.count + 1
+            // UTF-16 like every other offset here. Counting grapheme clusters put the
+            // reported column one short per emoji/combining sequence, so the status
+            // bar and Go to Line disagreed with the caret.
+            let nsPrefix = prefix as NSString
+            let lastBreak = nsPrefix.range(of: "\n", options: .backwards)
+            let column = lastBreak.location == NSNotFound
+                ? nsPrefix.length + 1
+                : nsPrefix.length - (lastBreak.location + lastBreak.length) + 1
             let value = CodeEditorSelection(line: line, column: column,
                                             selectedLength: textView.selectedRange.length,
                                             range: textView.selectedRange)
@@ -193,10 +201,17 @@ struct CodeEditorView: UIViewRepresentable {
             guard textView.text == text, parent.fileName == fileName else { return }
             let selected = textView.selectedRange
             let baseFont = UIFont.monospacedSystemFont(ofSize: parent.options.fontSize, weight: .regular)
-            let attributed = NSMutableAttributedString(string: text, attributes: [
-                .font: baseFont,
-                .foregroundColor: UIColor.label
-            ])
+            // Restyle the live text storage instead of assigning `attributedText`.
+            //
+            // Assigning attributedText is a document replacement: it clears in-flight
+            // marked text (so CJK/emoji composition is cancelled mid-word), resets
+            // typing attributes, and pushes a whole-document entry onto the undo
+            // stack every time the debounce fires -- one Undo after a pause jumped
+            // the file back past several keystrokes.
+            let attributed = textView.textStorage
+            attributed.beginEditing()
+            attributed.setAttributes([.font: baseFont, .foregroundColor: UIColor.label],
+                                     range: NSRange(location: 0, length: attributed.length))
             let language = EditorLanguage(fileName: fileName)
             apply(pattern: language.commentPattern, color: .systemGray, to: attributed)
             apply(pattern: #"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'"#, color: .systemRed, to: attributed)
@@ -214,9 +229,13 @@ struct CodeEditorView: UIViewRepresentable {
             if parent.options.showInvisibleCharacters {
                 shadeWhitespace(in: attributed)
             }
+            attributed.endEditing()
             applyingAttributes = true
-            textView.attributedText = attributed
-            textView.selectedRange = NSRange(location: min(selected.location, attributed.length), length: min(selected.length, max(0, attributed.length - min(selected.location, attributed.length))))
+            textView.typingAttributes = [.font: baseFont, .foregroundColor: UIColor.label]
+            if selected.location <= attributed.length {
+                textView.selectedRange = NSRange(location: selected.location,
+                                                 length: min(selected.length, attributed.length - selected.location))
+            }
             applyingAttributes = false
         }
 

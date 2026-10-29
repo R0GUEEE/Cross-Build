@@ -87,6 +87,7 @@ struct SettingsView: View {
                 Section("About") {
                     LabeledContent("Version", value: Self.version)
                     LabeledContent("Workspace", value: workspace.files.workspaceRoot.lastPathComponent)
+                    NavigationLink("Licences") { LicenceView() }
                     Button("Copy workspace path") {
                         UIPasteboard.general.string = workspace.files.workspaceRoot.path
                     }

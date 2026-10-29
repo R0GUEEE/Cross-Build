@@ -29,6 +29,7 @@ iconPath: CrossBuild/Assets.xcassets/AppIcon.appiconset/AppIcon.png
 # All four are produced by the vendoring step (Tools/build-local.sh), not committed.
 resources:
   - Vendor/linuxkit/fakefs-root
+  - THIRD-PARTY-NOTICES.md
   - Vendor/Python/stdlib/python
   - Vendor/Python/stdlib/app
   - CrossBuild/Resources/Toolchains

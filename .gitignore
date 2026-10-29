@@ -7,3 +7,6 @@ CrossBuild.xcodeproj/
 
 # Vendored at build time (see the "Vendor Python runtime" CI step)
 Vendor/
+
+# Staged by .github/workflows/native-toolchains.yml (hundreds of MB of LLVM .a)
+NativeToolchains/

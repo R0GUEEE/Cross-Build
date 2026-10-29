@@ -140,7 +140,27 @@ enum IOSSDKDiscovery {
         return !url.standardizedFileURL.path.hasPrefix(bundlePath)
     }
 
+    /// The newest supplied SDK.
+    ///
+    /// Sorted as text, `iPhoneOS9.0.sdk` beat `iPhoneOS17.0.sdk` ("9" > "1"), and
+    /// the loser was exported as SDKROOT -- so an old SDK on the device silently
+    /// won over the current one.
     static func preferred() -> URL? {
-        availableSDKs().sorted { $0.lastPathComponent > $1.lastPathComponent }.first
+        availableSDKs().max { version(of: $0) < version(of: $1) }
+    }
+
+    /// `iPhoneOS17.2.sdk` -> (17, 2). Unparseable names sort lowest.
+    private static func version(of url: URL) -> (Int, Int) {
+        let name = url.lastPathComponent
+        guard let regex = try? NSRegularExpression(pattern: #"iOS(\d+)(?:\.(\d+))?"#),
+              let match = regex.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)),
+              match.numberOfRanges > 1,
+              let majorRange = Range(match.range(at: 1), in: name),
+              let major = Int(name[majorRange]) else { return (0, 0) }
+        var minor = 0
+        if match.numberOfRanges > 2, let range = Range(match.range(at: 2), in: name) {
+            minor = Int(name[range]) ?? 0
+        }
+        return (major, minor)
     }
 }

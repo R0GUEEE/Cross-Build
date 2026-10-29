@@ -89,14 +89,32 @@ final class GuestWorkspaceSync: ObservableObject {
 
         var pushed = 0
         var output = ""
+
+        // Clear the guest tree exactly once, before the batches.
+        //
+        // This used to sit inside the loop, which meant batch 2 deleted everything
+        // batch 1 had written: any project larger than one batch (~72 KB of source)
+        // arrived with only its tail, and the build then failed on a "missing"
+        // header that had been copied a moment earlier.
+        if !batches.isEmpty {
+            let reset = "( set -e\n"
+                + "rm -rf \(Self.quoted(Self.guestRoot))\n"
+                + "mkdir -p \(Self.quoted(Self.guestRoot))\n)"
+            let result = await session.run(reset, timeout: 60)
+            if result.code != 0 || result.status != 0 {
+                output += result.output
+                lastSummary = "Copy failed before any file was written; the guest workspace could not be cleared."
+                return PushResult(pushed: 0, skipped: skipped, output: output,
+                                  complete: false, failedBatch: 0)
+            }
+        }
+
         var failedBatch: Int?
         for (index, batch) in batches.enumerated() {
             // A subshell, so `set -e` stops this batch at its first failed write
             // without leaving the option set on the long-lived session shell,
             // where the next failing command would take the shell down with it.
             let script = "( set -e\n"
-                + "rm -rf \(Self.quoted(Self.guestRoot))\n"
-                + "mkdir -p \(Self.quoted(Self.guestRoot))\n"
                 + batch.joined(separator: "\n")
                 + "\n)"
             let result = await session.run(script, timeout: 180)

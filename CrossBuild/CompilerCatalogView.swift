@@ -42,7 +42,7 @@ struct CompilerCatalogView: View {
                                 HStack {
                                     Text(item.category.rawValue)
                                     Text("•")
-                                    Text(workspace.embeddedToolchains.isAvailable(item.id) ? "Embedded • Ready" : (AppToolchainLibraries.item(item.id)?.availability.rawValue ?? "Integrated"))
+                                    Text(statusText(for: item))
                                 }.font(.caption2).foregroundStyle(.secondary)
                             }
                             Spacer()
@@ -55,6 +55,20 @@ struct CompilerCatalogView: View {
             .navigationTitle("Toolchain Catalogue")
             .sheet(item: $selected) { CompilerCatalogDetailView(item: $0).environmentObject(workspace) }
         }
+    }
+
+    /// What this build can actually do with the entry.
+    ///
+    /// It used to print the catalogue's *declaration* ("In-App Library",
+    /// "Bundled Support") when no engine was available, so an unavailable entry
+    /// looked exactly like an installed one. "Not in this build" is the honest
+    /// answer, and "Via guest" covers make/clang, which the guest really provides.
+    private func statusText(for item: CompilerCatalogItem) -> String {
+        if workspace.embeddedToolchains.isAvailable(item.id) { return "Ready" }
+        // Cheap: `guestProvider` reads the array the probe published. Calling
+        // `scanBundle()` here would walk the app bundle once per row, per render.
+        if let provider = AppToolchainLibraries.guestProvider(for: item.id) { return "Via guest · \(provider)" }
+        return "Not in this build"
     }
 
     private func chip(_ title: String, active: Bool, action: @escaping () -> Void) -> some View {
