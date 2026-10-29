@@ -102,14 +102,20 @@ final class AppSettings: ObservableObject {
     @AppStorage("runtime.terminalPersistent") var terminalPersistentSession = true
 }
 
+/// The app has three places to be: the projects you can open, the one you are
+/// editing, and the settings that change either.
+///
+/// There used to be four tabs, two of which (Compiler, Agent) were dashboards of
+/// facts about the app rather than places to do something. They are reachable from
+/// Settings → Advanced and from the editor's menu, which is where someone looks
+/// when they already want them.
 enum AppSection: String, CaseIterable, Identifiable {
-    case workspace = "Workspace", compiler = "Compiler", agent = "Agent", settings = "Settings"
+    case projects = "Projects", editor = "Editor", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
         switch self {
-        case .workspace: return "rectangle.split.3x1"
-        case .compiler: return "cpu"
-        case .agent: return "sparkles"
+        case .projects: return "square.grid.2x2"
+        case .editor: return "chevron.left.forwardslash.chevron.right"
         case .settings: return "gearshape"
         }
     }

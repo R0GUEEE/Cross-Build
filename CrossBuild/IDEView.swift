@@ -1,65 +1,64 @@
 import SwiftUI
 import UIKit
 
+/// The editor screen.
+///
+/// Redesigned around one idea: a file, a Build button, and everything else behind
+/// two taps. The previous layout stacked five permanent chrome rows (toolbar,
+/// tab bar, detection strip, edit menu bar, status bar) on top of a phone-sized
+/// editor, and each row was another place to look for the same thing.
+///
+/// What is left: one header row, the open tabs, the code, one status line. Files
+/// open in a sheet, output in a sheet, and every command lives in the "more" menu
+/// rather than in a strip of menus.
 struct IDEView: View {
     @EnvironmentObject private var workspace: WorkspaceModel
     @ObservedObject var settings: AppSettings
-    // Deliberately no size-class branching: the panel height used to change with
-    // the window, so the same app looked like a different app when the window
-    // moved. A fixed height that the user collapses is predictable.
+
+    @State private var showFiles = false
+    @State private var showConsole = false
+    @State private var showConsolePanel: ForgePanel = .terminal
     @State private var showCompilerManager = false
-    @State private var showGitHub = false
     @State private var showWorkspaceConfiguration = false
-    @State private var bottomPanel: ForgePanel = .terminal
-    @State private var bottomExpanded = true
-    @State private var pendingCloseDocument: EditorDocument?
-    @State private var editorSelection = CodeEditorSelection()
+    @State private var showCompilerConfiguration = false
+    @State private var showAgent = false
     @State private var showGoToLine = false
     @State private var goToLine = 1
-    /// Counted off the render path. `workspace.projectFiles.count` walks the whole
-    /// file tree (`flattened` rebuilds it) and `makefileTargets()` reads the
-    /// Makefile off disk -- both were evaluated on every body render, once inside
-    /// the navigator header and once inside the Build menu's content builder.
-    @State private var projectFileCount = 0
-    @State private var makeTargets: [String] = []
-    /// Which find/replace match is current, advanced by the up/down buttons.
+    @State private var pendingCloseDocument: EditorDocument?
+    @State private var editorSelection = CodeEditorSelection()
     @State private var currentMatch = 0
-    /// The bottom panel's height, scaled rather than fixed, so a large text size
-    /// does not leave the console clipped.
-    @ScaledMetric(relativeTo: .caption) private var bottomPanelHeight: CGFloat = 240
+    /// Dismisses the failure banner for the run it belongs to, not forever.
+    @State private var dismissedBannerAt: Date?
 
     var body: some View {
-        NavigationSplitView {
-            navigator
-                .navigationTitle("Cross Build")
-                // Applies the "Navigator width" preference, which used to be a
-                // slider that nothing read.
-                .navigationSplitViewColumnWidth(min: 220, ideal: settings.navigatorWidth, max: 480)
-        } detail: {
-            editorWorkspace
+        VStack(spacing: 0) {
+            header
+            if workspace.editor.showFind { findBar; Divider() }
+            buildBanner
+            if workspace.editor.documents.isEmpty {
+                emptyState
+            } else {
+                tabBar
+                Divider()
+                editor
+            }
+            Divider()
+            statusBar
         }
+        .background(ForgeTheme.Surface.background)
+        .sheet(isPresented: $showFiles) { filesSheet }
+        .sheet(isPresented: $showConsole) { consoleSheet }
         .sheet(isPresented: $showCompilerManager) {
             CompilerManagerView().environmentObject(workspace)
-        }
-        .sheet(isPresented: $showGitHub, onDismiss: {
-            workspace.files.reload()
-            if let importedPath = workspace.github.lastImportedPath {
-                workspace.detectProject(at: importedPath)
-            }
-        }) {
-            GitHubCloneView(github: workspace.github)
         }
         .sheet(isPresented: $showWorkspaceConfiguration) {
             WorkspaceConfigurationView(config: workspace.configuration).environmentObject(workspace)
         }
-        .onAppear {
-            if let configured = ForgePanel(rawValue: settings.defaultBottomPanel) { bottomPanel = configured }
-            bottomExpanded = settings.defaultBottomPanelExpanded
+        .sheet(isPresented: $showCompilerConfiguration) {
+            CompilerConfigurationView(config: workspace.compilerConfiguration).environmentObject(workspace)
         }
-        // Re-read when the tree is rebuilt or the active project changes.
-        .task(id: "\(workspace.files.roots.count)-\(workspace.activeProjectRoot ?? "")") {
-            projectFileCount = workspace.projectFiles.count
-            makeTargets = workspace.makefileTargets()
+        .sheet(isPresented: $showAgent) {
+            AgentDashboardView(settings: settings).environmentObject(workspace)
         }
         .alert(item: $pendingCloseDocument) { doc in
             Alert(
@@ -69,249 +68,427 @@ struct IDEView: View {
                 secondaryButton: .cancel()
             )
         }
-    }
-
-    private var navigator: some View {
-        VStack(spacing: 0) {
-            HStack {
-                VStack(alignment:.leading,spacing:2) {
-                    Text("Project").font(.headline)
-                    Text(projectFileCount == 1 ? "1 file" : "\(projectFileCount) files")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button { openGitHubImporter() } label: { Image(systemName:"arrow.down.circle") }.buttonStyle(.plain)
-                Button { workspace.files.reload() } label: { Image(systemName:"arrow.clockwise") }.buttonStyle(.plain)
-                Menu {
-                    Section("Project") {
-                        Button("Refresh All Directories", systemImage: "arrow.clockwise") { workspace.files.reload() }
-                        Button("Show App Files & Folders", systemImage: "square.stack.3d.up") { workspace.files.revealAllAppDirectories() }
-                        Button("Workspace Only", systemImage: "folder") { workspace.files.revealWorkspaceOnly() }
-                        Button("Save Current File", systemImage: "square.and.arrow.down", action: workspace.saveEditor)
-                        Button("Detect Project & Compiler", systemImage: "waveform.badge.magnifyingglass", action: workspace.detectSampleProject)
-                    }
-                    Section("Source Control") {
-                        Button("Clone from GitHub", systemImage: "arrow.down.circle") { openGitHubImporter() }
-                    }
-                    Section("File Operations") {
-                        Button("New File", systemImage: "doc.badge.plus") { createAndOpenNewFile() }
-                        Button("New Folder", systemImage: "folder.badge.plus") { workspace.files.createFolder(named: "New Folder") }
-                        if let selected = workspace.files.selected {
-                            Button("Duplicate Selected", systemImage: "plus.square.on.square") { workspace.files.duplicate(selected) }
-                            Button("Copy Selected Path", systemImage: "doc.on.doc") { UIPasteboard.general.string = selected.path }
-                        }
-                    }
-                    Section("Tools") {
-                        Button("Manage Compilers", systemImage: "cpu") { showCompilerManager = true }
-                        Button("Workspace Configuration", systemImage: "slider.horizontal.3") { showWorkspaceConfiguration = true }
-                        Button("Toggle Bottom Panel", systemImage: "rectangle.bottomthird.inset.filled") { bottomExpanded.toggle() }
-                    }
-                } label: { Image(systemName: "ellipsis.circle") }
-            }.padding(10)
-
-            Divider()
-            WorkspaceBrowserView(files: workspace.files,
-                                 onDelete: workspace.deleteFile,
-                                 onRename: workspace.renameFile,
-                                 confirmDeletes: settings.confirmDestructiveActions,
-                                 onOpen: { workspace.openFile($0) },
-                                 onSetActiveProject: { workspace.useFolderAsActiveProject($0) })
+        .alert("Go to Line", isPresented: $showGoToLine) {
+            TextField("Line", value: $goToLine, format: .number)
+            Button("Go") { jumpToLine(goToLine) }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("1 to \(max(1, workspace.editorText.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }))")
+        }
+        .alert("Run Again?", isPresented: $pendingRerun) {
+            Button("Run") { performBuild() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("A command is already running. Wait for it to finish, then build.")
         }
     }
 
-    private var editorWorkspace: some View {
-        VStack(spacing: 0) {
-            topBar
-            Divider()
-            tabBar
-            Divider()
-            detectionBar
-            if workspace.editor.showFind {
-                // Matches are computed here rather than stored, so the count is
-                // always about the text on screen. The bar only exists while
-                // searching, which is what keeps this off the render path the
-                // rest of the time.
-                let matches = findMatches()
-                HStack(spacing: 6) {
-                    TextField("Find", text: Binding(get: { workspace.editor.findText },
-                                                    set: { workspace.editor.findText = $0; currentMatch = 0 })).textFieldStyle(.roundedBorder)
-                    Text(matches.isEmpty ? "no matches" : "\(clampedMatchIndex(matches) + 1) of \(matches.count)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize()
-                    Button { stepMatch(matches, by: -1) } label: { Image(systemName: "chevron.up") }
-                        .disabled(matches.isEmpty)
-                    Button { stepMatch(matches, by: 1) } label: { Image(systemName: "chevron.down") }
-                        .disabled(matches.isEmpty)
-                    TextField("Replace", text: Binding(get: { workspace.editor.replaceText }, set: { workspace.editor.replaceText = $0 })).textFieldStyle(.roundedBorder)
-                    Button("Replace") { replaceCurrentMatch(matches) }
-                        .disabled(matches.isEmpty)
-                    Button("All") {
-                        workspace.editor.replaceAll()
-                        if let doc = workspace.editor.selected { workspace.updateEditorText(doc.text) }
-                    }
-                    .disabled(matches.isEmpty)
-                    Button { workspace.editor.showFind = false } label: { Image(systemName: "xmark") }
-                }.padding(8).background(.secondary.opacity(0.04))
-            }
-            if workspace.editor.documents.isEmpty && settings.showWelcomeScreen {
-                WorkspaceHomeView(clone: { openGitHubImporter() }, configure: { showWorkspaceConfiguration = true }).environmentObject(workspace)
-            } else if workspace.editor.documents.isEmpty {
-                ForgeEmptyState(icon: "doc.text",
-                                title: "No File Open",
-                                message: "Open a file from the navigator, or start a new one.",
-                                actionTitle: "New File") { createAndOpenNewFile() }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                // The Go-to-Line alert lives here rather than on the split view.
-                // Two `.alert` modifiers on the same view is one more than
-                // SwiftUI honours, so it competed with the discard-changes alert
-                // and could silently do nothing.
-                editor
-                    .alert("Go to Line", isPresented: $showGoToLine) {
-                        TextField("Line", value: $goToLine, format: .number)
-                        Button("Go") { jumpToLine(goToLine) }
-                        Button("Cancel", role: .cancel) { }
-                    } message: {
-                        // One pass instead of `components(separatedBy:)`, which
-                        // allocated an array of every line per body evaluation.
-                        Text("1 to \(max(1, workspace.editorText.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }))")
-                    }
-            }
-            Divider()
-            if bottomExpanded {
-                BottomWorkbenchView(panel: $bottomPanel)
-                    .environmentObject(workspace)
-                    .frame(height: bottomPanelHeight)
-            } else {
-                collapsedPanelBar
-            }
-        }
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .navigationBar)
+    @State private var pendingRerun = false
+
+    // MARK: - Header
+
+    private var projectName: String {
+        guard let root = workspace.activeProjectRoot, !root.isEmpty else { return "Workspace" }
+        let name = URL(fileURLWithPath: root).lastPathComponent
+        return name.isEmpty ? "Workspace" : name
     }
 
-    private var topBar: some View {
+    private var header: some View {
         HStack(spacing: 10) {
+            Button { showFiles = true } label: {
+                Image(systemName: "folder")
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(width: 34, height: 34)
+                    .background(Color.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Files")
+
             VStack(alignment: .leading, spacing: 1) {
-                Text(workspace.editor.selected?.name ?? "Workspace").font(.headline)
-                // Where the open file actually is, rather than repeating the
-                // toolchain the detection strip already shows.
-                Text(workspace.editor.selected.map { workspace.relativePath($0.path) } ?? "No file open")
+                Text(projectName).font(.headline).lineLimit(1)
+                Text(workspace.editor.selected?.name ?? "No file open")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .truncationMode(.head)
             }
-            Spacer()
-            Menu {
-                Picker("Toolchain", selection: $workspace.selectedToolchain) {
-                    ForEach(ToolchainKind.allCases) { Text($0.rawValue).tag($0) }
-                }
-                Divider()
-                Button("Manage Compilers", systemImage: "slider.horizontal.3") { showCompilerManager = true }
-                Button("Auto Detect", systemImage: "sparkle.magnifyingglass", action: workspace.detectSampleProject)
-            } label: {
-                if settings.showStatusBadges {
-                    IDEStatusPill(icon: "cpu", text: workspace.activeCompiler?.name ?? workspace.selectedToolchain.rawValue)
-                } else {
-                    Text(workspace.activeCompiler?.name ?? workspace.selectedToolchain.rawValue)
-                        .font(.caption)
-                }
-            }
-            if workspace.editor.selected != nil {
-                Button { workspace.editor.showFind.toggle() } label: { Image(systemName: "magnifyingglass") }
-                    .buttonStyle(.bordered)
-                Button(action: workspace.saveEditor) { Image(systemName: "square.and.arrow.down") }
-                    .buttonStyle(.bordered)
-            }
-            // A menu rather than a single button: the project build is one of
-            // several things worth asking for, and building one file or one
-            // target should not mean editing the project command first.
-            Menu {
-                Button("Build Project", systemImage: "hammer.fill") { workspace.runBuild(settings: settings) }
-                if let document = workspace.editor.selected {
-                    Button("Build \(document.name)", systemImage: "doc.badge.gearshape") {
-                        workspace.buildIndividual(.init(kind: .file(workspace.relativePath(document.path)),
-                                                        title: document.name,
-                                                        detail: "Compile this file on its own"),
-                                                  settings: settings)
-                    }
-                }
-                let targets = makeTargets
-                if !targets.isEmpty {
-                    Menu("Build Make Target") {
-                        ForEach(targets.prefix(20), id: \.self) { target in
-                            Button("make \(target)") {
-                                workspace.buildIndividual(.init(kind: .makeTarget(target),
-                                                                title: "make \(target)",
-                                                                detail: "Make target"),
-                                                          settings: settings)
-                            }
-                        }
-                    }
-                }
-                Divider()
-                Button("Copy Workspace into Guest", systemImage: "arrow.down.to.line") {
-                    workspace.syncWorkspaceToGuest(settings: settings)
-                }
-            } label: {
+
+            Spacer(minLength: 4)
+
+            Button(action: performBuild) {
                 if workspace.isExecuting {
                     ProgressView().controlSize(.small)
+                        .frame(width: 22, height: 22)
                 } else {
-                    Label("Build", systemImage: "play.fill").font(.subheadline.weight(.semibold))
+                    Label("Build", systemImage: "hammer.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .labelStyle(.titleAndIcon)
                 }
             }
             .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
             .disabled(workspace.isExecuting)
-        }.padding(.horizontal, 12).padding(.vertical, 9)
+            .accessibilityHint("Builds \(projectName)")
+
+            Menu {
+                editMenu
+                buildMenu
+                toolsMenu
+                viewMenu
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 19))
+                    .frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("More")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+
+    @ViewBuilder private var editMenu: some View {
+        Section("File") {
+            Button("New File", systemImage: "doc.badge.plus") { createAndOpenNewFile() }
+            Button("Save", systemImage: "square.and.arrow.down", action: workspace.saveEditor)
+                .disabled(workspace.editor.selected == nil)
+            if let document = workspace.editor.selected {
+                Button("Close \(document.name)", systemImage: "xmark") { requestClose(document) }
+            }
+        }
+        Section("Edit") {
+            Button("Find & Replace", systemImage: "magnifyingglass") { workspace.editor.showFind.toggle() }
+            Button("Go to Line…", systemImage: "arrow.right.to.line") {
+                goToLine = editorSelection.line
+                showGoToLine = true
+            }
+            Button("Indent", systemImage: "increase.indent") { transformSelectedLines(indent: true) }
+            Button("Outdent", systemImage: "decrease.indent") { transformSelectedLines(indent: false) }
+            Button("Duplicate Line", systemImage: "plus.square.on.square") { duplicateCurrentLine() }
+            Button("Delete Line", systemImage: "trash") { deleteCurrentLine() }
+            Button("Toggle Comment", systemImage: "text.bubble") { toggleComment() }
+            Button("Trim Trailing Whitespace", systemImage: "eraser") { trimTrailingWhitespace() }
+        }
+    }
+
+    @ViewBuilder private var buildMenu: some View {
+        Section("Build") {
+            Button("Build Project", systemImage: "hammer.fill") { workspace.runBuild(settings: settings) }
+            if let document = workspace.editor.selected {
+                Button("Build \(document.name)", systemImage: "doc.badge.gearshape") {
+                    workspace.buildIndividual(.init(kind: .file(workspace.relativePath(document.path)),
+                                                    title: document.name,
+                                                    detail: "Compile this file on its own"),
+                                              settings: settings)
+                }
+            }
+            Button("Compile All Sources", systemImage: "square.stack.3d.down.right") {
+                workspace.compileAllIndividualSources(settings: settings)
+            }
+            Button("Clean", systemImage: "trash") {
+                workspace.runWorkflowCommand(workspace.cleanCommand(), settings: settings)
+            }
+            Button("Test", systemImage: "checkmark.seal") {
+                workspace.runWorkflowCommand(workspace.testCommand(), settings: settings)
+            }
+            Button("Package", systemImage: "shippingbox.fill") {
+                Task { _ = await workspace.runPackage(settings: settings) }
+            }
+            Button("Copy Project into Guest", systemImage: "arrow.down.to.line") {
+                workspace.syncWorkspaceToGuest(settings: settings)
+            }
+        }
+        Section("Output") {
+            Button("Show Output", systemImage: "terminal") { openConsole(.terminal) }
+            Button("Show Problems", systemImage: "exclamationmark.triangle") { openConsole(.problems) }
+        }
+    }
+
+    @ViewBuilder private var toolsMenu: some View {
+        Section("Tools") {
+            Button("Detect Project", systemImage: "sparkle.magnifyingglass", action: workspace.detectSampleProject)
+            Button("Agent", systemImage: "sparkles") { showAgent = true }
+            Button("Compilers", systemImage: "cpu") { showCompilerManager = true }
+            Button("Compiler Settings", systemImage: "slider.horizontal.3") { showCompilerConfiguration = true }
+            Button("Project Settings", systemImage: "folder.badge.gearshape") { showWorkspaceConfiguration = true }
+            Button("Refresh Files", systemImage: "arrow.clockwise") { workspace.files.reload() }
+        }
+    }
+
+    @ViewBuilder private var viewMenu: some View {
+        Section("View") {
+            Toggle("Word Wrap", isOn: $settings.editorWordWrap)
+            Toggle("Line Numbers", isOn: $settings.editorLineNumbers)
+            Toggle("Highlight Current Line", isOn: $settings.editorHighlightCurrentLine)
+            Toggle("Show Invisible Characters", isOn: $settings.editorShowInvisibles)
+        }
+    }
+
+    // MARK: - Find
+
+    private var findBar: some View {
+        let matches = findMatches()
+        return HStack(spacing: 6) {
+            TextField("Find", text: Binding(get: { workspace.editor.findText },
+                                            set: { workspace.editor.findText = $0; currentMatch = 0 }))
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+            Text(matches.isEmpty ? "none" : "\(clampedMatchIndex(matches) + 1)/\(matches.count)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .fixedSize()
+            Button { stepMatch(matches, by: -1) } label: { Image(systemName: "chevron.up") }
+                .disabled(matches.isEmpty)
+            Button { stepMatch(matches, by: 1) } label: { Image(systemName: "chevron.down") }
+                .disabled(matches.isEmpty)
+            TextField("Replace", text: Binding(get: { workspace.editor.replaceText },
+                                               set: { workspace.editor.replaceText = $0 }))
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 140)
+            Button("Replace") { replaceCurrentMatch(matches) }
+                .disabled(matches.isEmpty)
+            Button { workspace.editor.showFind = false } label: { Image(systemName: "xmark") }
+                .accessibilityLabel("Close find")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+    }
+
+    // MARK: - Build banner
+
+    /// One line about the last run. The console is where the details live, so this
+    /// says what happened and offers the way in -- instead of the app's only
+    /// feedback being text that scrolled past in a panel the user may have closed.
+    @ViewBuilder private var buildBanner: some View {
+        if !workspace.runProgress.isRunning,
+           !workspace.lastRun.label.isEmpty,
+           !workspace.lastRun.succeeded,
+           dismissedBannerAt != bannerStamp {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("\(workspace.lastRun.label) failed").font(.subheadline.weight(.semibold))
+                    Text(buildBannerDetail).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer()
+                Button("Show") { openConsole(workspace.buildDiagnostics.isEmpty ? .terminal : .problems) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                Button { dismissedBannerAt = bannerStamp } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Dismiss")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.orange.opacity(0.10))
+            .overlay(alignment: .bottom) { Divider() }
+        } else if !workspace.runProgress.isRunning,
+                  !workspace.lastRun.label.isEmpty,
+                  workspace.lastRun.succeeded,
+                  dismissedBannerAt != bannerStamp {
+            HStack(spacing: 10) {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                Text("\(workspace.lastRun.label) finished in \(RunProgressBar.clock(workspace.lastRun.seconds))")
+                    .font(.caption)
+                Spacer()
+                Button("Output") { openConsole(.terminal) }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                Button { dismissedBannerAt = bannerStamp } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(Color.green.opacity(0.08))
+            .overlay(alignment: .bottom) { Divider() }
+        }
+    }
+
+    /// Identifies the run the banner describes, so dismissing one does not hide
+    /// the next one.
+    private var bannerStamp: Date? { workspace.lastRun.label.isEmpty ? nil : workspace.lastRun.finishedAt }
+
+    private var buildBannerDetail: String {
+        if !workspace.buildDiagnostics.isEmpty {
+            let errors = workspace.buildDiagnostics.filter { $0.severity == .error }.count
+            let warnings = workspace.buildDiagnostics.filter { $0.severity == .warning }.count
+            if errors > 0 { return "\(errors) error\(errors == 1 ? "" : "s")" + (warnings > 0 ? ", \(warnings) warning\(warnings == 1 ? "" : "s")" : "") }
+            if warnings > 0 { return "\(warnings) warning\(warnings == 1 ? "" : "s")" }
+        }
+        return "Exit code \(workspace.lastExitCode ?? 1) — open the output for details."
+    }
+
+    private func performBuild() {
+        guard !workspace.isExecuting else { pendingRerun = true; return }
+        dismissedBannerAt = nil
+        workspace.runBuild(settings: settings)
+    }
+
+    // MARK: - Content
+
+    private var emptyState: some View {
+        ForgeEmptyState(icon: "doc.text",
+                        title: "No File Open",
+                        message: "Pick a file from the project, or start a new one.",
+                        actionTitle: "Browse Files") { showFiles = true }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var tabBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
                 ForEach(workspace.editor.documents) { doc in
-                    HStack(spacing: 5) {
-                        Button {
-                            workspace.selectDocument(doc.id)
-                        } label: {
-                            HStack(spacing: 6) {
-                                // The same icon the navigator shows for this file,
-                                // so a tab is identifiable at a glance instead of
-                                // every tab wearing the same document glyph.
-                                Image(systemName: WorkspaceFileIcon.symbol(for: doc.name))
-                                    .foregroundStyle(WorkspaceFileIcon.tint(for: doc.name))
-                                Text(doc.name)
-                                if doc.isDirty { Circle().frame(width: 6, height: 6) }
+                    Button {
+                        workspace.selectDocument(doc.id)
+                    } label: {
+                        HStack(spacing: 5) {
+                            Text(doc.name).font(.caption).lineLimit(1)
+                            if doc.isDirty {
+                                Circle().fill(Color.accentColor).frame(width: 5, height: 5)
                             }
+                            Button { requestClose(doc) } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .frame(width: 16, height: 16)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Close \(doc.name)")
                         }
-                        .buttonStyle(.plain)
-
-                        Button {
-                            requestClose(doc)
-                        } label: {
-                            Image(systemName: "xmark").font(.caption2)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Close \(doc.name)")
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: ForgeTheme.compactCorner)
+                                .fill(workspace.editor.selectedID == doc.id
+                                      ? Color.secondary.opacity(0.14)
+                                      : Color.clear)
+                        )
                     }
-                    .font(.caption)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 7)
-                    .background(
-                        RoundedRectangle(cornerRadius: ForgeTheme.compactCorner)
-                            .fill(workspace.editor.selectedID == doc.id ? Color.secondary.opacity(0.12) : Color.clear)
-                    )
+                    .buttonStyle(.plain)
                 }
-                Button(action: createAndOpenNewFile) {
-                    Image(systemName: "plus").padding(8)
+                Button { createAndOpenNewFile() } label: {
+                    Image(systemName: "plus").font(.caption).padding(6)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("New file")
-            }.padding(.horizontal, 8).padding(.vertical, 5)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
         }
         .background(.secondary.opacity(0.04))
     }
+
+    private var editor: some View {
+        CodeEditorView(
+            text: Binding(get: { workspace.editorText }, set: { workspace.updateEditorText($0) }),
+            selection: $editorSelection,
+            fileName: workspace.editor.selected?.name ?? "Untitled",
+            options: .init(
+                fontSize: settings.editorFontSize,
+                tabWidth: settings.editorTabWidth,
+                insertSpaces: settings.editorInsertSpaces,
+                wordWrap: settings.editorWordWrap,
+                showLineNumbers: settings.editorLineNumbers,
+                highlightCurrentLine: settings.editorHighlightCurrentLine,
+                showInvisibleCharacters: settings.editorShowInvisibles,
+                autoClosePairs: settings.editorAutoClosePairs
+            )
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Status
+
+    private var statusBar: some View {
+        HStack(spacing: 10) {
+            Button { openConsole(.terminal) } label: {
+                HStack(spacing: 5) {
+                    if workspace.runProgress.isRunning {
+                        ProgressView().controlSize(.small)
+                        Text(workspace.runProgress.label).font(.caption2)
+                    } else {
+                        Image(systemName: "terminal").font(.caption2)
+                        Text(workspace.isExecuting ? workspace.executionStatus : "Output").font(.caption2)
+                    }
+                }
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            if workspace.editor.selected != nil {
+                Text("Ln \(editorSelection.line), Col \(editorSelection.column)")
+                Text(EditorLanguage(fileName: workspace.editor.selected?.name ?? "").displayName)
+            }
+            Button { showConsole = true; showConsolePanel = .problems } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "exclamationmark.triangle")
+                    Text("\(workspace.buildDiagnostics.count)")
+                }
+                .font(.caption2)
+                .foregroundStyle(workspace.buildDiagnostics.isEmpty ? .secondary : .primary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Problems")
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.secondary.opacity(0.05))
+    }
+
+    private func openConsole(_ panel: ForgePanel) {
+        showConsolePanel = panel
+        showConsole = true
+    }
+
+    // MARK: - Sheets
+
+    private var filesSheet: some View {
+        NavigationStack {
+            WorkspaceBrowserView(files: workspace.files,
+                                 onDelete: workspace.deleteFile,
+                                 onRename: workspace.renameFile,
+                                 confirmDeletes: settings.confirmDestructiveActions,
+                                 onOpen: { file in
+                                     workspace.openFile(file)
+                                     showFiles = false
+                                 },
+                                 onSetActiveProject: { folder in
+                                     workspace.useFolderAsActiveProject(folder)
+                                     showFiles = false
+                                 })
+                .navigationTitle("Files")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { showFiles = false }
+                    }
+                }
+        }
+    }
+
+    private var consoleSheet: some View {
+        NavigationStack {
+            BottomWorkbenchView(panel: $showConsolePanel)
+                .environmentObject(workspace)
+                .navigationTitle(showConsolePanel.rawValue)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { showConsole = false }
+                    }
+                }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    // MARK: - Commands
 
     private func requestClose(_ doc: EditorDocument) {
         if doc.isDirty && workspace.configuration.confirmCloseDirty {
@@ -321,140 +498,11 @@ struct IDEView: View {
         }
     }
 
-    /// Single place for "create a new file and actually show it". Creating without
-    /// opening leaves an invisible untitled file on disk, which is what the empty
-    /// state's New File button used to do -- every call site now goes through here
-    /// so the two steps cannot drift apart again.
+    /// Single place for "create a new file and actually show it".
     private func createAndOpenNewFile() {
         guard let file = workspace.files.createFile(named: workspace.newFileName()) else { return }
         workspace.files.open(file)
         workspace.openSelectedFile()
-    }
-
-    @ViewBuilder private var detectionBar: some View {
-        if let analysis = workspace.analysis {
-            HStack(spacing: 8) {
-                if settings.showStatusBadges {
-                    IDEStatusPill(icon: "cpu", text: analysis.primaryToolchain.rawValue)
-                    IDEStatusPill(icon: "chart.bar.fill", text: "\(Int(analysis.confidence * 100))%")
-                    if let type = analysis.theosType { IDEStatusPill(icon: "wrench.and.screwdriver", text: type.rawValue) }
-                } else {
-                    Text("\(analysis.primaryToolchain.rawValue) · \(Int(analysis.confidence * 100))%")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                if let candidate = analysis.candidates.first {
-                    Text(candidate.command).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
-                }
-                // The same build timer as the editor status bar, so the strip above
-                // the code and the strip below it never disagree about a run.
-                if workspace.runProgress.isRunning || !workspace.lastRun.label.isEmpty {
-                    Divider().frame(height: 12)
-                    BuildStatusBar(progress: workspace.runProgress, last: workspace.lastRun)
-                }
-            }.padding(.horizontal, 10).padding(.vertical, 6).background(.secondary.opacity(0.04))
-        }
-    }
-
-    private var editor: some View {
-        VStack(spacing: 0) {
-            editorCommandBar
-            Divider()
-            CodeEditorView(
-                text: Binding(get: { workspace.editorText }, set: { workspace.updateEditorText($0) }),
-                selection: $editorSelection,
-                fileName: workspace.editor.selected?.name ?? "Untitled",
-                options: .init(
-                    fontSize: settings.editorFontSize,
-                    tabWidth: settings.editorTabWidth,
-                    insertSpaces: settings.editorInsertSpaces,
-                    wordWrap: settings.editorWordWrap,
-                    showLineNumbers: settings.editorLineNumbers,
-                    highlightCurrentLine: settings.editorHighlightCurrentLine,
-                    showInvisibleCharacters: settings.editorShowInvisibles,
-                    autoClosePairs: settings.editorAutoClosePairs
-                )
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            editorStatusBar
-        }
-    }
-
-    private var editorCommandBar: some View {
-        HStack(spacing: 8) {
-            Menu {
-                Button("Save", systemImage: "square.and.arrow.down", action: workspace.saveEditor)
-                Button("Find & Replace", systemImage: "magnifyingglass") { workspace.editor.showFind.toggle() }
-                Divider()
-                Button("Indent Selection", systemImage: "increase.indent") { transformSelectedLines(indent: true) }
-                Button("Outdent Selection", systemImage: "decrease.indent") { transformSelectedLines(indent: false) }
-                Button("Duplicate Line", systemImage: "plus.square.on.square") { duplicateCurrentLine() }
-                Button("Delete Line", systemImage: "trash") { deleteCurrentLine() }
-                Divider()
-                Button("Trim Trailing Whitespace", systemImage: "eraser") { trimTrailingWhitespace() }
-                Button("Sort Lines (Selection or File)", systemImage: "arrow.up.arrow.down") { sortSelectedLines() }
-                Divider()
-                Button("Toggle Comment", systemImage: "text.bubble") { toggleComment() }
-                Button("Go to Line…", systemImage: "arrow.right.to.line") {
-                    goToLine = editorSelection.line
-                    showGoToLine = true
-                }
-            } label: {
-                Label("Edit", systemImage: "text.cursor")
-            }
-            .buttonStyle(.bordered)
-
-            Menu {
-                Toggle("Word Wrap", isOn: $settings.editorWordWrap)
-                Toggle("Line Numbers", isOn: $settings.editorLineNumbers)
-                Toggle("Highlight Current Line", isOn: $settings.editorHighlightCurrentLine)
-                Toggle("Auto-close Pairs", isOn: $settings.editorAutoClosePairs)
-                Divider()
-                Picker("Tab Width", selection: $settings.editorTabWidth) {
-                    Text("2 spaces").tag(2)
-                    Text("4 spaces").tag(4)
-                    Text("8 spaces").tag(8)
-                }
-                Toggle("Insert Spaces", isOn: $settings.editorInsertSpaces)
-            } label: {
-                Label("View", systemImage: "slider.horizontal.3")
-            }
-            .buttonStyle(.bordered)
-
-            Spacer()
-            if let doc = workspace.editor.selected {
-                Text(EditorLanguage(fileName: doc.name).displayName)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(.secondary.opacity(0.035))
-    }
-
-    private var editorStatusBar: some View {
-        HStack(spacing: 14) {
-            BuildStatusBar(progress: workspace.runProgress, last: workspace.lastRun)
-            Divider().frame(height: 12)
-            Text("Ln \(editorSelection.line), Col \(editorSelection.column)")
-            if editorSelection.selectedLength > 0 { Text("\(editorSelection.selectedLength) selected") }
-            Spacer()
-            Text(workspace.configuration.defaultEncoding)
-            Text(workspace.configuration.lineEndings)
-            Text(settings.editorInsertSpaces ? "Spaces: \(settings.editorTabWidth)" : "Tab: \(settings.editorTabWidth)")
-            if workspace.editor.selected?.isDirty == true {
-                Label("Modified", systemImage: "circle.fill")
-            } else {
-                Label("Saved", systemImage: "checkmark.circle")
-            }
-        }
-        .font(.caption2)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(.secondary.opacity(0.05))
     }
 
     private func lineRange(in text: String, line: Int) -> Range<String.Index>? {
@@ -486,12 +534,6 @@ struct IDEView: View {
         return ranges
     }
 
-    /// Which match is current, so the bar can say "3 of 9".
-    ///
-    /// This used to be derived from the caret and to fall back to index 0, so
-    /// whenever the caret was not exactly on a match the label read "1 of N" and
-    /// "Replace" silently rewrote the *first* match in the file instead of the one
-    /// near the caret. The index is now tracked explicitly and clamped.
     private func clampedMatchIndex(_ matches: [NSRange]) -> Int {
         guard !matches.isEmpty else { return 0 }
         return min(max(currentMatch, 0), matches.count - 1)
@@ -515,7 +557,6 @@ struct IDEView: View {
         editorSelection.range = NSRange(location: range.location + (replacement as NSString).length, length: 0)
     }
 
-    /// Moves the caret to a 1-based line.
     private func jumpToLine(_ line: Int) {
         let lines = workspace.editorText.components(separatedBy: "\n")
         guard !lines.isEmpty else { return }
@@ -524,10 +565,6 @@ struct IDEView: View {
         editorSelection.range = NSRange(location: location, length: 0)
     }
 
-    /// Comments or uncomments the selected lines, or the caret's line.
-    ///
-    /// It uncomments only when every covered line is already commented, which is
-    /// what makes it a toggle rather than a one-way switch.
     private func toggleComment() {
         let marker = EditorLanguage(fileName: workspace.editor.selected?.name ?? "").lineComment
         guard !marker.isEmpty else { return }
@@ -582,8 +619,6 @@ struct IDEView: View {
         let unit = settings.editorInsertSpaces ? String(repeating: " ", count: settings.editorTabWidth) : "\t"
         var lines = workspace.editorText.components(separatedBy: "\n")
 
-        // Indent/outdent every line the selection covers; with no selection, the
-        // caret's line -- which is what the command already did.
         var bounds: (lower: Int, upper: Int)?
         if let selection = selectedLineBounds() {
             bounds = selection
@@ -606,27 +641,10 @@ struct IDEView: View {
     }
 
     private func trimTrailingWhitespace() {
-        // `#"\\s+$"#` is a *literal backslash* followed by `s+$` in a raw string,
-        // so it could only ever match a line ending in `\sss...` and the command
-        // never removed a space or a tab. Use the same pattern the save path uses.
         let cleaned = workspace.editorText.components(separatedBy: "\n")
             .map { $0.replacingOccurrences(of: #"[ \t]+$"#, with: "", options: .regularExpression) }
             .joined(separator: "\n")
         workspace.updateEditorText(cleaned)
-    }
-
-    /// Sorts the selected lines when there is a selection, and the whole document
-    /// when there is none (the behaviour a "sort lines" command normally has).
-    /// The previous version checked only the caret's line and then sorted every
-    /// line regardless of what was selected, silently reordering the entire file
-    /// behind an autosave.
-    private func sortSelectedLines() {
-        var lines = workspace.editorText.components(separatedBy: "\n")
-        guard !lines.isEmpty else { return }
-        let bounds = selectedLineBounds() ?? (lower: 0, upper: lines.count)
-        guard bounds.lower < bounds.upper, bounds.upper <= lines.count else { return }
-        lines[bounds.lower..<bounds.upper].sort { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
-        workspace.updateEditorText(lines.joined(separator: "\n"))
     }
 
     /// The half-open line range covered by the current selection, or nil when
@@ -645,23 +663,5 @@ struct IDEView: View {
         let ns = workspace.editorText as NSString
         let clamped = max(0, min(offset, ns.length))
         return ns.substring(to: clamped).reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
-    }
-
-    private func openGitHubImporter() {
-        workspace.github.lastImportedPath = nil
-        showGitHub = true
-    }
-
-    private var collapsedPanelBar: some View {
-        HStack {
-            ForEach(ForgePanel.allCases) { item in
-                Button {
-                    bottomPanel = item; bottomExpanded = true
-                } label: { Label(item.rawValue, systemImage: item.icon).font(.caption) }
-                .buttonStyle(.plain)
-            }
-            Spacer()
-            Button { bottomExpanded = true } label: { Image(systemName: "chevron.up") }
-        }.padding(8)
     }
 }
