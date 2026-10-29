@@ -291,7 +291,7 @@ struct IDEView: View {
                   dismissedBannerAt != bannerStamp {
             HStack(spacing: 10) {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                Text("\(workspace.lastRun.label) finished in \(BuildStatusBar.clock(workspace.lastRun.seconds))")
+                Text("\(workspace.lastRun.label) finished in \(RunProgressBar.clock(workspace.lastRun.seconds))")
                     .font(.caption)
                 Spacer()
                 Button("Output") { openConsole(.terminal) }

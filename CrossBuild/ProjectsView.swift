@@ -39,7 +39,7 @@ struct ProjectsView: View {
             VStack(alignment: .leading, spacing: 18) {
                 header
                 primaryActions
-                if let current = currentProjectCard { current }
+                currentProjectCard
                 projectList
                 if !workspace.files.recent.isEmpty { recentFiles }
             }
@@ -127,8 +127,13 @@ struct ProjectsView: View {
     }
 
     /// What the app is currently pointed at, with the one action that matters.
-    private var currentProjectCard: some View? {
-        guard let root = workspace.activeProjectRoot, !root.isEmpty else { return nil }
+    @ViewBuilder private var currentProjectCard: some View {
+        if let root = workspace.activeProjectRoot, !root.isEmpty {
+            currentProjectBody(root: root)
+        }
+    }
+
+    private func currentProjectBody(root: String) -> some View {
         let name = URL(fileURLWithPath: root).lastPathComponent
         let files = workspace.projectFiles.count
         let language = workspace.analysis?.primaryToolchain.rawValue ?? workspace.selectedToolchain.rawValue
@@ -250,7 +255,7 @@ struct ProjectsView: View {
               name != ".." else { return }
         var url = workspace.files.workspaceRoot.appendingPathComponent(name, isDirectory: true)
         if FileManager.default.fileExists(atPath: url.path) {
-            url = workspace.files.uniqueURL(for: url)
+            url = workspace.files.uniqueURL(url)
         }
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
