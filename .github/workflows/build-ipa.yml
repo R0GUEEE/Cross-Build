@@ -250,10 +250,11 @@ jobs:
               report "$p"; rm -rf "$p" 2>/dev/null || true
             done
 
-            # Static gcc runtimes. Only `-static` links need them, and a dynamic
-            # build against musl is what this guest can actually do.
+            # libgcc.a stays. gcc passes `-lgcc` on every link, dynamic or not, so
+            # deleting it does not disable static linking -- it disables linking.
+            # (Proven by the post-trim check: "cannot find -lgcc".)
             for p in /usr/lib/gcc/*/*/libgcc.a /usr/lib/gcc/*/*/libgcc_eh.a; do
-              report "$p"; rm -f "$p" 2>/dev/null || true
+              report "$p"
             done
 
             # gcc ships a set of headers it has already "fixed" for the platform,
@@ -314,6 +315,12 @@ jobs:
           T2EOF
           cc /tmp/t2.c -o /tmp/t2 && /tmp/t2' \
             || { echo "::error::the guest toolchain cannot build a program that uses the C library after the trim"; exit 1; }
+
+          # The C++ runtime is a shared library now that libstdc++.a is trimmed;
+          # prove a C++ link still resolves before shipping.
+          ./build-host/ish -f "$ROOT" /bin/sh -ec \
+            'printf "#include <string>\n#include <iostream>\nint main(){std::string s=\"ok\";std::cout<<s;return 0;}\n" > /tmp/t3.cpp && c++ /tmp/t3.cpp -o /tmp/t3pp && test "$(/tmp/t3pp)" = ok' \
+            || { echo "::error::the guest cannot link C++ after the trim"; exit 1; }
 
       - name: Generate project
         env:
