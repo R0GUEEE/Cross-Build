@@ -104,9 +104,9 @@ struct ProjectsView: View {
                     showNewProject = true
                 }
                 Button("Import from GitHub", systemImage: "arrow.down.circle") { showGitHub = true }
-                if workspace.files.focusedRoot != nil {
+                if workspace.activeProjectRoot != nil || workspace.files.focusedRoot != nil {
                     Button("Show Entire Workspace", systemImage: "square.grid.2x2") {
-                        workspace.files.focus(on: nil)
+                        workspace.showEntireWorkspace()
                     }
                 }
             } label: {

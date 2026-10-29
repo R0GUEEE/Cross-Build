@@ -177,6 +177,7 @@ struct BuildView: View {
                 Toggle("Verbose output", isOn: $settings.verboseBuild)
                 Toggle("Warnings as errors", isOn: $settings.warningsAsErrors)
                 Toggle("Stop on first failure", isOn: $settings.stopOnFirstError)
+                Toggle("Copy build output back to the project", isOn: $settings.copyBuildOutputBack)
                 Picker("Configuration", selection: Binding(
                     get: { workspace.configuration.buildTarget },
                     set: { workspace.configuration.buildTarget = $0 }

@@ -59,6 +59,8 @@ final class AppSettings: ObservableObject {
     /// Replaces the detected build command when set. Kept empty by default so the
     /// project's own manifest keeps deciding what Build runs.
     @AppStorage("build.commandOverride") var buildCommandOverride = ""
+    /// Copy files a build created or changed inside the guest back into the project.
+    @AppStorage("build.copyBack") var copyBuildOutputBack = true
     @AppStorage("build.parallel") var parallelBuilds = true
     @AppStorage("build.autoDetect") var autoDetect = true
     @AppStorage("build.cleanBefore") var cleanBeforeBuild = false

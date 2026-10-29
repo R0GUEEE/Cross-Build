@@ -126,11 +126,14 @@ enum AppToolchainLibraries {
                 if ok {
                     detail = "Clang bridge and native LLVM/clangDriver payload detected."
                 } else if let guest {
-                    detail = "No in-app Clang payload is linked, but the Linux guest provides \(guest) for the C and C++ languages this entry advertises."
+                    detail = "Provided by the Linux guest: \(guest) compiles the C and C++ languages this entry advertises."
                 } else {
                     detail = "Bridge is linked, but the native LLVM/clangDriver payload is not present and the guest reports no C compiler."
                 }
-                return .init(id: lib.id, name: lib.name, present: ok, detail: detail,
+                // Availability, not provenance: the guest's gcc is a working C and
+                // C++ compiler, and reporting it as absent made the Compiler screen
+                // show an install that ships a toolchain as if it had none.
+                return .init(id: lib.id, name: lib.name, present: ok || guest != nil, detail: detail,
                              location: lib.resourcePath ?? "Statically linked",
                              guestBacked: guest)
             }
@@ -138,14 +141,14 @@ enum AppToolchainLibraries {
             let payload = hasNativePayload(for: lib)
             let guest = guestProvider(for: lib.id)
             let detail: String
-            if payload {
+            if let guest {
+                detail = "Provided by the Linux guest: \(guest)."
+            } else if payload {
                 detail = "In-app payload detected."
-            } else if let guest {
-                detail = "Not bundled, but the Linux guest provides \(guest), so builds that use it work."
             } else {
-                detail = "No in-app library payload detected; catalogue metadata alone is not treated as installed."
+                detail = "No in-app payload and no guest tool for this entry."
             }
-            return .init(id: lib.id, name: lib.name, present: payload,
+            return .init(id: lib.id, name: lib.name, present: payload || guest != nil,
                          detail: detail,
                          location: lib.resourcePath ?? lib.module,
                          guestBacked: guest)
