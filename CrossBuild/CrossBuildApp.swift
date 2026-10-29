@@ -12,6 +12,9 @@ struct CrossBuildApp: App {
                 .task {
                     workspace.appSettings = settings
                     workspace.syncFileConfiguration()
+                    // Documents/SDKs has to exist before a user can drag an SDK into
+                    // it from Files.app.
+                    IOSSDKDiscovery.ensureDirectories()
 
                     // The visible file tree is built off the main actor, so wait
                     // for the first pass before doing anything that reads it.

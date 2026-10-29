@@ -187,7 +187,11 @@ jobs:
           IP="$(python3 -c "import socket,sys; print(socket.gethostbyname(sys.argv[1]))" "$MIRROR_HOST")"
           test -n "$IP" || { echo "::error::could not resolve the Alpine mirror"; exit 1; }
           ./build-host/ish -f "$ROOT" /bin/sh -c "echo '$IP $MIRROR_HOST' >> /etc/hosts"
-          ./build-host/ish -f "$ROOT" /bin/sh -ec "apk update >/dev/null && apk add --no-cache $RUNTIME_PACKAGES"
+          # Upgrade the base before adding anything: the minirootfs tarball and the
+          # repository can be weeks apart, and a half-upgraded userland is how a
+          # shell ends up failing to start on device while every individual package
+          # looks installed.
+          ./build-host/ish -f "$ROOT" /bin/sh -ec "apk update >/dev/null && apk upgrade --no-cache >/dev/null && apk add --no-cache $RUNTIME_PACKAGES"
 
           # Assert the opposite of what this used to assert: the tools every
           # build action invokes must actually be present, or the IPA ships a
@@ -337,6 +341,40 @@ jobs:
           ./build-host/ish -f "$ROOT" /bin/sh -ec \
             'printf "#include <string>\n#include <iostream>\nint main(){std::string s=\"ok\";std::cout<<s;return 0;}\n" > /tmp/t3.cpp && c++ /tmp/t3.cpp -o /tmp/t3pp && test "$(/tmp/t3pp)" = ok' \
             || { echo "::error::the guest cannot link C++ after the trim"; exit 1; }
+
+      - name: Verify the engine archives
+        # "The Linux shell needs to be rebuilt" is only answered if the rebuild is
+        # checked: the app links three static libraries, and an empty or wrong-arch
+        # archive fails at the link or, worse, at boot.
+        run: |
+          set -euo pipefail
+          cd Vendor/linuxkit
+          fail() { echo "::error::$1"; exit 1; }
+          for lib in libish.a libish_emu.a libfakefs.a; do
+            test -s "build-ios/$lib" || fail "build-ios/$lib is missing or empty"
+            arch=$(lipo -archs "build-ios/$lib" 2>/dev/null || echo unknown)
+            [ "$arch" = "arm64" ] || fail "build-ios/$lib is $arch, expected arm64"
+            echo "  $lib: $arch, $(du -h "build-ios/$lib" | cut -f1)"
+          done
+          # Which symbols a given engine build exposes varies with LTO and with how
+          # the translation units are split, so require *one* of the API the shim
+          # links against rather than a single name -- and print what was found when
+          # none matches, so the next failure is diagnosable from the log alone.
+          expect() {
+            archive=$1; shift
+            symbols=$(nm -g "$archive" 2>/dev/null | awk '$2=="T"{print $3}')
+            for want in "$@"; do
+              if echo "$symbols" | grep -qx "$want"; then
+                echo "  $(basename "$archive") exports $want"
+                return 0
+              fi
+            done
+            echo "  $(basename "$archive") exported (first 8): $(echo "$symbols" | head -8 | tr '\n' ' ')"
+            fail "$(basename "$archive") exports none of: $*"
+          }
+          expect build-ios/libish.a _do_execve _task_run_current _generic_mkdirat _do_mount
+          expect build-ios/libish_emu.a _emu_run _cpu_run _tlb_flush
+          echo "engine archives verified"
 
       - name: Verify every bundled toolchain
         # The image having /usr/bin/cmake is not the same as cmake building a

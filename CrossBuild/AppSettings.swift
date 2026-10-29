@@ -47,13 +47,8 @@ final class AppSettings: ObservableObject {
     @AppStorage("editor.invisibles") var editorShowInvisibles = false
 
     @AppStorage("app.compactUI") var compactUI = false
-    @AppStorage("app.showStatusBadges") var showStatusBadges = true
     @AppStorage("app.confirmDestructive") var confirmDestructiveActions = true
     @AppStorage("app.openLastWorkspace") var openLastWorkspace = true
-    @AppStorage("app.showWelcome") var showWelcomeScreen = true
-    @AppStorage("app.bottomPanelDefault") var defaultBottomPanel = "Terminal"
-    @AppStorage("app.bottomPanelExpanded") var defaultBottomPanelExpanded = true
-    @AppStorage("app.navigatorWidth") var navigatorWidth = 300.0
     @AppStorage("app.activityLimit") var activityHistoryLimit = 100
 
     /// Replaces the detected build command when set. Kept empty by default so the
