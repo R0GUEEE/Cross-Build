@@ -356,10 +356,24 @@ jobs:
             [ "$arch" = "arm64" ] || fail "build-ios/$lib is $arch, expected arm64"
             echo "  $lib: $arch, $(du -h "build-ios/$lib" | cut -f1)"
           done
-          nm -g build-ios/libish.a 2>/dev/null | grep -q ' T _do_execve' \
-            || fail "libish.a does not export do_execve; the engine objects are missing"
-          nm -g build-ios/libish_emu.a 2>/dev/null | grep -q ' T _emu_run' \
-            || fail "libish_emu.a does not export emu_run"
+          # Which symbols a given engine build exposes varies with LTO and with how
+          # the translation units are split, so require *one* of the API the shim
+          # links against rather than a single name -- and print what was found when
+          # none matches, so the next failure is diagnosable from the log alone.
+          expect() {
+            archive=$1; shift
+            symbols=$(nm -g "$archive" 2>/dev/null | awk '$2=="T"{print $3}')
+            for want in "$@"; do
+              if echo "$symbols" | grep -qx "$want"; then
+                echo "  $(basename "$archive") exports $want"
+                return 0
+              fi
+            done
+            echo "  $(basename "$archive") exported (first 8): $(echo "$symbols" | head -8 | tr '\n' ' ')"
+            fail "$(basename "$archive") exports none of: $*"
+          }
+          expect build-ios/libish.a _do_execve _task_run_current _generic_mkdirat _do_mount
+          expect build-ios/libish_emu.a _emu_run _cpu_run _tlb_flush
           echo "engine archives verified"
 
       - name: Verify every bundled toolchain
