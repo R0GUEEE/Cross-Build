@@ -51,6 +51,12 @@ targets:
       # Settings -> About -> Licences.
       - path: THIRD-PARTY-NOTICES.md
         buildPhase: resources
+      # An Apple SDK, when the build was given one (`Bundle iPhoneOS SDK` workflow).
+      # The folder is empty in a normal checkout, and an empty folder reference is
+      # harmless; the app's SDKInjection finds it under Bundle/SDKs at runtime.
+      - path: CrossBuild/Resources/SDKs
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: ZIPFoundation
       - target: CrossBuildClang

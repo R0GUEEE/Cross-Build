@@ -1,0 +1,137 @@
+name: Bundle iPhoneOS SDK
+
+# Builds the app with an Apple iPhoneOS SDK inside the bundle, for whoever has one
+# to give it.
+#
+# Deliberately a separate, manually-run workflow and not part of Build IPA. Apple's
+# SDK licence forbids redistributing the SDK, so an app that embeds one must be
+# produced by someone entitled to use it and must not be published as a general
+# artifact. The SDK never enters this repository: it is supplied per run, used, and
+# discarded with the runner.
+#
+# The app needs the SDK in two places, and the two are different problems:
+#   * in the bundle (SDKs/<name>.sdk) — what this workflow adds;
+#   * inside the Linux guest — done at build time by SDKInjection, which copies the
+#     selected SDK to /opt/apple-sdk and passes --sysroot to the compiler.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sdk_release_tag:
+        description: "Release carrying the SDK archive, as owner/repo#tag"
+        required: true
+        default: "R0GUEEE/Cross-Build-assets#iphoneos-sdk"
+      sdk_asset_name:
+        description: "Asset name of the SDK archive (.zip or .tar.gz)"
+        required: true
+        default: "iPhoneOS.sdk.zip"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: State what this build is
+        run: |
+          echo "::warning::This build embeds an Apple SDK. Its licence does not permit redistribution; keep the IPA private."
+          echo "source: ${{ inputs.sdk_release_tag }}/${{ inputs.sdk_asset_name }}"
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Fetch the supplied SDK
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ref="${{ inputs.sdk_release_tag }}"
+          repo="${ref%%#*}"
+          tag="${ref##*#}"
+          mkdir -p /tmp/sdk
+          gh release download "$tag" --repo "$repo" --pattern "${{ inputs.sdk_asset_name }}" --dir /tmp/sdk
+          cd /tmp/sdk
+          case "${{ inputs.sdk_asset_name }}" in
+            *.zip) unzip -q "${{ inputs.sdk_asset_name }}" ;;
+            *.tar.gz) tar xzf "${{ inputs.sdk_asset_name }}" ;;
+            *) echo "::error::unsupported archive type"; exit 1 ;;
+          esac
+          SDK_DIR="$(find /tmp/sdk -maxdepth 3 -type d -name '*.sdk' | head -1)"
+          test -n "$SDK_DIR" || { echo "::error::the archive contains no .sdk"; exit 1; }
+          test -f "$SDK_DIR/SDKSettings.plist" || { echo "::error::$SDK_DIR has no SDKSettings.plist"; exit 1; }
+          test -d "$SDK_DIR/usr/include" || { echo "::error::$SDK_DIR has no usr/include"; exit 1; }
+          echo "SDK_DIR=$SDK_DIR" >> "$GITHUB_ENV"
+          du -sh "$SDK_DIR"
+
+      - name: Stage the SDK into the app bundle
+        run: |
+          set -euo pipefail
+          mkdir -p CrossBuild/Resources/SDKs
+          rm -rf CrossBuild/Resources/SDKs/*.sdk
+          cp -R "$SDK_DIR" "CrossBuild/Resources/SDKs/$(basename "$SDK_DIR")"
+          du -sh CrossBuild/Resources/SDKs
+
+      - name: Build the engine
+        run: |
+          set -euo pipefail
+          brew install meson ninja
+          cd Vendor/linuxkit
+          PINNED=c1a4064e84f1a957280a62f77d107162032dc908
+          test "$(git rev-parse HEAD)" = "$PINNED" || { echo "::error::wrong engine commit"; exit 1; }
+          printf '#include <dispatch/dispatch.h>\n' > /tmp/darwin.c
+          cat platform/darwin.c >> /tmp/darwin.c
+          mv /tmp/darwin.c platform/darwin.c
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          sed "s|@IOS_SDK@|$SDK|" "$GITHUB_WORKSPACE/Tools/linuxkit-cross-ios.txt" > cross-ios.txt
+          meson setup build-ios --cross-file cross-ios.txt \
+            -Dguest_arch=arm64 -Djit=false -Djit_emit=false -Dcli_aot= --buildtype=release
+          meson compile -C build-ios
+
+      - name: Generate and build the app
+        env:
+          CROSSBUILD_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          xcodegen generate
+          xcodebuild -project CrossBuild.xcodeproj -scheme CrossBuild -configuration Release \
+            -sdk iphoneos -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+
+      - name: Verify the SDK ships
+        run: |
+          set -euo pipefail
+          APP="$(find build/DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
+          test -n "$APP"
+          test -n "$(find "$APP/SDKs" -maxdepth 1 -name '*.sdk' 2>/dev/null)" \
+            || { echo "::error::the SDK did not reach the app bundle"; exit 1; }
+          test -f "$(find "$APP/SDKs" -maxdepth 2 -name SDKSettings.plist | head -1)" \
+            || { echo "::error::the bundled SDK has no SDKSettings.plist"; exit 1; }
+          echo "bundled SDK:"
+          du -sh "$APP"/SDKs/*
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          APP="$(find build/DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
+          rm -rf Payload CrossBuild-sdk.ipa
+          mkdir Payload
+          cp -R "$APP" Payload/
+          zip -qry CrossBuild-sdk.ipa Payload
+          shasum -a 256 CrossBuild-sdk.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CrossBuild-sdk-ipa
+          path: CrossBuild-sdk.ipa
+          if-no-files-found: error

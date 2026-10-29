@@ -105,6 +105,8 @@ enum IOSSDKDiscovery {
     /// Documents directory is now visible in Files.app.
     static func searchRoots() -> [URL] {
         var roots: [URL] = []
+        // The bundle first: an SDK built into the app (the `Bundle iPhoneOS SDK`
+        // workflow) is the one this app was made with.
         if let bundled = Bundle.main.resourceURL?.appendingPathComponent("SDKs", isDirectory: true) {
             roots.append(bundled)
         }

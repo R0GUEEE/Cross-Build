@@ -1,0 +1,4 @@
+[submodule "ios-linuxkit"]
+	path = Vendor/linuxkit
+	url = https://github.com/rcarmo/ios-linuxkit.git
+	branch = master

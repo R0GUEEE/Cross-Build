@@ -263,6 +263,30 @@ struct BuildView: View {
                     }
                 }
 
+                // Which Apple SDK a build will use, so "it linked against the wrong
+                // headers" is answerable without reading a log.
+                if let sdk = SDKInjection.selectedSDK(workspace: workspace) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "square.stack.3d.up")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text("SDK: \(sdk.lastPathComponent)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Spacer()
+                    }
+                } else {
+                    HStack(spacing: 6) {
+                        Image(systemName: "square.stack.3d.up.slash")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        Text("No Apple SDK — builds use the guest's own headers")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 HStack(spacing: 8) {
                     Button("Agent") { showAgent = true }
                     .buttonStyle(.bordered)

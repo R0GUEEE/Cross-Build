@@ -33,6 +33,22 @@ enum LinuxGuestEngine {
         #endif
     }
 
+    /// The build configuration this binary was compiled with.
+    ///
+    /// The interpreter build and the AOT build are different engines with different
+    /// capabilities, and a bug report that does not say which one produced it cannot
+    /// be acted on. The shim records what meson was told at build time.
+    static var buildConfiguration: String {
+        #if canImport(CrossBuildLinux)
+        let jit = cblk_engine_jit() != 0
+        let aot = cblk_engine_aot() != 0
+        if aot { return "AOT (no runtime emission)" }
+        return jit ? "interpreted, JIT compiled in" : "interpreted (gadget)"
+        #else
+        return "not linked"
+        #endif
+    }
+
     /// True once the guest has been booted. The interpreter keeps process-global
     /// state, so a second boot in the same process is refused rather than
     /// producing a corrupt guest.

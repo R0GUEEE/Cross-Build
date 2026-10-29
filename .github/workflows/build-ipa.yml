@@ -29,6 +29,12 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The engine is a git submodule at Vendor/linuxkit, pinned by commit in
+          # this repository. It used to be cloned ad hoc by a later step, which
+          # meant the pinned SHA lived in a YAML line and the source tree was not
+          # reproducible from a checkout.
+          submodules: recursive
 
       - name: Select Xcode
         run: |
@@ -90,12 +96,13 @@ jobs:
           # The engine is a Meson project, so it is built here rather than inside
           # the app target. Pinned to the release the embedded-Linux work was
           # validated against; see .github/workflows/linuxkit-engine.yml.
-          PINNED=c1a4064e84f1a957280a62f77d107162032dc908   # 2.4.1 build 818
-          mkdir -p Vendor
-          git clone --filter=blob:none https://github.com/rcarmo/ios-linuxkit.git Vendor/linuxkit
           cd Vendor/linuxkit
-          git checkout "$PINNED"
-          git submodule update --init --recursive --depth 1 || echo "::warning::submodule init failed; continuing"
+          # The tree is the submodule checkout; assert what it is so a broken
+          # checkout fails here instead of producing a library from the wrong source.
+          PINNED=c1a4064e84f1a957280a62f77d107162032dc908   # 2.4.1 build 818
+          test "$(git rev-parse HEAD)" = "$PINNED" || { echo "::error::Vendor/linuxkit is not at $PINNED"; exit 1; }
+          git submodule update --init --recursive --depth 1 || echo "::warning::engine submodule init failed; continuing"
+          test -f meson.build || { echo "::error::Vendor/linuxkit has no meson.build"; exit 1; }
           # platform/darwin.c calls dispatch_once but relies on a system header to
           # pull libdispatch in; scoped to this file because a global -include also
           # reaches the .S gadgets and breaks the assembler.
@@ -109,6 +116,24 @@ jobs:
             --buildtype=release
           meson compile -C build-ios
           ls -la build-ios/*.a
+
+      - name: Record the engine build configuration
+        # One line in the log, and one in the app, saying which engine and whether
+        # it was built with the interpreter or the AOT backend. The two are very
+        # different binaries and a report that does not say which is not actionable.
+        run: |
+          set -euo pipefail
+          cd Vendor/linuxkit
+          SHA="$(git rev-parse HEAD)"
+          JIT="false"
+          {
+            echo "engine_commit=$SHA"
+            echo "engine_version=$(cat VERSION 2>/dev/null || echo unknown)"
+            echo "engine_jit=$JIT"
+            echo "engine_aot=not-built"
+          } | tee "$GITHUB_WORKSPACE/build/engine.txt" 2>/dev/null || true
+          mkdir -p "$GITHUB_WORKSPACE/build"
+          printf '%s\n' "$SHA $JIT" > "$GITHUB_WORKSPACE/build/engine.id"
 
       - name: Download a verified rootfs when one is supplied
         # A repository variable, not a secret: the id of a workflow run whose

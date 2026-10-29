@@ -323,6 +323,23 @@ void cblk_free(char *text) {
     if (text != NULL) { free(text); }
 }
 
+// What the engine was compiled with, reported so the app can say which one it is.
+int32_t cblk_engine_jit(void) {
+#ifdef ISH_JIT
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+int32_t cblk_engine_aot(void) {
+#if defined(ISH_JIT) && defined(ISH_JIT_NO_EMIT)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 const char *cblk_engine_version(void) {
     return "ios-linuxkit 2.4.1 (build 818), AArch64 guest, asbestos interpreter";
 }

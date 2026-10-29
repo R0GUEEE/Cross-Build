@@ -30,6 +30,7 @@ iconPath: CrossBuild/Assets.xcassets/AppIcon.appiconset/AppIcon.png
 resources:
   - Vendor/linuxkit/fakefs-root
   - THIRD-PARTY-NOTICES.md
+  - CrossBuild/Resources/SDKs
   - Vendor/Python/stdlib/python
   - Vendor/Python/stdlib/app
   - CrossBuild/Resources/Toolchains

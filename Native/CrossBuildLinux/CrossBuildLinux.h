@@ -76,6 +76,12 @@ void cblk_free(char *text);
 // Engine build identification, for the diagnostics screen.
 const char *cblk_engine_version(void);
 
+// 1 when the binary was compiled with the native/AOT backend (ISH_JIT), and 1 when
+// runtime code emission is disabled in that backend (ISH_JIT_NO_EMIT). Both 0 is
+// the gadget interpreter, which is what a normal build is.
+int32_t cblk_engine_jit(void);
+int32_t cblk_engine_aot(void);
+
 #ifdef __cplusplus
 }
 #endif
