@@ -383,15 +383,48 @@ struct session_boot_args {
     const char *envp;
 };
 
+// Host fault hook.
+//
+// The engine's own main() installs SIGSEGV/SIGBUS handlers before booting, and
+// without them a fault inside a memory gadget is delivered to the *app* as an
+// unhandled SIGSEGV -- iOS kills the process with no message, which is one of the
+// two shapes "the guest never answered" can take. All this handler does is record
+// the fault in the boot log and let the default disposition run, so the failure
+// becomes a line in the log instead of a silent disappearance.
+static void cblk_host_fault(int sig, siginfo_t *info, void *context) {
+    cblk_log("host fault: signal %d addr=%p", sig, info != NULL ? info->si_addr : NULL);
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = SIG_DFL;
+    sigemptyset(&action.sa_mask);
+    sigaction(sig, &action, NULL);
+    if (info != NULL && info->si_code <= 0) { raise(sig); }
+}
+
+static void cblk_install_fault_handlers(void) {
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_sigaction = cblk_host_fault;
+    action.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigemptyset(&action.sa_mask);
+    for (int sig = SIGSEGV; sig <= SIGTRAP; sig++) {
+        if (sig == SIGKILL || sig == SIGSTOP) { continue; }
+        sigaction(sig, &action, NULL);
+    }
+}
+
 static void *session_thread_main(void *opaque) {
     struct session_boot_args *args = (struct session_boot_args *)opaque;
     cblk_log("thread: entered");
+    cblk_install_fault_handlers();
 
     // Fault recovery is thread-local. The one-shot path installed an alternate
     // signal stack on its calling thread, but the persistent session runs the
     // emulator on this pthread. Without a stack here, guest faults/signals can
     // terminate the host iOS process (commonly exposed by long-lived servers).
-    size_t altstack_size = (size_t)SIGSTKSZ * 4;
+    // 1 MiB. SIGSTKSZ is 32 KiB on Darwin and the engine's own fault path
+    // (backtrace, frame dumps) needs far more than 128 KiB.
+    size_t altstack_size = 1024 * 1024;
     void *altstack_mem = malloc(altstack_size);
     if (altstack_mem == NULL) {
         g_session_running = 0;
@@ -462,8 +495,13 @@ int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory)
     dup2(toGuest[0], STDIN_FILENO);
     dup2(fromGuest[1], STDOUT_FILENO);
     dup2(fromGuest[1], STDERR_FILENO);
+    // printk goes to fd 666, and the engine writes there *during* boot. main()
+    // redirects 666 to stderr before it starts; here it must be pointed at the
+    // output pipe before the guest thread exists, or the first kernel message goes
+    // to an inherited descriptor of the host app.
     if (g_saved_fd666 < 0) { g_saved_fd666 = dup(666); }
-    dup2(STDOUT_FILENO, 666);          // printk
+    dup2(fromGuest[1], 666);           // printk -> output pipe
+    dup2(STDOUT_FILENO, 666);          // (fd 1 is the same pipe; belt and braces)
     close(toGuest[0]);
     close(fromGuest[1]);
 
@@ -531,7 +569,29 @@ int32_t cblk_session_start(const char *fakefsRoot, const char *workingDirectory)
     int32_t readyStatus = -1;
     cblk_log("start: pthread created, running readiness round trip");
     int64_t ready_started = cblk_monotonic_ms();
-    int rc = cblk_session_run(":", 300000, &ready, &readyStatus);
+    // Every second of a boot that never answers is a second in which the guest may
+    // be trying to write a diagnostic into a pipe nobody reads: the 64 KiB buffer
+    // fills and the guest thread blocks inside write() -- a stall with no output,
+    // which is exactly what a timeout looks like. One line a second is enough to
+    // prove the thread is alive and to keep the pipe moving.
+    int64_t next_progress = ready_started + 10000;
+    int rc = 0;
+    while (1) {
+        // `:` is the cheapest thing that proves the shell is reading commands. These
+        // two answers say whether the *machine* is real: `uname -m` is compiled into
+        // the guest binary, and a wrong byte order or a wrong emulated architecture
+        // shows up here rather than in the first build the user runs.
+        rc = cblk_session_run("uname -m; echo \"arch=\$(uname -m) pid=\$(echo $$)\"", 10000, &ready, &readyStatus);
+        if (rc != 124) { break; }
+        int64_t now = cblk_monotonic_ms();
+        cblk_log("start: still waiting after %llds", (long long)((now - ready_started) / 1000));
+        if (now - ready_started >= 300000) { break; }
+        next_progress = now + 10000;
+    }
+    (void)next_progress;
+    if (rc == 0) {
+        cblk_log("start: guest identifies as %s", ready != NULL ? ready : "(no output)");
+    }
     cblk_log("start: readiness rc=%d in %lld ms status=%d output=%s",
              rc, (long long)(cblk_monotonic_ms() - ready_started), readyStatus,
              ready != NULL ? ready : "(null)");

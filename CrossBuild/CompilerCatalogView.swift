@@ -64,10 +64,12 @@ struct CompilerCatalogView: View {
     /// looked exactly like an installed one. "Not in this build" is the honest
     /// answer, and "Via guest" covers make/clang, which the guest really provides.
     private func statusText(for item: CompilerCatalogItem) -> String {
-        if workspace.embeddedToolchains.isAvailable(item.id) { return "Ready" }
+        // The guest answers first: it is where every build actually runs, so "the
+        // guest has gcc" outranks "a stub engine is registered".
         // Cheap: `guestProvider` reads the array the probe published. Calling
         // `scanBundle()` here would walk the app bundle once per row, per render.
         if let provider = AppToolchainLibraries.guestProvider(for: item.id) { return "Via guest · \(provider)" }
+        if workspace.embeddedToolchains.isAvailable(item.id) { return "Embedded" }
         return "Not in this build"
     }
 
