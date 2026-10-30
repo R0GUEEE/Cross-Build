@@ -37,8 +37,21 @@ RESEED=0
 step() { printf '\n== %s\n' "$*"; }
 fail() { echo "::error::$*" >&2; exit 1; }
 
-command -v meson >/dev/null || fail "meson is required"
-command -v ninja >/dev/null || fail "ninja is required"
+ensure() {
+    local tool=$1 formula=${2:-$1}
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        if command -v brew >/dev/null 2>&1; then
+            echo "installing $formula"
+            brew install "$formula" >/dev/null || fail "could not install $formula"
+        else
+            fail "$tool is required and Homebrew is not available"
+        fi
+    fi
+}
+ensure meson
+ensure ninja
+# fakefsify links libarchive; without it the host tool will not build.
+ensure bsdtar libarchive
 
 # ---------------------------------------------------------------- fakefsify (host)
 

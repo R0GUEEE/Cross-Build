@@ -28,10 +28,24 @@ FAIL=0
 fail() { echo "::error::$*" >&2; FAIL=$((FAIL + 1)); }
 ok() { printf '  ok   %s\n' "$*"; }
 
-require() { command -v "$1" >/dev/null 2>&1 || { echo "::error::$1 is required (brew install $2)" >&2; exit 1; }; }
-require meson meson
-require ninja ninja
-require xcrun "Xcode command line tools"
+# Install what is missing rather than only complaining: a script that runs on a
+# bare runner (or a fresh Mac) is the point of moving this out of the workflow.
+ensure() {
+    local tool=$1 formula=${2:-$1}
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        if command -v brew >/dev/null 2>&1; then
+            echo "installing $formula"
+            brew install "$formula" >/dev/null || { echo "::error::could not install $formula" >&2; exit 1; }
+        else
+            echo "::error::$tool is required and Homebrew is not available" >&2
+            exit 1
+        fi
+    fi
+    command -v "$tool" >/dev/null 2>&1 || { echo "::error::$tool still missing after install" >&2; exit 1; }
+}
+ensure meson
+ensure ninja
+command -v xcrun >/dev/null 2>&1 || { echo "::error::Xcode command line tools are required" >&2; exit 1; }
 
 verify() {
     local archive
