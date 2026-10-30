@@ -50,8 +50,14 @@ ensure() {
 }
 ensure meson
 ensure ninja
-# fakefsify links libarchive; without it the host tool will not build.
+# fakefsify links libarchive. This has to happen before `meson setup`, because meson
+# decides whether to define the target by probing for the library: absent, it prints
+# "Build targets in project: 7" without fakefsify and the compile then fails with
+# "target not found".
 ensure bsdtar libarchive
+if ! pkg-config --exists libarchive 2>/dev/null && ! ls /opt/homebrew/lib/libarchive* >/dev/null 2>&1; then
+    echo "::warning::libarchive was not found by pkg-config; fakefsify may not be built"
+fi
 
 # ---------------------------------------------------------------- fakefsify (host)
 
@@ -62,7 +68,10 @@ python3 "$REPO/Tools/patch_linuxkit.py" "$PWD"
 if [ ! -x ./build-host/tools/fakefsify ]; then
     meson setup build-host --buildtype=release -Dguest_arch=arm64 \
         -Dc_args="-D_XOPEN_SOURCE=600 -D_DARWIN_C_SOURCE"
-    meson compile -C build-host fakefsify
+    # `meson compile <target>` only knows targets meson registered as such; the old
+    # workflow passed `fakefsify ish:executable`, which works, but naming the output
+    # path is not a target name. Build everything the host configuration defines.
+    meson compile -C build-host
 fi
 [ -x ./build-host/tools/fakefsify ] || fail "fakefsify was not built"
 
