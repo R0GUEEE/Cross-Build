@@ -42,7 +42,9 @@ jobs:
           xcodebuild -version
 
       - name: Install XcodeGen
-        run: brew install xcodegen meson ninja
+        # Only xcodegen here: meson and ninja belong to the engine and rootfs
+        # scripts, which install what they need so they also work on a bare Mac.
+        run: brew install xcodegen
 
       - name: Stage the embedded Python runtime
         run: Tools/build-python.sh
