@@ -42,98 +42,20 @@ jobs:
           xcodebuild -version
 
       - name: Install XcodeGen
+        # Only xcodegen: meson and ninja belong to the scripts, which install what
+        # they need so they also work on a bare Mac.
         run: brew install xcodegen
 
-      - name: Vendor Python runtime
-        run: |
-          set -euo pipefail
-          PY_VER=3.13
-          PY_TAG=3.13-b15
-          PY_BUILD=${PY_TAG#*-}
-          ASSET="Python-${PY_VER}-iOS-support.${PY_BUILD}.tar.gz"
-          URL="https://github.com/beeware/Python-Apple-support/releases/download/${PY_TAG}/${ASSET}"
-          # Pinned by content, like the Alpine image below. A release asset that is
-          # replaced (or a tampered mirror) would otherwise become linked code in a
-          # signed app with nothing in the repo recording the change.
-          PY_SHA256=80175765a31babe43b0910395cf86ba4e8412adf1902b069d55b74d523ecc5d1
-          echo "Fetching $URL"
-          curl -sSL "$URL" -o /tmp/python-support.tar.gz
-          echo "$PY_SHA256  /tmp/python-support.tar.gz" | shasum -a 256 -c -
-          mkdir -p Vendor/Python
-          tar xzf /tmp/python-support.tar.gz -C Vendor/Python
-          test -d Vendor/Python/Python.xcframework || { echo "::error::Python.xcframework missing from the support package"; exit 1; }
-          # Assemble the PYTHONHOME tree CPython documents for iOS: the pure
-          # standard library and the compiled extension modules ship in two
-          # different places inside the support package and must be merged.
-          STDLIB=Vendor/Python/stdlib/python/lib/python${PY_VER}
-          mkdir -p "$STDLIB" Vendor/Python/stdlib/app
-          cp -R "Vendor/Python/Python.xcframework/lib/python${PY_VER}/." "$STDLIB/"
-          cp -R "Vendor/Python/Python.xcframework/ios-arm64/lib-arm64/python${PY_VER}/lib-dynload" "$STDLIB/lib-dynload"
-          test -f "$STDLIB/os.py" || { echo "::error::standard library did not stage correctly (os.py missing)"; exit 1; }
+      - name: Check the engine source is present
+        # Runs before the expensive steps: an empty Vendor/linuxkit used to surface
+        # as a `cd` failure three steps later.
+        run: Tools/check-engine.sh
 
-          # CPython's own test suite is 35 MB of the 61 MB standard library, and
-          # nothing in the app imports it. ensurepip cannot install into a
-          # read-only bundle, idlelib and tkinter need Tk, and pydoc_data is
-          # documentation for the pydoc server nobody runs on a phone.
-          rm -rf "$STDLIB/test" "$STDLIB/ensurepip" "$STDLIB/idlelib" "$STDLIB/tkinter" \
-                 "$STDLIB/lib2to3" "$STDLIB/turtledemo" "$STDLIB/pydoc_data" "$STDLIB/turtle.py"
-          rm -f "$STDLIB"/lib-dynload/_test*.so "$STDLIB"/lib-dynload/xxlimited*.so \
-                "$STDLIB"/lib-dynload/xxsubtype*.so "$STDLIB"/lib-dynload/_ctypes_test*.so
-          find "$STDLIB" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
-          # The extension modules are the half of the runtime a missing copy breaks
-          # silently: Python still starts, then fails the first `import sqlite3`.
-          test -n "$(ls "$STDLIB"/lib-dynload/_sqlite3*.so 2>/dev/null)" \
-            || { echo "::error::lib-dynload is missing _sqlite3; the C extensions did not stage"; exit 1; }
-          test -n "$(ls "$STDLIB"/lib-dynload/_ssl*.so 2>/dev/null)" \
-            || { echo "::error::lib-dynload is missing _ssl"; exit 1; }
-          echo "stdlib size after pruning: $(du -sh "$STDLIB" | cut -f1)"
-          echo "# Placeholder: user Python modules live here at runtime." > Vendor/Python/stdlib/app/README.txt
+      - name: Stage the embedded Python runtime
+        run: Tools/build-python.sh
 
-      - name: Build iOS Linux engine
-        run: |
-          set -euo pipefail
-          brew install meson ninja
-          # The engine is a Meson project, so it is built here rather than inside
-          # the app target. Pinned to the release the embedded-Linux work was
-          # validated against; see .github/workflows/linuxkit-engine.yml.
-          cd Vendor/linuxkit
-          # The tree is the submodule checkout; assert what it is so a broken
-          # checkout fails here instead of producing a library from the wrong source.
-          PINNED=c1a4064e84f1a957280a62f77d107162032dc908   # 2.4.1 build 818
-          test "$(git rev-parse HEAD)" = "$PINNED" || { echo "::error::Vendor/linuxkit is not at $PINNED"; exit 1; }
-          git submodule update --init --recursive --depth 1 || echo "::warning::engine submodule init failed; continuing"
-          test -f meson.build || { echo "::error::Vendor/linuxkit has no meson.build"; exit 1; }
-          # platform/darwin.c calls dispatch_once but relies on a system header to
-          # pull libdispatch in; scoped to this file because a global -include also
-          # reaches the .S gadgets and breaks the assembler.
-          printf '#include <dispatch/dispatch.h>\n' > /tmp/darwin.c
-          cat platform/darwin.c >> /tmp/darwin.c
-          mv /tmp/darwin.c platform/darwin.c
-          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-          sed "s|@IOS_SDK@|$SDK|" "$GITHUB_WORKSPACE/Tools/linuxkit-cross-ios.txt" > cross-ios.txt
-          meson setup build-ios --cross-file cross-ios.txt \
-            -Dguest_arch=arm64 -Djit=false -Djit_emit=false -Dcli_aot= \
-            --buildtype=release
-          meson compile -C build-ios
-          ls -la build-ios/*.a
-
-      - name: Record the engine build configuration
-        # One line in the log, and one in the app, saying which engine and whether
-        # it was built with the interpreter or the AOT backend. The two are very
-        # different binaries and a report that does not say which is not actionable.
-        run: |
-          set -euo pipefail
-          cd Vendor/linuxkit
-          SHA="$(git rev-parse HEAD)"
-          JIT="false"
-          {
-            echo "engine_commit=$SHA"
-            echo "engine_version=$(cat VERSION 2>/dev/null || echo unknown)"
-            echo "engine_jit=$JIT"
-            echo "engine_aot=not-built"
-          } | tee "$GITHUB_WORKSPACE/build/engine.txt" 2>/dev/null || true
-          mkdir -p "$GITHUB_WORKSPACE/build"
-          printf '%s\n' "$SHA $JIT" > "$GITHUB_WORKSPACE/build/engine.id"
+      - name: Build the Linux engine
+        run: Tools/build-engine.sh
 
       - name: Download a verified rootfs when one is supplied
         # A repository variable, not a secret: the id of a workflow run whose
@@ -157,333 +79,19 @@ jobs:
           cp -R /tmp/verified-rootfs/fakefs-root Vendor/linuxkit/fakefs-root
           echo "using the verified rootfs from run ${{ vars.VERIFIED_ROOTFS_RUN_ID }}"
 
-      - name: Build Linux rootfs (fakefs image)
+      - name: Build the guest root filesystem
         if: vars.VERIFIED_ROOTFS_RUN_ID == ''
+        run: Tools/build-rootfs.sh
 
+      - name: Check the pins are in step
+        # Tools/pins.env is the single source for the engine commit, the Alpine base,
+        # the guest package list and the Python support package. These two checks make
+        # "the app says X, the build ships Y" impossible.
         run: |
           set -euo pipefail
-          brew install libarchive
-          cd Vendor/linuxkit
-          # fakefsify turns the Alpine minirootfs into the SQLite-backed fakefs
-          # image the guest boots from. It is a HOST tool: a cross-built copy would
-          # be an iOS binary the runner cannot execute, so it is built natively.
-          #
-          # The native build needs the same two defines as the iOS cross build, for
-          # the same reason: Apple's <sys/cdefs.h> pins __DARWIN_C_LEVEL to a lower
-          # POSIX level as soon as _XOPEN_SOURCE is defined, which hides
-          # fstatat/makedev/DT_*; _DARWIN_C_SOURCE forces the level back to
-          # __DARWIN_C_FULL while still satisfying ucontext.h.
-          #
-          # posix_spawn_file_actions_addchdir does not exist in the runner's
-          # libSystem at all, and the only caller is the host-side native-offload
-          # fast path the build-time CLI never takes, so patch_linuxkit.py turns it
-          # into a no-op. (This used to be described as a force-included header,
-          # Tools/native-offload-shim.h, which nothing referenced and which has been
-          # removed.) It is NOT done via c_args: Meson applies those to assembly as
-          # well, and the asbestos gadget .S files then fail with "unrecognized
-          # instruction mnemonic" -- the same trap hit earlier with the dispatch
-          # header.
-          python3 "$GITHUB_WORKSPACE/Tools/patch_linuxkit.py" "$PWD"
-          meson setup build-host --buildtype=release -Dguest_arch=arm64 \
-            -Dc_args="-D_XOPEN_SOURCE=600 -D_DARWIN_C_SOURCE"
-          meson compile -C build-host fakefsify
-          ./build-host/tools/fakefsify --help >/dev/null 2>&1 || true
-          test -x ./build-host/tools/fakefsify || { echo "::error::fakefsify was not built"; exit 1; }
-
-          ROOTFS=alpine-minirootfs-3.24.2-aarch64.tar.gz
-          curl -fsSL -o "$ROOTFS" "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/aarch64/${ROOTFS}"
-          echo "9bf70a7f18ea44094cbb5f70c58f9af129c8214745743db0e68e5502cc2ce773  ${ROOTFS}" | shasum -a 256 -c -
-
-          rm -rf "$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root"
-          ./build-host/tools/fakefsify "$ROOTFS" "$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root"
-          test -d "$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root" || { echo "::error::fakefs image was not produced"; exit 1; }
-          du -sh "$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root"
-
-      - name: Provision minimal Linux runtime root
-        # Skipped for a supplied rootfs: it was verified on a device, and rebuilding
-        # it here would replace the thing that is known to work with the thing that
-        # is not.
-        if: vars.VERIFIED_ROOTFS_RUN_ID == ''
-        run: |
-          set -euo pipefail
-          cd Vendor/linuxkit
-          meson compile -C build-host ish:executable
-          test -x ./build-host/ish || { echo "::error::native ish was not built"; exit 1; }
-
-          ROOT="$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root"
-          # The guest carries a working C/C++ toolchain.
-          #
-          # It did not, on the reasoning that compilers belong to the iOS app and
-          # the Linux image should stay small. That reasoning left every build
-          # action calling a tool that was not there -- `make: not found` for the
-          # project build, `not found` for each individual compile -- because the
-          # app-owned compiler was never finished. A build button that cannot
-          # build is worse than a large download.
-          #
-          # gcc + g++ + musl-dev + binutils is the smallest real toolchain: musl-dev
-          # supplies the C headers and crt objects, binutils the assembler and
-          # linker. This is a deliberate size cost.
-          # dpkg + fakeroot exist because `make package` is one of the four buttons
-          # the app offers: Theos and any Debian-packaging project end in
-          # `dpkg-deb --build`, and neither the tool nor fakeroot was in the image,
-          # so that button could only fail.
-          # Everything that can actually run in an aarch64 musl chroot and is small
-          # enough to ship: the GNU C/C++ toolchain, CMake/Ninja/Meson (Meson needs
-          # python3), CPython with pip/setuptools/wheel for build scripts, Node with
-          # npm, and the autotools. Swift, Rust, Go, Zig, the JDK and Kotlin are
-          # deliberately not here: each is 170-200 MB installed, which is the whole
-          # IPA again, and none has a musl/aarch64 build for Swift or Kotlin.
-          RUNTIME_PACKAGES="bash coreutils findutils grep sed gawk git tar gzip xz ca-certificates make gcc g++ musl-dev binutils dpkg fakeroot cmake ninja-build meson python3 py3-pip py3-setuptools py3-wheel py3-installer py3-packaging py3-pyproject-hooks pkgconf autoconf automake libtool nodejs npm zlib-dev openssl-dev libffi-dev ncurses-dev readline-dev sqlite-dev bzip2-dev linux-headers"
-          echo "Installing runtime-only packages: $RUNTIME_PACKAGES"
-
-          MIRROR_HOST="dl-cdn.alpinelinux.org"
-          IP="$(python3 -c "import socket,sys; print(socket.gethostbyname(sys.argv[1]))" "$MIRROR_HOST")"
-          test -n "$IP" || { echo "::error::could not resolve the Alpine mirror"; exit 1; }
-          ./build-host/ish -f "$ROOT" /bin/sh -c "echo '$IP $MIRROR_HOST' >> /etc/hosts"
-          # Upgrade the base before adding anything: the minirootfs tarball and the
-          # repository can be weeks apart, and a half-upgraded userland is how a
-          # shell ends up failing to start on device while every individual package
-          # looks installed.
-          ./build-host/ish -f "$ROOT" /bin/sh -ec "apk update >/dev/null && apk upgrade --no-cache >/dev/null && apk add --no-cache $RUNTIME_PACKAGES"
-
-          # Assert the opposite of what this used to assert: the tools every
-          # build action invokes must actually be present, or the IPA ships a
-          # Build button that cannot build. `cc` and `make` are what the app's own
-          # commands call, so a missing one has to fail here rather than on the
-          # user's device.
-          for tool in make cc gcc c++ g++ dpkg-deb ar ld cmake ninja meson python3 pip3 node npm; do
-            if ! ./build-host/ish -f "$ROOT" /bin/sh -c "command -v $tool >/dev/null 2>&1"; then
-              echo "::error::$tool is missing from the Linux rootfs; builds will fail at runtime"
-              exit 1
-            fi
-          done
-          ./build-host/ish -f "$ROOT" /bin/sh -c "printf 'int main(void){return 0;}\n' > /tmp/t.c && cc /tmp/t.c -o /tmp/t && /tmp/t" \
-            || { echo "::error::the guest toolchain is present but cannot compile and link"; exit 1; }
-          # C++ is a separate driver, a separate standard library and its own set of
-          # headers; asserting only the C path left `g++` able to be present and
-          # broken at the same time.
-          ./build-host/ish -f "$ROOT" /bin/sh -ec \
-            'printf "#include <string>\n#include <iostream>\nint main(){std::string s=\"ok\";std::cout<<s;return 0;}\n" > /tmp/t.cpp && c++ /tmp/t.cpp -o /tmp/tpp && test "$(/tmp/tpp)" = ok' \
-            || { echo "::error::the guest cannot compile and run a C++ program"; exit 1; }
-
-          # The forbidden list in ToolchainRuntimeArchitecture and docs/ says CI
-          # enforces it. It did not: nothing ever looked for these, so a package
-          # that pulled in python3 or cmake would ship silently.
-          # The list shrank on purpose: CMake, Ninja, Meson and python3 are now
-          # included, because "the compiler is not in the image" was the reason the
-          # build buttons did not work, and these four are small enough to ship.
-          for tool in clang clang++ ld.lld cargo rustc go zig swift swiftc javac kotlinc; do
-            if ./build-host/ish -f "$ROOT" /bin/sh -c "command -v $tool >/dev/null 2>&1"; then
-              echo "::error::$tool must not be in the guest image (see forbiddenGuestBuildTools)"
-              exit 1
-            fi
-          done
-
-          # The default CFLAGS the app assembles for a build must be accepted by
-          # this compiler, or the Build button ships broken. Core.swift emits
-          # -fPIC/-O0/-g (plus the user's -D/-I/-U) for a guest build and keeps the
-          # Apple-clang-only flags behind a check that a real clang payload is
-          # linked: -fmodules, -fembed-bitcode, -Xclang and -mios-version-min are
-          # hard errors under gcc ("unrecognized command-line option"), and they
-          # used to be emitted by default.
-          ./build-host/ish -f "$ROOT" /bin/sh -ec \
-            'printf "int main(void){return 0;}\n" > /tmp/flags.c && cc -fPIC -O0 -g -c /tmp/flags.c -o /tmp/flags.o' \
-            || { echo "::error::the guest compiler rejected the app's default CFLAGS"; exit 1; }
-
-          echo "=== trimming ==="
-          # Everything removed here is something a C/C++ build environment does
-          # not need. The guest exists to run a compiler, not to be a general
-          # distribution, and every megabyte here is a megabyte in the IPA.
-          #
-          # Reported per path rather than silently: a trim step nobody measures
-          # is how you end up unable to say what the guest actually costs.
-          ./build-host/ish -f "$ROOT" /bin/sh -ec '
-            # `return 0` matters: under `sh -ec` a test that is false is a failing
-            # command, so the old `[ -e "$1" ] && printf …` aborted the whole block on
-            # the first path that did not exist (/usr/share/doc never does) and every
-            # removal after it silently never ran -- which is why the shipped image
-            # still contains gcov, dwp, libgcc.a and the apk cache.
-            report() {
-              if [ -e "$1" ]; then
-                printf "  %-42s %s\n" "$1" "$(du -sh "$1" 2>/dev/null | cut -f1)"
-              fi
-              return 0
-            }
-
-            # Documentation and locale data: nothing reads these at build time.
-            for p in /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale \
-                     /usr/share/gtk-doc /usr/share/gettext /usr/share/terminfo; do
-              report "$p"; rm -rf "$p" 2>/dev/null || true
-            done
-
-            # libgcc.a stays. gcc passes `-lgcc` on every link, dynamic or not, so
-            # deleting it does not disable static linking -- it disables linking.
-            # (Proven by the post-trim check: "cannot find -lgcc".)
-            for p in /usr/lib/gcc/*/*/libgcc.a /usr/lib/gcc/*/*/libgcc_eh.a; do
-              report "$p"
-            done
-
-            # gcc ships a set of headers it has already "fixed" for the platform,
-            # duplicating what musl-dev provides.
-            report /usr/lib/gcc/*/include-fixed; rm -rf /usr/lib/gcc/*/include-fixed 2>/dev/null || true
-
-            # binutils parts no build uses: the old gold linker, coverage and
-            # profiling frontends. as/ld/ar/nm/ranlib/strip/objcopy/readelf stay.
-            for p in /usr/bin/gprof /usr/bin/gcov /usr/bin/gcov-dump /usr/bin/gcov-tool \
-                     /usr/bin/ld.gold /usr/bin/dwp; do
-              report "$p"; rm -f "$p" 2>/dev/null || true
-            done
-
-            # LTO frontends (36 MB each) and the static C/C++ runtimes. Nothing in
-            # this guest emits or consumes LTO objects, and nothing links -static:
-            # the app compiles and links dynamically, which the post-trim check
-            # below re-proves. Together these are about a third of the download.
-            for p in /usr/libexec/gcc/*/*/lto1 /usr/bin/lto-dump \
-                     /usr/lib/libc.a /usr/lib/libstdc++.a /usr/lib/gcc/*/*/libstdc++.a; do
-              report "$p"; rm -f "$p" 2>/dev/null || true
-            done
-
-            # CMake ships its documentation as 2300 files under Help/. The binary,
-            # the Modules and the platform files are what a build needs; --help-module
-            # is what this pays for.
-            for p in /usr/share/cmake/Help /usr/share/cmake/man; do
-              report "$p"; rm -rf "$p" 2>/dev/null || true
-            done
-
-            # The apk index cache from provisioning time: ~3 MB, and the guest
-            # cannot reach a repository anyway.
-            report /var/cache/apk; rm -rf /var/cache/apk 2>/dev/null || true
-
-            # Perl POD is the bulk of the perl tree and is pure documentation.
-            report /usr/share/perl5/core_perl/pod; rm -rf /usr/share/perl5/core_perl/pod 2>/dev/null || true
-
-            # Zone data is megabytes for a guest that has no clock the user reads.
-            report /usr/share/zoneinfo; rm -rf /usr/share/zoneinfo 2>/dev/null || true
-
-            # Package caches and build leftovers.
-            rm -rf /var/cache/apk /root/.cache /tmp/* 2>/dev/null || true
-          ' || { echo "::error::rootfs trimming failed"; exit 1; }
-
-          echo "=== what the guest costs ==="
-          for p in /usr/lib/gcc /usr/libexec/gcc /usr/bin /usr/lib /usr/share /lib /root /etc; do
-            size=$(./build-host/ish -f "$ROOT" /bin/sh -c "du -sh $p 2>/dev/null | cut -f1" 2>/dev/null)
-            [ -n "$size" ] && echo "  $p = $size"
-          done
-          echo "  total = $(du -sh "$ROOT" | cut -f1) (fakefs image on disk)"
-          du -sh "$ROOT"
-
-          # The trim above deletes /usr/lib/gcc/*/*/libgcc.a, on the reasoning that
-          # only -static links need it. Re-assert compile AND link *after* the trim,
-          # or that reasoning is never actually tested.
-          ./build-host/ish -f "$ROOT" /bin/sh -c "printf 'int main(void){return 0;}\n' > /tmp/t.c && cc /tmp/t.c -o /tmp/t && /tmp/t" \
-            || { echo "::error::the guest toolchain stopped linking after the rootfs trim"; exit 1; }
-          # Uses a here-document rather than a quoted printf: the C source needs no
-          # string literals, so no nested quoting is involved. Every line below is
-          # indented to the block's level so YAML keeps it, which means the guest
-          # sees the here-document at column 0.
-          ./build-host/ish -f "$ROOT" /bin/sh -ec '
-          cat > /tmp/t2.c <<"T2EOF"
-          #include <stdio.h>
-          int main(void){putchar(65);return 0;}
-          T2EOF
-          cc /tmp/t2.c -o /tmp/t2 && /tmp/t2' \
-            || { echo "::error::the guest toolchain cannot build a program that uses the C library after the trim"; exit 1; }
-
-          # The C++ runtime is a shared library now that libstdc++.a is trimmed;
-          # prove a C++ link still resolves before shipping.
-          ./build-host/ish -f "$ROOT" /bin/sh -ec \
-            'printf "#include <string>\n#include <iostream>\nint main(){std::string s=\"ok\";std::cout<<s;return 0;}\n" > /tmp/t3.cpp && c++ /tmp/t3.cpp -o /tmp/t3pp && test "$(/tmp/t3pp)" = ok' \
-            || { echo "::error::the guest cannot link C++ after the trim"; exit 1; }
-
-      - name: Verify the engine archives
-        if: vars.VERIFIED_ROOTFS_RUN_ID == ''
-        # "The Linux shell needs to be rebuilt" is only answered if the rebuild is
-        # checked: the app links three static libraries, and an empty or wrong-arch
-        # archive fails at the link or, worse, at boot.
-        run: |
-          set -euo pipefail
-          cd Vendor/linuxkit
-          fail() { echo "::error::$1"; exit 1; }
-          for lib in libish.a libish_emu.a libfakefs.a; do
-            test -s "build-ios/$lib" || fail "build-ios/$lib is missing or empty"
-            arch=$(lipo -archs "build-ios/$lib" 2>/dev/null || echo unknown)
-            [ "$arch" = "arm64" ] || fail "build-ios/$lib is $arch, expected arm64"
-            echo "  $lib: $arch, $(du -h "build-ios/$lib" | cut -f1)"
-          done
-          # Which symbols a given engine build exposes varies with LTO and with how
-          # the translation units are split, so require *one* of the API the shim
-          # links against rather than a single name -- and print what was found when
-          # none matches, so the next failure is diagnosable from the log alone.
-          expect() {
-            archive=$1; shift
-            symbols=$(nm -g "$archive" 2>/dev/null | awk '$2=="T"{print $3}')
-            for want in "$@"; do
-              if echo "$symbols" | grep -qx "$want"; then
-                echo "  $(basename "$archive") exports $want"
-                return 0
-              fi
-            done
-            echo "  $(basename "$archive") exported (first 8): $(echo "$symbols" | head -8 | tr '\n' ' ')"
-            fail "$(basename "$archive") exports none of: $*"
-          }
-          expect build-ios/libish.a _do_execve _task_run_current _generic_mkdirat _do_mount
-          expect build-ios/libish_emu.a _emu_run _cpu_run _tlb_flush
-          echo "engine archives verified"
-
-      - name: Verify every bundled toolchain
-        if: vars.VERIFIED_ROOTFS_RUN_ID == ''
-        # The image having /usr/bin/cmake is not the same as cmake building a
-        # project. Each toolchain below is exercised the way the app will use it,
-        # so a broken one fails the build instead of the user's first build.
-        run: |
-          set -euo pipefail
-          cd Vendor/linuxkit
-          ROOT="$GITHUB_WORKSPACE/Vendor/linuxkit/fakefs-root"
-          sh_() { ./build-host/ish -f "$ROOT" /bin/sh -c "$1"; }
-          sh_e() { ./build-host/ish -f "$ROOT" /bin/sh -ec "$1"; }
-          fail() { echo "::error::$1"; exit 1; }
-
-          echo "=== versions ==="
-          for t in gcc g++ make cmake ninja meson python3 pip3 node npm dpkg-deb; do
-            v=$(sh_ "$t --version 2>&1 | head -1") || fail "$t --version failed"
-            printf '  %-10s %s\n' "$t" "$v"
-          done
-
-          echo "=== C and C++ ==="
-          sh_e 'printf "int main(void){return 0;}\n" > /tmp/v.c && cc /tmp/v.c -o /tmp/v && /tmp/v' \
-            || fail "cc cannot compile and run a C program"
-          sh_e 'printf "#include <string>\n#include <iostream>\nint main(){std::string s=\"ok\";std::cout<<s;}\n" > /tmp/v.cpp && c++ /tmp/v.cpp -o /tmp/vpp && test "$(/tmp/vpp)" = ok' \
-            || fail "c++ cannot compile and run a C++ program"
-
-          echo "=== CMake + Ninja ==="
-          sh_e 'rm -rf /tmp/vcm && mkdir -p /tmp/vcm && printf "cmake_minimum_required(VERSION 3.10)\nproject(v C)\nadd_executable(v main.c)\n" > /tmp/vcm/CMakeLists.txt && printf "int main(void){return 0;}\n" > /tmp/vcm/main.c && cd /tmp/vcm && cmake -S . -B build -G Ninja >/dev/null && cmake --build build >/dev/null && ./build/v' \
-            || fail "cmake + ninja cannot configure and build a project"
-
-          echo "=== Meson ==="
-          # Meson rejects double-quoted strings in meson.build ("Double quotes are
-          # not supported"), so this fixture uses single quotes -- which is why the
-          # shell string around it is double-quoted, unlike its neighbours.
-          sh_e "rm -rf /tmp/vme && mkdir -p /tmp/vme && printf \"project('v','c')\\nexecutable('v','main.c')\\n\" > /tmp/vme/meson.build && printf \"int main(void){return 0;}\\n\" > /tmp/vme/main.c && cd /tmp/vme && meson setup build >/dev/null && meson compile -C build" \
-            || fail "meson cannot configure and build a project"
-
-          echo "=== development headers ==="
-          sh_e 'printf "#include <zlib.h>\nint main(void){return zlibVersion()==0;}\n" > /tmp/vz.c && cc /tmp/vz.c -lz -o /tmp/vz && /tmp/vz; printf "#include <openssl/ssl.h>\nint main(void){return 0;}\n" > /tmp/vs.c && cc /tmp/vs.c -lssl -lcrypto -o /tmp/vs && /tmp/vs' \
-            || fail "the guest cannot compile and link against zlib/openssl headers"
-          sh_e 'pkg-config --exists zlib && pkg-config --modversion zlib' \
-            || fail "pkg-config cannot find the installed libraries"
-
-          echo "=== Python ==="
-          sh_e 'python3 -c "import sqlite3, ssl, json, zlib; print(\"python3: ok\")"' \
-            || fail "the guest python3 is missing standard extensions"
-          sh_e 'python3 -m pip --version >/dev/null' || fail "pip is not runnable in the guest"
-
-          echo "=== Node ==="
-          sh_e 'node -e "console.log(1)" >/dev/null' || fail "node cannot run a script"
-          sh_e 'npm --version >/dev/null' || fail "npm does not run"
-
-          echo "=== Debian packaging ==="
-          sh_e 'rm -rf /tmp/vpkg && mkdir -p /tmp/vpkg/DEBIAN && printf "Package: v\nVersion: 1.0\nArchitecture: all\nMaintainer: ci <ci@example.com>\nDescription: v\n" > /tmp/vpkg/DEBIAN/control && dpkg-deb --build /tmp/vpkg /tmp/v.deb >/dev/null && test -s /tmp/v.deb' \
-            || fail "dpkg-deb cannot build a package"
+          python3 Tools/gen-pins.py --check
+          test "$(git rev-parse HEAD:Vendor/linuxkit)" = "$(. Tools/pins.env && echo "$ENGINE_COMMIT")" \
+            || { echo "::error::the Vendor/linuxkit submodule and pins.env disagree"; exit 1; }
 
       - name: Generate project
         env:
@@ -528,7 +136,12 @@ jobs:
           # that keeps it from coming back into the bundle.
           test ! -e "$APP/crossbuild-helper.py" || fail "crossbuild-helper.py must not be bundled; Cross Build execution is entirely in-app"
           test -d "$APP/Toolchains" || fail "Toolchains folder is missing from the app bundle"
-          test -f "$APP/Toolchains/LLVM/manifest.json" || fail "Toolchains/LLVM/manifest.json is missing from the app bundle"
+          # Every manifest, not just LLVM: the folder used to vanish from three
+          # consecutive IPAs while this check looked at one file in it.
+          for manifest in LLVM Swift Python JavaScript Theos; do
+            test -f "$APP/Toolchains/$manifest/manifest.json" || fail "Toolchains/$manifest/manifest.json is missing"
+          done
+          test -f "$APP/THIRD-PARTY-NOTICES.md" || fail "the third-party notices are missing from the bundle"
           test -f "$APP/Info.plist" || fail "Info.plist is missing from the app bundle"
           # INFOPLIST_KEY_* settings are silently ignored when the build system
           # does not recognise the key, which is exactly how a "declared but not
@@ -550,7 +163,15 @@ jobs:
           test "$(plist CFBundleDisplayName)" = "Cross Build" \
             || fail "CFBundleDisplayName is not the expected value"
           test -f "$APP/python/lib/python3.13/os.py" || fail "Python standard library is missing from the app bundle"
+          # The other half of the runtime: without these Python starts and the first
+          # `import sqlite3` fails.
+          for ext in _sqlite3 _ssl _hashlib zlib; do
+            ls "$APP/python/lib/python3.13/lib-dynload/$ext"*.so >/dev/null 2>&1 \
+              || fail "Python C extension $ext is missing from the bundle"
+          done
           test -d "$APP/fakefs-root" || fail "Linux rootfs (fakefs-root) is missing from the app bundle"
+          # A directory is not a filesystem: the guest boots from meta.db.
+          test -s "$APP/fakefs-root/meta.db" || fail "fakefs-root has no meta.db; the guest could not boot"
           test -d "$APP/app" || fail "Python PYTHONPATH 'app' folder is missing from the app bundle"
           test -d "$APP/Frameworks/Python.framework" || fail "Python.framework was not embedded"
           test -f "$APP/Frameworks/Python.framework/Info.plist" || fail "embedded Python.framework has no Info.plist"
