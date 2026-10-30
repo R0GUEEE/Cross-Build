@@ -46,6 +46,11 @@ jobs:
         # they need so they also work on a bare Mac.
         run: brew install xcodegen
 
+      - name: Check the engine source is present
+        # Runs before the expensive steps: an empty Vendor/linuxkit used to surface
+        # as a `cd` failure three steps later.
+        run: Tools/check-engine.sh
+
       - name: Stage the embedded Python runtime
         run: Tools/build-python.sh
 
