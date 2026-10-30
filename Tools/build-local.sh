@@ -30,12 +30,11 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
 XCODE="/Applications/Xcode_16.4.app/Contents/Developer"
-LINUXKIT_PIN="c1a4064e84f1a957280a62f77d107162032dc908"   # 2.4.1 build 818
-ALPINE_ROOTFS="alpine-minirootfs-3.24.2-aarch64.tar.gz"
-ALPINE_SHA="9bf70a7f18ea44094cbb5f70c58f9af129c8214745743db0e68e5502cc2ce773"
-# The same list CI provisions, including the toolchain. Keep in step with
-# ToolchainRuntimeArchitecture.guestRuntimePackages.
-RUNTIME_PACKAGES="bash coreutils findutils grep sed gawk git tar gzip xz ca-certificates make gcc g++ musl-dev binutils"
+# Every backend input -- engine commit, Alpine base, guest packages, Python support
+# -- comes from Tools/pins.env. This script used to carry its own copies of three of
+# them, which is how a local build and a CI build came to differ.
+# shellcheck disable=SC1091
+. "$REPO/Tools/pins.env"
 
 VENDOR=1
 for arg in "$@"; do
@@ -59,90 +58,15 @@ need ninja ninja
 need python3 python
 
 if [ "$VENDOR" = 1 ]; then
-  say "vendoring Python 3.13"
-  PY_VER=3.13
-  PY_TAG=3.13-b15
-  PY_BUILD=${PY_TAG#*-}
-  ASSET="Python-${PY_VER}-iOS-support.${PY_BUILD}.tar.gz"
-  URL="https://github.com/beeware/Python-Apple-support/releases/download/${PY_TAG}/${ASSET}"
-  rm -rf Vendor/Python && mkdir -p Vendor/Python
-  curl -sSL "$URL" -o /tmp/python-support.tar.gz
-  tar xzf /tmp/python-support.tar.gz -C Vendor/Python
-  test -d Vendor/Python/Python.xcframework || { echo "Python.xcframework missing"; exit 1; }
-  # CPython's iOS layout: pure stdlib and compiled extensions ship separately and
-  # have to be merged into the PYTHONHOME the app expects.
-  STDLIB=Vendor/Python/stdlib/python/lib/python${PY_VER}
-  mkdir -p "$STDLIB" Vendor/Python/stdlib/app
-  cp -R "Vendor/Python/Python.xcframework/lib/python${PY_VER}/." "$STDLIB/"
-  cp -R "Vendor/Python/Python.xcframework/ios-arm64/lib-arm64/python${PY_VER}/lib-dynload" "$STDLIB/lib-dynload"
-  test -f "$STDLIB/os.py" || { echo "stdlib staging failed (os.py missing)"; exit 1; }
-  echo "# Placeholder: user Python modules live here at runtime." > Vendor/Python/stdlib/app/README.txt
-
-  say "fetching ios-linuxkit @ ${LINUXKIT_PIN:0:8}"
-  if [ ! -d Vendor/linuxkit/.git ]; then
-    git clone --filter=blob:none https://github.com/rcarmo/ios-linuxkit.git Vendor/linuxkit
-  fi
-  git -C Vendor/linuxkit fetch --depth 1 origin "$LINUXKIT_PIN" || true
-  git -C Vendor/linuxkit checkout -q "$LINUXKIT_PIN"
-  git -C Vendor/linuxkit submodule update --init --recursive --depth 1 || echo "warning: submodules incomplete"
-
-  say "cross-building the engine for iOS"
-  # platform/darwin.c needs libdispatch declared, and a global -include reaches the
-  # asbestos .S gadgets and breaks the assembler -- so it is prepended to that one
-  # file.
-  python3 - <<'PY'
-import pathlib
-p = pathlib.Path("Vendor/linuxkit/platform/darwin.c")
-src = p.read_text()
-if "#include <dispatch/dispatch.h>" not in src.split("\n")[0]:
-    p.write_text("#include <dispatch/dispatch.h>\n" + src)
-PY
-  SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-  sed "s|@IOS_SDK@|$SDK|" Tools/linuxkit-cross-ios.txt > Vendor/linuxkit/cross-ios.txt
-  ( cd Vendor/linuxkit && rm -rf build-ios && \
-    meson setup build-ios --cross-file cross-ios.txt \
-      -Dguest_arch=arm64 -Djit=false -Djit_emit=false -Dcli_aot= --buildtype=release && \
-    meson compile -C build-ios )
-  ls -la Vendor/linuxkit/build-ios/*.a
-
-  say "building the Alpine root and fakefsify"
-  ( cd Vendor/linuxkit && \
-    python3 "$REPO/Tools/patch_linuxkit.py" "$PWD" && \
-    rm -rf build-host && \
-    meson setup build-host --buildtype=release -Dguest_arch=arm64 \
-      -Dc_args="-D_XOPEN_SOURCE=600 -D_DARWIN_C_SOURCE" && \
-    meson compile -C build-host fakefsify ish:executable )
-  curl -fsSL -o "/tmp/${ALPINE_ROOTFS}" \
-    "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/aarch64/${ALPINE_ROOTFS}"
-  echo "${ALPINE_SHA}  /tmp/${ALPINE_ROOTFS}" | shasum -a 256 -c -
-  rm -rf Vendor/linuxkit/fakefs-root
-  Vendor/linuxkit/build-host/tools/fakefsify "/tmp/${ALPINE_ROOTFS}" "$REPO/Vendor/linuxkit/fakefs-root"
-  test -d Vendor/linuxkit/fakefs-root || { echo "fakefs image not produced"; exit 1; }
-
-  say "provisioning the guest (this is the slow one)"
-  ROOT="$REPO/Vendor/linuxkit/fakefs-root"
-  ISH="$REPO/Vendor/linuxkit/build-host/ish"
-  MIRROR=dl-cdn.alpinelinux.org
-  IP="$(python3 -c "import socket,sys; print(socket.gethostbyname(sys.argv[1]))" "$MIRROR")"
-  # The guest cannot resolve DNS, so the mirror's address is put in /etc/hosts.
-  "$ISH" -f "$ROOT" /bin/sh -c "echo '$IP $MIRROR' >> /etc/hosts" >/dev/null 2>&1 || true
-  "$ISH" -f "$ROOT" /bin/sh -ec "apk update >/dev/null && apk add --no-cache $RUNTIME_PACKAGES" \
-    || echo "warning: apk provisioning did not complete"
-  for t in make cc gcc c++ g++; do
-    "$ISH" -f "$ROOT" /bin/sh -c "command -v $t >/dev/null 2>&1" \
-      || { echo "error: $t missing from the guest; builds will fail at runtime"; exit 1; }
-  done
-  "$ISH" -f "$ROOT" /bin/sh -c "printf 'int main(void){return 0;}\n' > /tmp/t.c && cc /tmp/t.c -o /tmp/t && /tmp/t" \
-    || { echo "error: the guest toolchain cannot compile and link"; exit 1; }
-  "$ISH" -f "$ROOT" /bin/sh -ec '
-    rm -rf /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale /usr/share/terminfo 2>/dev/null || true
-    rm -f /usr/lib/gcc/*/*/libgcc.a /usr/lib/gcc/*/*/libgcc_eh.a 2>/dev/null || true
-    rm -rf /usr/lib/gcc/*/include-fixed /usr/share/zoneinfo /usr/share/perl5/core_perl/pod 2>/dev/null || true
-    rm -f /usr/bin/gprof /usr/bin/gcov /usr/bin/gcov-dump /usr/bin/gcov-tool /usr/bin/ld.gold /usr/bin/dwp 2>/dev/null || true
-    rm -rf /var/cache/apk /root/.cache /tmp/* 2>/dev/null || true
-  ' || echo "warning: trimming did not run cleanly"
-  du -sh "$ROOT"
+  # The three products are built by the same scripts CI runs, so a local build and a
+  # runner build cannot diverge. Each checks its own pins and proves its output.
+  "$REPO/Tools/build-python.sh"
+  "$REPO/Tools/build-engine.sh"
+  "$REPO/Tools/build-rootfs.sh"
 fi
+
+say "checking the pins are in step"
+python3 "$REPO/Tools/gen-pins.py" --check
 
 say "generating the Xcode project"
 CROSSBUILD_BUILD_NUMBER="${CROSSBUILD_BUILD_NUMBER:-1}" xcodegen generate
@@ -159,9 +83,16 @@ test -n "$APP" || { echo "no .app produced"; exit 1; }
 fail() { echo "error: $1"; exit 1; }
 test -f "$APP/Info.plist" || fail "Info.plist missing"
 test -d "$APP/Toolchains" || fail "Toolchains folder missing"
-test -f "$APP/Toolchains/LLVM/manifest.json" || fail "Toolchains/LLVM/manifest.json missing"
+for manifest in LLVM Swift Python JavaScript Theos; do
+  test -f "$APP/Toolchains/$manifest/manifest.json" || fail "Toolchains/$manifest/manifest.json missing"
+done
+test -f "$APP/THIRD-PARTY-NOTICES.md" || fail "third-party notices missing"
 test -d "$APP/fakefs-root" || fail "Linux rootfs missing from the bundle"
 test -f "$APP/python/lib/python3.13/os.py" || fail "Python stdlib missing"
+for ext in _sqlite3 _ssl _hashlib zlib; do
+  ls "$APP/python/lib/python3.13/lib-dynload/$ext"*.so >/dev/null 2>&1 || fail "Python extension $ext missing"
+done
+test -s "$APP/fakefs-root/meta.db" || fail "fakefs-root has no meta.db; the guest could not boot"
 test -d "$APP/app" || fail "PYTHONPATH app folder missing"
 test -d "$APP/Frameworks/Python.framework" || fail "Python.framework not embedded"
 test -f "$APP/Frameworks/Python.framework/Info.plist" || fail "embedded framework has no Info.plist (installd rejects this)"
