@@ -42,7 +42,7 @@ jobs:
           xcodebuild -version
 
       - name: Install XcodeGen
-        run: brew install xcodegen
+        run: brew install xcodegen meson ninja
 
       - name: Stage the embedded Python runtime
         run: Tools/build-python.sh
