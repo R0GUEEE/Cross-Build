@@ -110,6 +110,15 @@ fi
 
 # ---------------------------------------------------------------- configure
 
+# Reset before patching. This script prepends a libdispatch include to
+# platform/darwin.c; in CI the tree is a submodule, and a patched file left in place
+# makes the next checkout look clean while shipping the previous edit.
+git -C "$ENGINE_DIR" checkout -- platform/darwin.c 2>/dev/null || true
+if ! head -3 platform/darwin.c | grep -q 'dispatch/dispatch.h'; then
+    { printf '#include <dispatch/dispatch.h>\n'; cat platform/darwin.c; } > platform/darwin.c.tmp
+    mv platform/darwin.c.tmp platform/darwin.c
+fi
+
 IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 echo "iOS SDK: $IOS_SDK"
 sed "s|@IOS_SDK@|$IOS_SDK|" "$REPO/Tools/linuxkit-cross-ios.txt" > "$ENGINE_DIR/cross-ios.txt"
