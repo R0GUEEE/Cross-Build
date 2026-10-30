@@ -133,6 +133,7 @@ verify
 [ "$FAIL" -eq 0 ] || { echo "engine build failed verification ($FAIL problem(s))" >&2; exit 1; }
 
 # What was actually built, for the app to report and for the log to record.
+mkdir -p "$REPO/build"
 cat > "$REPO/build/engine.txt" <<EOF
 engine_repo=$ENGINE_REPO
 engine_commit=$ENGINE_COMMIT
