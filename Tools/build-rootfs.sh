@@ -65,7 +65,11 @@ step "build the fakefs host tool"
 cd "$ENGINE_DIR"
 [ -f meson.build ] || fail "Vendor/linuxkit has no meson.build"
 python3 "$REPO/Tools/patch_linuxkit.py" "$PWD"
-if [ ! -x ./build-host/tools/fakefsify ]; then
+# meson may place the executable under tools/ or at the build root depending on the
+# version; look for it rather than assuming the path.
+FAKEFSIFY() { ls build-host/tools/fakefsify build-host/fakefsify 2>/dev/null | head -1; }
+
+if [ -z "$(FAKEFSIFY)" ]; then
     meson setup build-host --buildtype=release -Dguest_arch=arm64 \
         -Dc_args="-D_XOPEN_SOURCE=600 -D_DARWIN_C_SOURCE"
     # `meson compile <target>` only knows targets meson registered as such; the old
@@ -73,7 +77,9 @@ if [ ! -x ./build-host/tools/fakefsify ]; then
     # path is not a target name. Build everything the host configuration defines.
     meson compile -C build-host
 fi
-[ -x ./build-host/tools/fakefsify ] || fail "fakefsify was not built"
+FAKEFSIFY_BIN="$(FAKEFSIFY)"
+[ -n "$FAKEFSIFY_BIN" ] && [ -x "$FAKEFSIFY_BIN" ] || fail "fakefsify was not built (looked in build-host/tools and build-host)"
+echo "using $FAKEFSIFY_BIN"
 
 # ---------------------------------------------------------------- base image
 
@@ -85,7 +91,7 @@ echo "$ALPINE_ROOTFS_SHA256  $ROOTFS_TGZ" | shasum -a 256 -c - \
     || fail "the Alpine base image does not match pins.env"
 
 rm -rf "$ROOT"
-./build-host/tools/fakefsify "$ROOTFS_TGZ" "$ROOT"
+"$FAKEFSIFY_BIN" "$ROOTFS_TGZ" "$ROOT"
 [ -d "$ROOT" ] || fail "fakefs image was not produced"
 
 # ---------------------------------------------------------------- provisioning
